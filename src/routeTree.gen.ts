@@ -10,7 +10,6 @@
 
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
-import { Route as LooksRouteImport } from './routes/looks'
 import { Route as OperatorTermsRouteImport } from './routes/operator-terms'
 import { Route as PrivacyRouteImport } from './routes/privacy'
 import { Route as SaveRouteImport } from './routes/save'
@@ -21,11 +20,6 @@ import { Route as MadeIdRouteImport } from './routes/made.$id'
 const IndexRoute = IndexRouteImport.update({
   id: '/',
   path: '/',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const LooksRoute = LooksRouteImport.update({
-  id: '/looks',
-  path: '/looks',
   getParentRoute: () => rootRouteImport,
 } as any)
 const OperatorTermsRoute = OperatorTermsRouteImport.update({
@@ -61,7 +55,6 @@ const MadeIdRoute = MadeIdRouteImport.update({
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
-  '/looks': typeof LooksRoute
   '/operator-terms': typeof OperatorTermsRoute
   '/privacy': typeof PrivacyRoute
   '/save': typeof SaveRoute
@@ -71,7 +64,6 @@ export interface FileRoutesByFullPath {
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
-  '/looks': typeof LooksRoute
   '/operator-terms': typeof OperatorTermsRoute
   '/privacy': typeof PrivacyRoute
   '/save': typeof SaveRoute
@@ -82,7 +74,6 @@ export interface FileRoutesByTo {
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
-  '/looks': typeof LooksRoute
   '/operator-terms': typeof OperatorTermsRoute
   '/privacy': typeof PrivacyRoute
   '/save': typeof SaveRoute
@@ -94,7 +85,6 @@ export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
   fullPaths:
     | '/'
-    | '/looks'
     | '/operator-terms'
     | '/privacy'
     | '/save'
@@ -104,7 +94,6 @@ export interface FileRouteTypes {
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
-    | '/looks'
     | '/operator-terms'
     | '/privacy'
     | '/save'
@@ -114,7 +103,6 @@ export interface FileRouteTypes {
   id:
     | '__root__'
     | '/'
-    | '/looks'
     | '/operator-terms'
     | '/privacy'
     | '/save'
@@ -125,7 +113,6 @@ export interface FileRouteTypes {
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
-  LooksRoute: typeof LooksRoute
   OperatorTermsRoute: typeof OperatorTermsRoute
   PrivacyRoute: typeof PrivacyRoute
   SaveRoute: typeof SaveRoute
@@ -141,13 +128,6 @@ declare module '@tanstack/react-router' {
       path: '/'
       fullPath: '/'
       preLoaderRoute: typeof IndexRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/looks': {
-      id: '/looks'
-      path: '/looks'
-      fullPath: '/looks'
-      preLoaderRoute: typeof LooksRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/operator-terms': {
@@ -197,7 +177,6 @@ declare module '@tanstack/react-router' {
 
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
-  LooksRoute: LooksRoute,
   OperatorTermsRoute: OperatorTermsRoute,
   PrivacyRoute: PrivacyRoute,
   SaveRoute: SaveRoute,

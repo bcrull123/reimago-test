@@ -443,22 +443,6 @@ export function HomePage() {
         </div>
       ) : null}
       <main>
-        <section className="mx-auto w-full max-w-5xl space-y-6 px-4 pt-6">
-          <h2 className="font-display text-2xl text-ink">Looks to review</h2>
-          {(
-            [
-              ["Editorial", "/looks/editorial.jpg"],
-              ["Dark", "/looks/dark.jpg"],
-              ["Product", "/looks/product.jpg"],
-              ["Steps", "/looks/steps.jpg"],
-            ] as const
-          ).map(([name, src]) => (
-            <figure key={name} className="space-y-2">
-              <figcaption className="text-sm font-medium text-fg">{name}</figcaption>
-              <img src={src} alt={name} className="w-full rounded-xl border border-border" />
-            </figure>
-          ))}
-        </section>
         <section className="mx-auto grid w-full max-w-6xl grid-cols-[250px_minmax(0,1fr)] items-start gap-3 px-4 py-6 sm:gap-8 sm:px-6">
           <div className="w-[250px]">
             <Wordmark className="size-[250px]" />
