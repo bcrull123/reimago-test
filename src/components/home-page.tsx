@@ -2,7 +2,8 @@ import { useEffect, useRef, useState, type FormEvent } from "react";
 import { Link } from "@tanstack/react-router";
 import { ArrowRight } from "lucide-react";
 import { SiteShell, Wordmark } from "@/components/site-shell";
-import { reimagineSite, retryRendition, checkDomainName } from "@/lib/reimagine.functions";
+import { CreateSiteWizard, type CreateBrief, type CreateFiles } from "@/components/create-site-wizard";
+import { reimagineSite, retryRendition, checkDomainName, buildCreatedSite } from "@/lib/reimagine.functions";
 import type { DomainOffer } from "@/lib/logicboxes-types";
 import type { ReimagineOk } from "@/lib/reimagine-types";
 
@@ -100,6 +101,75 @@ async function submitFormcarry(fields: {
   }
 }
 
+async function submitCreateBrief(email: string, gotcha: string, brief: CreateBrief, files: CreateFiles, image?: string): Promise<void> {
+  const pages = brief.pages.length ? brief.pages : ["Home", "About", "Services", "Contact"];
+  const industry = [brief.industry, brief.what].filter(Boolean).join(": ");
+  const data = new FormData();
+  data.append("email", email);
+  data.append("website", bareDomain(brief.existing_site || brief.domain || brief.business_name || "new-site"));
+  data.append("note", brief.anything_else);
+  data.append("_gotcha", gotcha);
+  data.append("mode", "create_new_site");
+  data.append("business_name", brief.business_name);
+  data.append("industry", industry);
+  data.append("location", brief.location);
+  data.append("existing_site", brief.existing_site);
+  data.append("emulate_url_1", brief.emulate_url_1);
+  data.append("emulate_url_2", brief.emulate_url_2);
+  data.append("emulate_url_3", brief.emulate_url_3);
+  data.append("emulate_likes", brief.emulate_likes.join(", "));
+  data.append("emulate_note", brief.emulate_note);
+  data.append("goal", brief.goal);
+  data.append("customers", brief.customers);
+  data.append("services", brief.services);
+  data.append("pages", pages.join(", "));
+  data.append("style", brief.style);
+  data.append("brand_color", brief.brand_color);
+  data.append("phone", brief.phone);
+  data.append("contact_email", brief.contact_email);
+  data.append("address", brief.address);
+  data.append("hours", brief.hours);
+  data.append("domain_choice", brief.domain_choice);
+  data.append("domain", brief.domain);
+  data.append("features", brief.features.join(", "));
+  data.append("product_count", brief.product_count);
+  data.append("files_link", brief.files_link);
+  data.append("copy_text", brief.copy_text);
+  data.append("video_link", brief.video_link);
+  data.append("anything_else", brief.anything_else);
+  data.append("ai_suggested", (brief.ai_suggested ?? []).join(", "));
+  if (image) {
+    try {
+      data.append("picture", await pictureFile(image, bareDomain(brief.existing_site || brief.domain || brief.business_name || "new-site")));
+    } catch {
+      // The brief still sends if the picture cannot be attached.
+    }
+  }
+  const named: [string, File | null][] = [
+    ["logo", files.logo],
+    ["brand_guide", files.brand],
+    ["copy_file", files.copy],
+    ["testimonials", files.testimonials],
+    ["licenses", files.licenses],
+    ["video", files.video],
+  ];
+  for (const [name, file] of named) {
+    if (file && file.size < 10_000_000) data.append(name, file, file.name);
+  }
+  for (const photo of files.photos) {
+    if (photo.size < 10_000_000) data.append("photo", photo, photo.name);
+  }
+  const response = await fetch(FORMCARRY, {
+    method: "POST",
+    headers: { Accept: "application/json" },
+    body: data,
+  });
+  const json = (await response.json().catch(() => null)) as { code?: number; message?: string } | null;
+  if (json?.code !== 200) {
+    throw new Error(json?.message || "The form could not be sent. Try again.");
+  }
+}
+
 export function HomePage() {
   const [url, setUrl] = useState("");
   const [intent, setIntent] = useState<"reimagine" | "register" | "create" | null>(null);
@@ -171,6 +241,7 @@ export function HomePage() {
       setError("Choose Reimagine My Website, Register a Domain, or Create a New Site.");
       return;
     }
+    if (intent === "create") return;
     if (!site || site === "https://" || site === "http://") {
       setError(
         intent === "reimagine" ? "Enter your site." : intent === "register" ? "Enter your domain." : "Enter a site to emulate.",
@@ -220,6 +291,36 @@ export function HomePage() {
       setResult(next);
     } catch (err) {
       setError(err instanceof Error ? err.message : "The draft could not be made.");
+    } finally {
+      setWorking(false);
+    }
+  }
+
+  async function buildNewSite(brief: CreateBrief, files: CreateFiles) {
+    setError("");
+    if (!isEmail(email.trim())) {
+      setError("Enter an email so sales can follow up.");
+      return;
+    }
+    if (!agreed) {
+      setError("Agree to the terms before we build the site.");
+      return;
+    }
+    setWorking(true);
+    setMailed("");
+    try {
+      const gotcha = document.querySelector<HTMLInputElement>('input[name="_gotcha"]')?.value ?? "";
+      const next = await buildCreatedSite({ data: brief });
+      await submitCreateBrief(email.trim(), gotcha, brief, files, next.ok ? next.draft.rendition : undefined);
+      setMailed(THANKS);
+      if (!next.ok) {
+        setError(next.error);
+        return;
+      }
+      scrollOnResult.current = true;
+      setResult(next);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "The form could not be sent. Try again.");
     } finally {
       setWorking(false);
     }
@@ -342,6 +443,22 @@ export function HomePage() {
         </div>
       ) : null}
       <main>
+        <section className="mx-auto w-full max-w-5xl space-y-6 px-4 pt-6">
+          <h2 className="font-display text-2xl text-ink">Looks to review</h2>
+          {(
+            [
+              ["Editorial", "/looks/editorial.jpg"],
+              ["Dark", "/looks/dark.jpg"],
+              ["Product", "/looks/product.jpg"],
+              ["Steps", "/looks/steps.jpg"],
+            ] as const
+          ).map(([name, src]) => (
+            <figure key={name} className="space-y-2">
+              <figcaption className="text-sm font-medium text-fg">{name}</figcaption>
+              <img src={src} alt={name} className="w-full rounded-xl border border-border" />
+            </figure>
+          ))}
+        </section>
         <section className="mx-auto grid w-full max-w-6xl grid-cols-[250px_minmax(0,1fr)] items-start gap-3 px-4 py-6 sm:gap-8 sm:px-6">
           <div className="w-[250px]">
             <Wordmark className="size-[250px]" />
@@ -388,6 +505,28 @@ export function HomePage() {
                     Create a New Site
                   </label>
                 </fieldset>
+                <input
+                  type="text"
+                  name="_gotcha"
+                  tabIndex={-1}
+                  autoComplete="off"
+                  defaultValue=""
+                  aria-hidden="true"
+                  className="pointer-events-none absolute -left-[9999px] h-px w-px opacity-0"
+                />
+                {intent === "create" ? (
+                  <CreateSiteWizard
+                    email={email}
+                    setEmail={setEmail}
+                    agreed={agreed}
+                    setAgreed={setAgreed}
+                    working={working}
+                    error={error}
+                    mailed={mailed}
+                    onBuild={(brief, files) => void buildNewSite(brief, files)}
+                  />
+                ) : (
+                  <>
                 <label className="block" htmlFor="site-url">
                   <input
                     id="site-url"
@@ -407,11 +546,9 @@ export function HomePage() {
                     placeholder={
                       intent === "register"
                         ? "Enter your domain here. Let AI help you find a good one."
-                        : siteFocused && intent === "create"
-                          ? "Enter a Site From the Web to Emulate your Business or Site"
-                          : siteFocused && intent === "reimagine"
-                            ? "Enter Your Site Here"
-                            : "https://www.site.com"
+                        : siteFocused && intent === "reimagine"
+                          ? "Enter Your Site Here"
+                          : "https://www.site.com"
                     }
                     className={
                       intent
@@ -468,15 +605,6 @@ export function HomePage() {
                     />
                   </label>
                 </div>
-                <input
-                  type="text"
-                  name="_gotcha"
-                  tabIndex={-1}
-                  autoComplete="off"
-                  defaultValue=""
-                  aria-hidden="true"
-                  className="pointer-events-none absolute -left-[9999px] h-px w-px opacity-0"
-                />
                 <label className="flex items-start gap-2.5 text-sm text-muted">
                   <input
                     type="checkbox"
@@ -510,6 +638,8 @@ export function HomePage() {
                   </p>
                 ) : null}
                 {mailed ? <p className="text-sm text-muted">{mailed}</p> : null}
+                  </>
+                )}
                 <button
                   type="button"
                   className="text-sm text-muted underline-offset-4 hover:text-fg hover:underline"

@@ -761,6 +761,86 @@ function renditionPrompt(draft: SiteDraft, template: TemplateName): string {
   return `A beautiful finished website homepage, full frame, the page itself, not a laptop and not a wireframe. ${look[template]} Name: ${draft.name}. Navigation: ${draft.nav.join(", ")}. Headline: ${draft.headline}. Supporting line: ${draft.subhead}. Button: ${draft.action}. Sections: ${sections}.${asked} Use those words. No WordPress. No lorem ipsum. No watermark.`;
 }
 
+export async function buildCreatedSite(brief: {
+  business_name?: string;
+  what?: string;
+  industry?: string;
+  location?: string;
+  customers?: string;
+  services?: string;
+  goal?: string;
+  pages?: string[];
+  style?: string;
+  brand_color?: string;
+  emulate_url_1?: string;
+  anything_else?: string;
+  files_note?: string;
+  existing_site?: string;
+}): Promise<ReimagineResult> {
+  try {
+    let ip = "anonymous";
+    try {
+      ip = getRequestIP({ xForwardedFor: true }) ?? "anonymous";
+    } catch {
+      ip = "anonymous";
+    }
+    if (rateLimited(ip)) {
+      return { ok: false, error: "Too many drafts from this network in the last hour. Try again shortly." };
+    }
+    const name = (brief.business_name || "New site").trim().slice(0, 60);
+    const pages = (brief.pages?.length ? brief.pages : ["Home", "About", "Services", "Contact"]).slice(0, 6);
+    const services = (brief.services || "")
+      .split(/\n|,/)
+      .map((item) => item.trim())
+      .filter(Boolean)
+      .slice(0, 4);
+    const text = [brief.what, brief.customers, brief.services, brief.location, brief.anything_else].filter(Boolean).join(". ");
+    const notes = [brief.style && `Style: ${brief.style}`, brief.brand_color && `Color: ${brief.brand_color}`, brief.files_note]
+      .filter(Boolean)
+      .join(". ");
+    const industry = brief.industry || "";
+    const template: TemplateName =
+      /restaurant/i.test(industry) ? "restaurant"
+      : /retail/i.test(industry) ? "shop"
+      : /nonprofit/i.test(industry) ? "organization"
+      : /home/i.test(industry) ? "local"
+      : /health|professional/i.test(industry) ? "professional"
+      : "local";
+    const shaped = fallbackDraft(name, name, brief.what || brief.customers || name, pages, notes, text || `${name}. ${brief.location || ""}`.trim());
+    shaped.draft.name = name;
+    shaped.draft.template = template;
+    shaped.draft.nav = pages.map((page) => page.replace("/Products", "")).slice(0, 5);
+    shaped.draft.action = (brief.goal || "Get started").slice(0, 28);
+    shaped.draft.headline = (brief.what || `${name}`).slice(0, 90);
+    shaped.draft.subhead = (brief.customers || brief.location || brief.what || "").slice(0, 280);
+    if (services.length >= 2) {
+      shaped.draft.points = services.slice(0, 3).map((service) => ({ title: service.slice(0, 60), body: service.slice(0, 220) }));
+    }
+    shaped.draft.change = [notes, brief.emulate_url_1 && `Layout inspiration only: ${brief.emulate_url_1}`].filter(Boolean).join(". ").slice(0, 800);
+    const rendition = await imagineRendition(
+      `${renditionPrompt(shaped.draft, template)} This is a brand-new site, not a redesign of an old one.`,
+    );
+    if (rendition) shaped.draft.rendition = rendition;
+    const host = (brief.existing_site || name).replace(/^https?:\/\//, "").split("/")[0] || name;
+    return {
+      ok: true,
+      source: "grok",
+      live: false,
+      finalUrl: brief.existing_site || "",
+      host,
+      foundTitle: name,
+      foundDescription: brief.what || "",
+      diagnosis: shaped.diagnosis,
+      honored: shaped.honored,
+      draft: shaped.draft,
+      note: rendition ? undefined : "The brief is saved. Imagine did not return a page picture.",
+    };
+  } catch (error) {
+    console.error("[create] build failed", error instanceof Error ? error.message : error);
+    return { ok: false, error: "The page could not be drawn." };
+  }
+}
+
 export async function runReimagine(input: ReimagineInput): Promise<ReimagineResult> {
   try {
     let ip = "anonymous";

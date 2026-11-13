@@ -92,10 +92,22 @@ async function callProxy(token: string, params: Record<string, string[]>): Promi
   throw new Error(lastError);
 }
 
+function proxyToken(): string | undefined {
+  const names = ["Onesite_Domains_API", "ONESITE_DOMAINS_API", "LOGICBOXES_PROXY_TOKEN"];
+  for (const name of names) {
+    const value = env(name);
+    if (value) return value;
+  }
+  for (const [name, value] of Object.entries(process.env)) {
+    if (/onesite/i.test(name) && /domain/i.test(name) && value?.trim()) return value.trim();
+  }
+  return undefined;
+}
+
 export async function checkDomainAvailability(raw: string): Promise<DomainCheck> {
   const name = secondLevel(raw);
   if (!name) throw new Error("Enter a domain name, like northline.com.");
-  const token = env("LOGICBOXES_PROXY_TOKEN");
+  const token = proxyToken();
   if (!token) {
     const sample: DomainState[] = ["taken", "available", "premium", "available", "taken", "available", "unknown", "available"];
     return {

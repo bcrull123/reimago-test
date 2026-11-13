@@ -1,6 +1,7 @@
 import { createServerFn } from "@tanstack/react-start";
 import type { ReimagineInput, ReimagineResult, SiteDraft } from "@/lib/reimagine-types";
 import type { DomainCheck } from "@/lib/logicboxes-types";
+import type { CreateBrief } from "@/components/create-site-wizard";
 
 export const reimagineSite = createServerFn({ method: "POST" })
   .validator((input: ReimagineInput) => {
@@ -96,4 +97,22 @@ export const checkDomainName = createServerFn({ method: "POST" })
   .handler(async ({ data }): Promise<DomainCheck> => {
     const { checkDomainAvailability } = await import("./logicboxes.server");
     return checkDomainAvailability(data.name);
+  });
+
+export const buildCreatedSite = createServerFn({ method: "POST" })
+  .validator((input: CreateBrief) => input)
+  .handler(async ({ data }) => {
+    const { buildCreatedSite: build } = await import("./reimagine.server");
+    return build(data);
+  });
+
+export const suggestCreateStep = createServerFn({ method: "POST" })
+  .validator((input: { step?: number; brief?: CreateBrief; attempt?: number }) => {
+    const step = typeof input?.step === "number" ? Math.floor(input.step) : -1;
+    if (step < 0 || step > 13) throw new Error("That step cannot be suggested.");
+    return { step, brief: input.brief, attempt: typeof input?.attempt === "number" ? input.attempt : 1 };
+  })
+  .handler(async ({ data }) => {
+    const { suggestCreateStep: suggest } = await import("./create-suggest.server");
+    return suggest(data.step, data.brief as CreateBrief, data.attempt);
   });
