@@ -4,7 +4,7 @@ import { ArrowRight } from "lucide-react";
 import { SiteShell, Wordmark } from "@/components/site-shell";
 import { CreateSiteWizard, type CreateBrief, type CreateFiles } from "@/components/create-site-wizard";
 import { checkDomainName, handOffToCursor } from "@/lib/reimagine.functions";
-import { cursorStatus, previewDirections, previewFinish, previewFromBrief, previewLook, previewRead } from "@/lib/preview.functions";
+import { cursorStatus, previewDirections, previewFinish, previewFromBrief, previewLook, previewRead, previewRetryAi } from "@/lib/preview.functions";
 import { LivePreview } from "@/components/live-preview";
 import { LooksPicker } from "@/components/looks-picker";
 import type { LookInfo, PreviewInfo, SiteFacts } from "@/lib/preview/types";
@@ -192,6 +192,7 @@ export function HomePage() {
   const [focusedLook, setFocusedLook] = useState("");
   const [chosenLook, setChosenLook] = useState("");
   const [looksNote, setLooksNote] = useState("");
+  const [retryingId, setRetryingId] = useState("");
   const [facts, setFacts] = useState<SiteFacts | null>(null);
   const [variation, setVariation] = useState(0);
   const [mailed, setMailed] = useState<string>("");
@@ -278,7 +279,7 @@ export function HomePage() {
     for (const item of settled) {
       if (item.status === "fulfilled" && item.value.ok) {
         made.push(item.value.look);
-        if (item.value.note) notes.push(item.value.note);
+        // Per-look AI failures are shown (with the exact reason) on that look's card.
       } else if (!firstError) {
         firstError = item.status === "fulfilled" ? (item.value.ok ? "" : item.value.error) : item.reason instanceof Error ? item.reason.message : "";
       }
@@ -296,6 +297,28 @@ export function HomePage() {
     setChosenLook("");
     setLooksNote(note);
     setResult(null);
+  }
+
+  /** "Retry with AI": re-run the AI for a look's homepage (or a finished site's fallback pages). */
+  async function retryAi(look: LookInfo) {
+    setError("");
+    setRetryingId(look.id);
+    try {
+      const done = await previewRetryAi({ data: { id: look.id } });
+      if (!done.ok) throw new Error(done.error);
+      const nextLooks = (looks ?? []).map((item) =>
+        item.id === look.id ? { ...item, aiError: done.errors.home, rev: (item.rev ?? 0) + 1 } : item,
+      );
+      setLooks(nextLooks);
+      const nextResult = done.result ? { ...done.result, preview: done.result.preview ? { ...done.result.preview, rev: (result?.preview?.rev ?? 0) + 1 } : undefined } : result;
+      if (done.result) setResult(nextResult);
+      remember(nextResult, nextLooks, facts, variation);
+      if (done.note) setError(done.note);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "The AI retry failed. Try again.");
+    } finally {
+      setRetryingId("");
+    }
   }
 
   /** Phase 2: the visitor picked a look — build every page in that style and polish the homepage. */
@@ -814,6 +837,8 @@ export function HomePage() {
                   busy={retrying || working}
                   onFocus={setFocusedLook}
                   onChoose={(look) => void chooseLook(look)}
+                  onRetry={(look) => void retryAi(look)}
+                  retryingId={retryingId}
                 />
               ) : null}
               {looksNote && !result ? <p className="mt-3 text-sm text-faint">{looksNote}</p> : null}
@@ -821,9 +846,9 @@ export function HomePage() {
                 {(() => {
                   const focused = looks?.find((look) => look.id === focusedLook);
                   if (result?.preview && (!focused || focused.id === chosenLook)) {
-                    return <LivePreview key={`full-${result.preview.id}`} preview={result.preview} host={result.host} />;
+                    return <LivePreview key={`full-${result.preview.id}-${result.preview.rev ?? 0}`} preview={result.preview} host={result.host} />;
                   }
-                  if (focused) return <LivePreview key={`look-${focused.id}`} preview={lookPreview(focused)} host={facts?.host || bareDomain(url) || focused.name} />;
+                  if (focused) return <LivePreview key={`look-${focused.id}-${focused.rev ?? 0}`} preview={lookPreview(focused)} host={facts?.host || bareDomain(url) || focused.name} />;
                   return (
                     <p className="rounded-2xl border border-border bg-surface p-6 text-sm text-muted">
                       This saved draft was made with an older preview. Run the site again to build new looks.
@@ -887,6 +912,19 @@ export function HomePage() {
                   ))}
                 </ul>
                 {result.note ? <p className="mt-4 text-sm leading-relaxed text-faint">{result.note}</p> : null}
+                {result.preview?.aiErrors && Object.keys(result.preview.aiErrors).length && chosenLook ? (
+                  <button
+                    type="button"
+                    disabled={Boolean(retryingId) || retrying}
+                    onClick={() => {
+                      const look = looks?.find((item) => item.id === chosenLook);
+                      if (look) void retryAi(look);
+                    }}
+                    className="mt-3 inline-flex h-9 items-center rounded-md border border-border bg-surface px-3 text-sm font-medium disabled:opacity-50"
+                  >
+                    {retryingId ? "Retrying with AI…" : "Retry with AI"}
+                  </button>
+                ) : null}
               </aside>
               <div>
                 <div className="mt-5 flex flex-col gap-3 sm:flex-row">

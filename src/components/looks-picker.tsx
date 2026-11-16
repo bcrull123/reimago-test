@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Check, Eye, Sparkles } from "lucide-react";
+import { Check, Eye, RefreshCw, Sparkles } from "lucide-react";
 import type { LookInfo } from "@/lib/preview/types";
 
 const ARCHETYPE_LABEL: Record<LookInfo["archetype"], string> = {
@@ -25,7 +25,8 @@ function Thumb({ look }: { look: LookInfo }) {
   return (
     <div ref={box} className="relative aspect-[16/11] overflow-hidden rounded-t-2xl bg-[#e9e9ec]">
       <iframe
-        src={look.url}
+        key={look.rev ?? 0}
+        src={look.rev ? `${look.url}?v=${look.rev}` : look.url}
         title={`${look.name} homepage`}
         sandbox=""
         loading="lazy"
@@ -49,6 +50,8 @@ export function LooksPicker({
   busy,
   onFocus,
   onChoose,
+  onRetry,
+  retryingId,
 }: {
   looks: LookInfo[];
   focused: string;
@@ -56,6 +59,8 @@ export function LooksPicker({
   busy: boolean;
   onFocus: (id: string) => void;
   onChoose: (look: LookInfo) => void;
+  onRetry?: (look: LookInfo) => void;
+  retryingId?: string;
 }) {
   return (
     <div>
@@ -111,6 +116,24 @@ export function LooksPicker({
                         .join(" · ")}`
                     : ""}
                 </p>
+                {look.aiError ? (
+                  <div className="rounded-md border border-amber-300 bg-amber-50 p-2.5 text-xs leading-relaxed text-amber-900">
+                    <p>
+                      <strong>Section-library version.</strong> The AI homepage failed: {look.aiError}
+                    </p>
+                    {onRetry ? (
+                      <button
+                        type="button"
+                        disabled={busy || retryingId === look.id}
+                        onClick={() => onRetry(look)}
+                        className="mt-2 inline-flex h-8 items-center gap-1.5 rounded-md bg-amber-900 px-3 text-xs font-medium text-white disabled:opacity-50"
+                      >
+                        <RefreshCw className={`size-3.5 ${retryingId === look.id ? "animate-spin" : ""}`} aria-hidden />
+                        {retryingId === look.id ? "Retrying with AI…" : "Retry with AI"}
+                      </button>
+                    ) : null}
+                  </div>
+                ) : null}
                 <div className="mt-auto flex gap-2 pt-1">
                   <button
                     type="button"
