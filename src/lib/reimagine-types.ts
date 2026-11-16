@@ -1,3 +1,5 @@
+import type { PreviewInfo } from "@/lib/preview/types";
+
 export type DraftPoint = { title: string; body: string };
 
 export type PaletteName = "copper" | "forest" | "harbor" | "plum" | "clay";
@@ -29,6 +31,7 @@ export type SiteDraft = {
   cardImage?: string;
   logo?: string;
   template?: TemplateName;
+  /** @deprecated Grok Imagine picture previews were replaced by live HTML previews (see `ReimagineOk.preview`). */
   rendition?: string;
   change?: string;
 };
@@ -58,6 +61,8 @@ export type ReimagineOk = {
   note?: string;
   pageUrl?: string;
   mailed?: boolean;
+  /** The live, clickable multi-page preview (served at /made/<id> and /made/<id>/<page>). */
+  preview?: PreviewInfo;
 };
 
 export type ReimagineResult =

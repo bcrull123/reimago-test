@@ -1,4 +1,4 @@
-import { env } from "@/lib/env.server";
+import { aiAvailable, chatText } from "@/lib/ai-provider.server";
 import type { CreateBrief } from "@/components/create-site-wizard";
 
 const INDUSTRIES = ["Restaurant", "Professional services", "Retail", "Home services", "Health", "Nonprofit", "Other"];
@@ -22,7 +22,7 @@ const STEP_RULES = [
   "Set hours to typical hours for this industry. Leave phone, contact_email, and address empty. Never invent a phone number, email, or street address.",
   "Set domain_choice to find. Return exactly 3 domain ideas in choices. Leave domain empty.",
   "Set features using only: Booking, Store/payments, Blog, Contact form, Newsletter, Chat, Member login, Multi-language. If retail, include Store/payments.",
-  "Do not invent files. Return an empty patch. The app will note that AI will create a draft logo and use AI images.",
+  "Do not invent files. Return an empty patch. The app will note that AI will draft the pages and use placeholder images until you send photos.",
 ];
 
 function list(value: unknown, allowed: string[]): string[] {
@@ -39,17 +39,16 @@ export async function suggestCreateStep(step: number, brief: CreateBrief, attemp
   choices: string[];
   note: string;
 }> {
-  const apiKey = env("XAI_API_KEY");
-  if (!apiKey) throw new Error("AI is not available.");
+  if (!aiAvailable()) throw new Error("AI is not available.");
   const rule = STEP_RULES[step];
   if (!rule) throw new Error("That step cannot be suggested.");
-  const response = await fetch("https://api.x.ai/v1/chat/completions", {
-    method: "POST",
-    headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
-    body: JSON.stringify({
-      model: "grok-4.5",
+  let raw = "";
+  try {
+    raw = await chatText({
       temperature: 0.8,
-      max_tokens: 700,
+      maxTokens: 700,
+      timeoutMs: 25000,
+      retry: false,
       messages: [
         {
           role: "system",
@@ -61,12 +60,10 @@ export async function suggestCreateStep(step: number, brief: CreateBrief, attemp
           content: `Step ${step + 1}. Attempt ${attempt}. Rule: ${rule}\nKnown answers:\n${JSON.stringify(brief)}`,
         },
       ],
-    }),
-    signal: AbortSignal.timeout(25000),
-  });
-  if (!response.ok) throw new Error("AI could not suggest an answer.");
-  const body = (await response.json()) as { choices?: { message?: { content?: string } }[] };
-  const raw = body.choices?.[0]?.message?.content ?? "";
+    });
+  } catch {
+    throw new Error("AI could not suggest an answer.");
+  }
   const jsonStart = raw.indexOf("{");
   const jsonEnd = raw.lastIndexOf("}");
   if (jsonStart < 0 || jsonEnd < jsonStart) throw new Error("AI could not suggest an answer.");
@@ -114,7 +111,7 @@ export async function suggestCreateStep(step: number, brief: CreateBrief, attemp
     step === 3
       ? "AI suggestion — please confirm this address. Edit anything you like."
       : step === 13
-        ? "AI will create a draft logo and use AI images."
+        ? "AI will draft the pages and use placeholder images until you send photos."
         : "AI suggestion — edit anything you like.";
   return { patch, choices, note };
 }

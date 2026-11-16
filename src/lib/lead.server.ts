@@ -58,10 +58,11 @@ function dotStuff(text: string): string {
   return text.replace(/\r?\n/g, "\r\n").split("\r\n").map((line) => (line.startsWith(".") ? `.${line}` : line)).join("\r\n");
 }
 
-function messageBody(input: { email: string; website: string; notes: string; name?: string }): string {
+function messageBody(input: { email: string; website: string; notes: string; name?: string; previewUrl?: string }): string {
   const lines = [input.email, "", `Website: ${input.website}`];
   if (input.name) lines.push(`Name: ${input.name}`);
   lines.push(`What should change: ${input.notes || "(not specified)"}`);
+  if (input.previewUrl) lines.push("", `Live preview: ${input.previewUrl}`);
   return lines.join("\n");
 }
 
@@ -70,8 +71,7 @@ async function deliver(input: {
   website: string;
   notes: string;
   name?: string;
-  image?: Buffer;
-  imageType?: string;
+  previewUrl?: string;
 }): Promise<void> {
   const subject = hostLabel(input.website).replace(/[\r\n]+/g, "").slice(0, 120);
   const text = messageBody(input);
@@ -101,31 +101,8 @@ async function deliver(input: {
     `Subject: ${subject}`,
     "MIME-Version: 1.0",
   ];
-  let payload: string;
-  if (input.image) {
-    const boundary = `reimago${Date.now().toString(16)}`;
-    const encoded = input.image.toString("base64").replace(/.{1,76}/g, "$&\r\n").trim();
-    headers.push(`Content-Type: multipart/mixed; boundary="${boundary}"`);
-    payload = [
-      ...headers,
-      "",
-      `--${boundary}`,
-      "Content-Type: text/plain; charset=utf-8",
-      "",
-      text,
-      `--${boundary}`,
-      `Content-Type: ${input.imageType || "image/jpeg"}`,
-      "Content-Transfer-Encoding: base64",
-      "Content-Disposition: attachment; filename=\"rendering.jpg\"",
-      "",
-      encoded,
-      `--${boundary}--`,
-      ".",
-    ].join("\r\n");
-  } else {
-    headers.push("Content-Type: text/plain; charset=utf-8");
-    payload = [...headers, "", text, "."].join("\r\n");
-  }
+  headers.push("Content-Type: text/plain; charset=utf-8");
+  const payload = [...headers, "", text, "."].join("\r\n");
   socket.write(`${dotStuff(payload)}\r\n`);
   await readCode(socket);
   await command(socket, "QUIT");
@@ -156,12 +133,13 @@ export async function sendLead(input: LeadInput): Promise<LeadResult> {
   return { ok: false, error: "Submit the form from the page." };
 }
 
-export async function sendRendition(input: {
+/** Email the lead with a link to the live preview (no picture attachment any more). */
+export async function sendPreviewLink(input: {
   email: string;
   website: string;
   notes: string;
   name: string;
-  image: string;
+  previewUrl: string;
 }): Promise<LeadResult> {
   const blocked = await guarded();
   if (blocked) return blocked;
@@ -169,18 +147,11 @@ export async function sendRendition(input: {
   const website = input.website.replace(/[\r\n]+/g, " ").slice(0, 300);
   const notes = input.notes.replace(/\r/g, "").slice(0, 800);
   const name = input.name.replace(/[\r\n]+/g, " ").slice(0, 120);
-  const match = input.image.match(/^data:([^;]+);base64,(.+)$/);
+  const previewUrl = /^https?:\/\/\S+$/.test(input.previewUrl) ? input.previewUrl.slice(0, 400) : "";
   try {
-    await deliver({
-      email,
-      website,
-      notes,
-      name,
-      image: match?.[2] ? Buffer.from(match[2], "base64") : undefined,
-      imageType: match?.[1],
-    });
+    await deliver({ email, website, notes, name, previewUrl });
     return { ok: true };
   } catch {
-    return { ok: false, error: "The rendering could not be emailed." };
+    return { ok: false, error: "The preview link could not be emailed." };
   }
 }
