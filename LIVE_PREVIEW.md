@@ -63,6 +63,18 @@ The scraped logo is downloaded and analysed in pure JS (`pngjs` / `jpeg-js`, Ver
   - logos in a colored box get a rounded plate in that color;
   - unreadable formats (SVG, WebP) get a light rounded plate on dark surfaces and `mix-blend-mode: multiply` on light ones.
 
+Details:
+
+- **Choosing the logo file.** The scraper picks the real logo with `logo-pick.ts`:
+  - it reads lazy-load `data-src`/`srcset` instead of placeholders;
+  - it skips tracking pixels, 1×1 images and partner badges;
+  - it prefers a logo inside `<header>`, or one whose alt text matches the business name;
+  - `http` logo links are upgraded to `https`.
+- **Fetching it.** The logo is fetched asking for PNG/JPEG first. Image CDNs such as Squarespace would otherwise send WebP, which the pure-JS analyser can't read; that is what blanked Cafe 501's white logo.
+- **SVG logos** are styled from their declared colors and stay at their own URL.
+- **When a logo can't be used.** If it can't be loaded or read, the site shows the business name as a text wordmark, never an empty chip.
+- **No blank silhouettes.** A logo is only recolored or knocked out when it stays recognizable. A two-tone mark, such as white lettering in a dark disc, gets a contrasting plate instead.
+
 This applies to the header and footer of every look and page.
 
 The Formcarry lead still carries `preview_url` (the first look) and `preview_pages`, which lists all three look links.
