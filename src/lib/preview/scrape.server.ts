@@ -647,8 +647,10 @@ export function factsFromBrief(brief: Record<string, unknown>): SiteFacts {
   const pages = list("pages");
   const color = s("brand_color", 7);
   const email = s("contact_email", 200);
-  const host = (s("existing_site") || s("domain") || name).replace(/^https?:\/\//, "").split("/")[0] || name;
+  // The domain chosen in step 1 (owned, or selected pending checkout) is the new site's address.
+  const host = (s("domain") || s("existing_site") || name).replace(/^https?:\/\//, "").replace(/^www\./, "").split("/")[0] || name;
   const brief_text = [
+    s("domain") && `Domain: ${s("domain")}${s("domain_status") === "selected-pending-checkout" ? " (chosen; registration pending checkout)" : ""}`,
     s("what") && `What the business does: ${s("what")}`,
     s("industry") && `Industry: ${s("industry")}`,
     s("location") && `Location: ${s("location")}`,
