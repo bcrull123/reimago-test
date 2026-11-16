@@ -135,7 +135,7 @@ export async function polishHome(
   const brief = {
     business: site.name,
     design_direction: site.design,
-    available_images: Object.values(site.images ?? {}).map((i) => ({ name: i.name, source: i.source })),
+    available_images: Object.values(site.images ?? {}).filter((i) => !i.name.startsWith("logo")).map((i) => ({ name: i.name, source: i.source })),
     pages: site.pages.map((p) => ({ slug: p.slug, title: p.title })),
     facts: site.facts
       ? {
@@ -161,12 +161,13 @@ export async function polishHome(
         : [{ type: "text", text: `Rendered homepage text (for structure):\n${visibleText(renderSitePage(site, "home", { ribbon: false }) ?? "")}\n\nBrief and current sections:\n${JSON.stringify(brief)}` }];
     const text = await chatText({
       temperature: 0.5,
-      maxTokens: 5000,
+      maxTokens: 12_000,
       timeoutMs,
       retry: false,
+      json: true,
       model: env("CRITIQUE_MODEL"),
       messages: [
-        { role: "system", content: CRITIQUE_SYSTEM.replace("{IMAGES}", Object.keys(site.images ?? {}).join(", ") || "(none — use no image fields)") },
+        { role: "system", content: CRITIQUE_SYSTEM.replace("{IMAGES}", Object.keys(site.images ?? {}).filter((n) => !n.startsWith("logo")).join(", ") || "(none — use no image fields)") },
         { role: "user", content },
       ],
     });

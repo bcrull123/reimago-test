@@ -47,7 +47,7 @@ export function imageSize(bytes: Buffer): { width: number; height: number } | un
 
 const photoCache = new Map<string, { at: number; photo: Photo | null }>();
 
-async function fetchPhoto(url: string): Promise<Photo | null> {
+export async function fetchPhoto(url: string): Promise<Photo | null> {
   const cached = photoCache.get(url);
   if (cached && Date.now() - cached.at < 15 * 60_000) return cached.photo;
   let photo: Photo | null = null;

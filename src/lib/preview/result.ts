@@ -48,6 +48,7 @@ export function resultFor(site: StoredSite, base: string, note?: string): Reimag
       mock: site.mock,
       look: site.design?.name,
       polish: site.polish ? { method: site.polish.method, notes: site.polish.notes } : undefined,
+      aiErrors: site.aiErrors,
       pages: site.pages.map((p) => ({ slug: p.slug, title: p.navLabel || p.title, url: p.slug === "home" ? base : `${base}/${p.slug}` })),
     },
   };
