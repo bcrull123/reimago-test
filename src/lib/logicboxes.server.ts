@@ -51,10 +51,10 @@ function offersFromData(name: string, data: unknown): DomainOffer[] {
   });
 }
 
-async function callProxy(token: string, params: Record<string, string[]>): Promise<unknown> {
+async function callProxy(token: string, params: Record<string, string[]>, attempts = 3, timeoutMs = 20000): Promise<unknown> {
   const url = env("LOGICBOXES_PROXY_URL") || DEFAULT_PROXY;
   let lastError = "The domain check did not answer.";
-  for (let attempt = 0; attempt < 3; attempt += 1) {
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
     try {
       const response = await fetch(url, {
         method: "POST",
@@ -69,7 +69,7 @@ async function callProxy(token: string, params: Record<string, string[]>): Promi
           endpoint: "domains/available.json",
           params,
         }),
-        signal: AbortSignal.timeout(20000),
+        signal: AbortSignal.timeout(timeoutMs),
       });
       const json = (await response.json().catch(() => null)) as ProxyBody | null;
       if (response.status === 401) throw new Error("The domain check was refused.");
@@ -104,21 +104,32 @@ function proxyToken(): string | undefined {
   return undefined;
 }
 
-export async function checkDomainAvailability(raw: string): Promise<DomainCheck> {
+function sampleCheck(name: string, note: string): DomainCheck {
+  const sample: DomainState[] = ["taken", "available", "premium", "available", "taken", "available", "unknown", "available"];
+  return {
+    sample: true,
+    note,
+    offers: TLD_ORDER.map((tld, index) => ({ domain: `${name}.${tld}`, state: sample[index] ?? "unknown" })),
+  };
+}
+
+/**
+ * Availability for name.com/.net/... through the LogicBoxes proxy. Read-only: this never registers anything.
+ * With `degrade` (the Create a New Site wizard), an unreachable proxy or PREVIEW_MOCK=1 returns a clearly
+ * labelled sample instead of an error, after one quick attempt, so the wizard is never blocked.
+ */
+export async function checkDomainAvailability(raw: string, options: { degrade?: boolean } = {}): Promise<DomainCheck> {
   const name = secondLevel(raw);
   if (!name) throw new Error("Enter a domain name, like northline.com.");
+  if (options.degrade && env("PREVIEW_MOCK") === "1") return sampleCheck(name, "Mock mode (PREVIEW_MOCK=1): this is a sample, not a live check.");
   const token = proxyToken();
-  if (!token) {
-    const sample: DomainState[] = ["taken", "available", "premium", "available", "taken", "available", "unknown", "available"];
-    return {
-      sample: true,
-      note: "The token is not set. This is a sample, not a live check.",
-      offers: TLD_ORDER.map((tld, index) => ({ domain: `${name}.${tld}`, state: sample[index] ?? "unknown" })),
-    };
+  if (!token) return sampleCheck(name, "The token is not set. This is a sample, not a live check.");
+  const params = { "domain-name": TLD_ORDER.map(() => name), tlds: [...TLD_ORDER] };
+  if (!options.degrade) return { sample: false, note: "", offers: offersFromData(name, await callProxy(token, params)) };
+  try {
+    return { sample: false, note: "", offers: offersFromData(name, await callProxy(token, params, 2, 8000)) };
+  } catch (error) {
+    const why = error instanceof Error ? error.message : "The domain check did not answer.";
+    return sampleCheck(name, `${why} This is a sample, not a live check — availability is confirmed at checkout.`);
   }
-  const data = await callProxy(token, {
-    "domain-name": TLD_ORDER.map(() => name),
-    tlds: [...TLD_ORDER],
-  });
-  return { sample: false, note: "", offers: offersFromData(name, data) };
 }
