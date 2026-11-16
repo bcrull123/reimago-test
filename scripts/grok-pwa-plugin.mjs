@@ -93,7 +93,9 @@ function wrapHtmlResponses(middlewares, cwd) {
       method === "GET" &&
       String(req.headers.accept ?? "").includes("text/html") &&
       !isInstallQuery(rawUrl) &&
-      isDocumentPath(pathOnly);
+      isDocumentPath(pathOnly) &&
+      // Hosted preview sites (/made/<id>[/<page>]) are standalone pages with a no-script CSP.
+      !pathOnly.startsWith("/made/");
     if (!looksLikeDocument) {
       next();
       return;
