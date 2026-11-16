@@ -40,6 +40,130 @@ export type SiteFacts = {
   brief?: string;
   /** Set when the live site could not be read and on-file copy was used. */
   note?: string;
+  /** Sites the owner wants to emulate (wizard), lightly scanned for colors, fonts and tone. */
+  inspiration?: Inspiration[];
+};
+
+export type Inspiration = {
+  url: string;
+  title: string;
+  description: string;
+  colors: string[];
+  fonts: string[];
+  headings: string[];
+  /** What the owner said they like about it (wizard "emulate_likes" / note). */
+  likes: string;
+};
+
+// ---------------------------------------------------------------- design directions ("looks")
+
+export const ARCHETYPES = ["editorial", "dark-premium", "bold-photo", "playful", "minimal-luxury", "warm-craft"] as const;
+export type Archetype = (typeof ARCHETYPES)[number];
+
+export const MOTIFS = [
+  "grain",
+  "thin-rules",
+  "oversized-numbers",
+  "diagonal-cuts",
+  "soft-blobs",
+  "underline-marks",
+  "grid-lines",
+  "glow",
+  "outlined-type",
+  "stamp-badges",
+] as const;
+export type Motif = (typeof MOTIFS)[number];
+
+export type DesignDirection = {
+  /** Short id, e.g. "look-1". */
+  id: string;
+  /** Evocative concept name, e.g. "Copper & Steam". */
+  name: string;
+  /** One or two sentences: the feeling of the site. */
+  mood: string;
+  archetype: Archetype;
+  palette: SitePalette;
+  fonts: { heading: string; body: string };
+  /** Art direction for photos: light, lens, color grade, subjects. Fed to image generation. */
+  imagery: string;
+  /** What the hero image should show (no text, no logos). */
+  heroSubject: string;
+  motifs: Motif[];
+  radius: "sharp" | "soft" | "round";
+  buttons: "pill" | "square" | "outline";
+  hero: "split" | "photo" | "type";
+  header: "light" | "dark" | "overlay";
+  footer: "columns" | "minimal" | "statement";
+  /** A bold headline idea for the hero. */
+  headline: string;
+  /** Why this direction fits the business. */
+  rationale: string;
+};
+
+export const SECTION_TYPES = [
+  "hero-split",
+  "hero-photo",
+  "hero-type",
+  "page-hero",
+  "stat-bar",
+  "marquee",
+  "services-grid",
+  "feature-split",
+  "process",
+  "reviews",
+  "before-after",
+  "gallery",
+  "statement",
+  "faq",
+  "cta-band",
+  "contact-block",
+  "rich-text",
+] as const;
+export type SectionType = (typeof SECTION_TYPES)[number];
+
+export type SectionItem = { title: string; text: string; image?: string; icon?: string };
+
+/** One block of a page, chosen from the section library and filled by the AI (or the mock composer). */
+export type Section = {
+  type: SectionType;
+  /** Background treatment. */
+  tone: "light" | "tint" | "dark" | "brand";
+  variant?: string;
+  eyebrow?: string;
+  heading?: string;
+  text?: string;
+  items?: SectionItem[];
+  /** Image token name (e.g. "hero", "photo-1", "service-2"). */
+  image?: string;
+  cta?: { label: string; page: string };
+  secondary?: { label: string; page: string };
+  /** Show the real tap-to-call button (only rendered when a phone number is known). */
+  call?: boolean;
+  align?: "left" | "center";
+  reverse?: boolean;
+};
+
+export type StoredImage = {
+  name: string;
+  type: string;
+  source: "generated" | "photo";
+  alt: string;
+  width?: number;
+  height?: number;
+};
+
+/** What the browser gets back for each homepage look. */
+export type LookInfo = {
+  id: string;
+  url: string;
+  index: number;
+  name: string;
+  mood: string;
+  archetype: Archetype;
+  palette: SitePalette;
+  fonts: { heading: string; body: string };
+  images: { generated: number; photos: number };
+  mock: boolean;
 };
 
 export type PlanSection = { kind: string; heading: string; brief: string };
@@ -83,6 +207,10 @@ export type PreviewInfo = {
   url: string;
   pages: PreviewPageLink[];
   mock: boolean;
+  /** Name of the chosen look, when the site was built from looks. */
+  look?: string;
+  /** Designer critique notes from the polish pass. */
+  polish?: { method: "vision" | "html" | "skipped"; notes: string[] };
 };
 
 export type PreviewStepResult<T> = ({ ok: true } & T) | { ok: false; error: string };
