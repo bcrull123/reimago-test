@@ -16,6 +16,7 @@ import { Route as SaveRouteImport } from './routes/save'
 import { Route as TermsRouteImport } from './routes/terms'
 import { Route as ThanksRouteImport } from './routes/thanks'
 import { Route as MadeIdRouteImport } from './routes/made.$id'
+import { Route as MadeIdSlugRouteImport } from './routes/made.$id.$slug'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
@@ -52,6 +53,11 @@ const MadeIdRoute = MadeIdRouteImport.update({
   path: '/made/$id',
   getParentRoute: () => rootRouteImport,
 } as any)
+const MadeIdSlugRoute = MadeIdSlugRouteImport.update({
+  id: '/$slug',
+  path: '/$slug',
+  getParentRoute: () => MadeIdRoute,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
@@ -60,7 +66,8 @@ export interface FileRoutesByFullPath {
   '/save': typeof SaveRoute
   '/terms': typeof TermsRoute
   '/thanks': typeof ThanksRoute
-  '/made/$id': typeof MadeIdRoute
+  '/made/$id': typeof MadeIdRouteWithChildren
+  '/made/$id/$slug': typeof MadeIdSlugRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
@@ -69,7 +76,8 @@ export interface FileRoutesByTo {
   '/save': typeof SaveRoute
   '/terms': typeof TermsRoute
   '/thanks': typeof ThanksRoute
-  '/made/$id': typeof MadeIdRoute
+  '/made/$id': typeof MadeIdRouteWithChildren
+  '/made/$id/$slug': typeof MadeIdSlugRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -79,7 +87,8 @@ export interface FileRoutesById {
   '/save': typeof SaveRoute
   '/terms': typeof TermsRoute
   '/thanks': typeof ThanksRoute
-  '/made/$id': typeof MadeIdRoute
+  '/made/$id': typeof MadeIdRouteWithChildren
+  '/made/$id/$slug': typeof MadeIdSlugRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -91,6 +100,7 @@ export interface FileRouteTypes {
     | '/terms'
     | '/thanks'
     | '/made/$id'
+    | '/made/$id/$slug'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
@@ -100,6 +110,7 @@ export interface FileRouteTypes {
     | '/terms'
     | '/thanks'
     | '/made/$id'
+    | '/made/$id/$slug'
   id:
     | '__root__'
     | '/'
@@ -109,6 +120,7 @@ export interface FileRouteTypes {
     | '/terms'
     | '/thanks'
     | '/made/$id'
+    | '/made/$id/$slug'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -118,7 +130,7 @@ export interface RootRouteChildren {
   SaveRoute: typeof SaveRoute
   TermsRoute: typeof TermsRoute
   ThanksRoute: typeof ThanksRoute
-  MadeIdRoute: typeof MadeIdRoute
+  MadeIdRoute: typeof MadeIdRouteWithChildren
 }
 
 declare module '@tanstack/react-router' {
@@ -172,8 +184,26 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof MadeIdRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/made/$id/$slug': {
+      id: '/made/$id/$slug'
+      path: '/$slug'
+      fullPath: '/made/$id/$slug'
+      preLoaderRoute: typeof MadeIdSlugRouteImport
+      parentRoute: typeof MadeIdRoute
+    }
   }
 }
+
+interface MadeIdRouteChildren {
+  MadeIdSlugRoute: typeof MadeIdSlugRoute
+}
+
+const MadeIdRouteChildren: MadeIdRouteChildren = {
+  MadeIdSlugRoute: MadeIdSlugRoute,
+}
+
+const MadeIdRouteWithChildren =
+  MadeIdRoute._addFileChildren(MadeIdRouteChildren)
 
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
@@ -182,7 +212,7 @@ const rootRouteChildren: RootRouteChildren = {
   SaveRoute: SaveRoute,
   TermsRoute: TermsRoute,
   ThanksRoute: ThanksRoute,
-  MadeIdRoute: MadeIdRoute,
+  MadeIdRoute: MadeIdRouteWithChildren,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

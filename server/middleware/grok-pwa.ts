@@ -97,6 +97,9 @@ export default async function grokPwaMiddleware(
   }
 
   if (!isDocumentPath(path)) return next();
+  // Hosted preview sites (/made/<id>[/<page>]) are standalone customer pages with a
+  // no-script CSP; don't inject the app's PWA head into them.
+  if (path.startsWith("/made/")) return next();
 
   const result = await next();
   if (
