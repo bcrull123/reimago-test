@@ -46,7 +46,7 @@ export async function suggestCreateStep(step: number, brief: CreateBrief, attemp
   try {
     raw = await chatText({
       temperature: 0.8,
-      maxTokens: 700,
+      maxTokens: 4000,
       timeoutMs: 25000,
       retry: false,
       messages: [

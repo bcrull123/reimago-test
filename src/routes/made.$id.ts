@@ -16,8 +16,8 @@ export const Route = createFileRoute("/made/$id")({
             return new Response(html, {
               headers: {
                 "content-type": "text/html; charset=utf-8",
-                // Unfinished looks change when the visitor picks one, so they are never cached.
-                "cache-control": site.version === 3 && !site.finished ? "no-cache" : "public, max-age=300",
+                // Looks change when the visitor picks one or retries the AI, so new-style pages are never cached.
+                "cache-control": site.version === 3 ? "no-cache" : "public, max-age=300",
                 "content-security-policy": PREVIEW_CSP,
                 "x-robots-tag": "noindex",
               },
