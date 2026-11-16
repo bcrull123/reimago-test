@@ -8,6 +8,7 @@ import { cursorStatus, previewDirections, previewFinish, previewFromBrief, previ
 import { capturePreviewPicture, pictureFileName } from "@/lib/preview-picture";
 import { LivePreview } from "@/components/live-preview";
 import { LooksPicker } from "@/components/looks-picker";
+import { ARCHETYPE_LABEL } from "@/lib/preview/archetype-label";
 import type { LookInfo, PreviewInfo, SiteFacts } from "@/lib/preview/types";
 import type { DomainOffer } from "@/lib/logicboxes-types";
 import type { ReimagineOk } from "@/lib/reimagine-types";
@@ -34,6 +35,12 @@ const LOOK_STAGES: { key: Stage; label: string }[] = [
 const FINISH_STAGES: { key: Stage; label: string }[] = [
   { key: "finish", label: "Building pages…" },
   { key: "finish", label: "Polishing the homepage…" },
+];
+/** After "Choose this look" when the brief hasn't been sent yet: build, picture, send. */
+const CHOOSE_STAGES: { key: Stage; label: string }[] = [
+  { key: "finish", label: "Building every page in this look…" },
+  { key: "picture", label: "Preparing your picture…" },
+  { key: "send", label: "Sending it to your email…" },
 ];
 
 /** A homepage-only look shown in the viewer before the visitor picks one. */
@@ -63,8 +70,17 @@ const fieldClass =
   "mt-1.5 flex h-11 w-full rounded-md border border-border bg-bg px-3 text-sm text-fg outline-none placeholder:text-faint focus-visible:ring-2 focus-visible:ring-ring/70";
 
 const FORMCARRY = "https://formcarry.com/s/NipZS0fF4w4";
-const THANKS = "We got the brief. The site, your email, the note, a picture of your preview, and a link to it were sent. Nothing on the live site was changed.";
-const THANKS_NO_PICTURE = "We got the brief. The site, your email, the note, and a link to your live preview were sent. Nothing on the live site was changed.";
+const THANKS = "Sent! Check your email. The site, your email, the note, the look you chose, a picture of it, and a link to it were sent. Nothing on the live site was changed.";
+const THANKS_NO_PICTURE = "Sent! Check your email. The site, your email, the note, the look you chose, and a link to it were sent. Nothing on the live site was changed.";
+/** Shown when the looks are ready: the brief waits until the visitor chooses one. */
+const CHOOSE_PROMPT = "Your looks are ready below. Choose the one you like and we'll build every page in that style and email you a picture. Nothing is sent until you choose.";
+/** The wizard's brief when no looks could be built (it is sent right away, as before). */
+const THANKS_NO_LOOKS = "We got the brief. The site, your email, and your answers were sent. Nothing on the live site was changed.";
+
+/** The visitor's form, held until they choose a look (Formcarry is sent once, then). */
+type PendingLead =
+  | { kind: "reimagine"; email: string; website: string; note: string; gotcha: string }
+  | { kind: "create"; email: string; gotcha: string; brief: CreateBrief; files: CreateFiles };
 
 /** The screenshot sent with the form as `picture` (plus `picture_url` when stored, or `picture_error`). */
 type PictureFields = { file?: File; url?: string; error?: string };
@@ -107,6 +123,7 @@ async function submitFormcarry(fields: {
   gotcha: string;
   previewUrl?: string;
   previewPages?: string[];
+  chosenLook?: string;
   picture?: PictureFields;
 }): Promise<void> {
   const domain = bareDomain(fields.website);
@@ -117,6 +134,7 @@ async function submitFormcarry(fields: {
   data.append("_gotcha", fields.gotcha);
   data.append("preview_url", fields.previewUrl ?? "");
   data.append("preview_pages", (fields.previewPages ?? []).join("\n"));
+  data.append("chosen_look", fields.chosenLook ?? "");
   appendPicture(data, fields.picture);
 
   const response = await fetch(FORMCARRY, {
@@ -130,7 +148,13 @@ async function submitFormcarry(fields: {
   }
 }
 
-async function submitCreateBrief(email: string, gotcha: string, brief: CreateBrief, files: CreateFiles, previewUrl?: string, picture?: PictureFields): Promise<void> {
+async function submitCreateBrief(
+  email: string,
+  gotcha: string,
+  brief: CreateBrief,
+  files: CreateFiles,
+  chosen?: { previewUrl: string; previewPages: string[]; chosenLook: string; picture?: PictureFields },
+): Promise<void> {
   const pages = brief.pages.length ? brief.pages : ["Home", "About", "Services", "Contact"];
   const industry = [brief.industry, brief.what].filter(Boolean).join(": ");
   const data = new FormData();
@@ -170,8 +194,12 @@ async function submitCreateBrief(email: string, gotcha: string, brief: CreateBri
   data.append("video_link", brief.video_link);
   data.append("anything_else", brief.anything_else);
   data.append("ai_suggested", (brief.ai_suggested ?? []).join(", "));
-  data.append("preview_url", previewUrl ?? "");
-  appendPicture(data, picture);
+  data.append("preview_url", chosen?.previewUrl ?? "");
+  if (chosen) {
+    data.append("preview_pages", chosen.previewPages.join("\n"));
+    data.append("chosen_look", chosen.chosenLook);
+  }
+  appendPicture(data, chosen?.picture);
   const named: [string, File | null][] = [
     ["logo", files.logo],
     ["brand_guide", files.brand],
@@ -223,6 +251,10 @@ export function HomePage() {
   const [checkingName, setCheckingName] = useState(false);
   const [offers, setOffers] = useState<DomainOffer[] | null>(null);
   const [domainNote, setDomainNote] = useState("");
+  const [leadSent, setLeadSent] = useState(false);
+  const [choosingSend, setChoosingSend] = useState(false);
+  const lead = useRef<{ form: PendingLead; sent: boolean } | null>(null);
+  const choosing = useRef(false);
   const draftRef = useRef<HTMLElement>(null);
   const scrollOnResult = useRef(false);
 
@@ -312,21 +344,58 @@ export function HomePage() {
     }
   }
 
-  /** Phase 2: the visitor picked a look — build every page in that style and polish the homepage. */
+  /**
+   * Phase 2: the visitor chose a look — build every page in that style, then (once per preview) take a
+   * picture of that look's homepage and send the held form to Formcarry. Double clicks are ignored.
+   */
   async function chooseLook(look: LookInfo) {
+    if (choosing.current) return;
+    choosing.current = true;
+    const pending = lead.current && !lead.current.sent ? lead.current : null;
+    // Claim the submission before any await, so a second click can never send it again.
+    if (pending) pending.sent = true;
     setError("");
+    setChoosingSend(Boolean(pending));
     setRetrying(true);
     setStage("finish");
+    let built: ReimagineOk | undefined;
     try {
-      const finished = await previewFinish({ data: { id: look.id } });
-      if (!finished.ok) throw new Error(finished.error);
-      setChosenLook(look.id);
-      setFocusedLook(look.id);
-      setResult(finished.result);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "That look could not be finished. Try again.");
+      try {
+        const finished = await previewFinish({ data: { id: look.id } });
+        if (!finished.ok) throw new Error(finished.error);
+        built = finished.result;
+        setChosenLook(look.id);
+        setFocusedLook(look.id);
+        setResult(finished.result);
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "That look could not be finished. Try again.");
+      }
+      if (!pending) return;
+      // Even if the other pages failed, the brief goes out with this look's homepage (never lose the lead).
+      const form = pending.form;
+      const domain = form.kind === "reimagine" ? bareDomain(form.website) : bareDomain(form.brief.domain || form.brief.existing_site || form.brief.business_name || "new-site");
+      setStage("picture");
+      const picture = await previewPicture(look, domain);
+      setStage("send");
+      const previewUrl = built?.preview?.url ?? look.url;
+      const previewPages = built?.preview?.pages.map((page) => `${page.title}: ${page.url}`) ?? [`${look.name} · Home: ${look.url}`];
+      const chosenLookName = `${look.name} (${ARCHETYPE_LABEL[look.archetype] ?? look.archetype})`;
+      try {
+        if (form.kind === "reimagine") {
+          await submitFormcarry({ email: form.email, website: form.website, note: form.note, gotcha: form.gotcha, previewUrl, previewPages, chosenLook: chosenLookName, picture });
+        } else {
+          await submitCreateBrief(form.email, form.gotcha, form.brief, form.files, { previewUrl, previewPages, chosenLook: chosenLookName, picture });
+        }
+        setLeadSent(true);
+        setMailed(picture.file ? THANKS : THANKS_NO_PICTURE);
+      } catch (err) {
+        pending.sent = false;
+        setError(`Your site is built, but the form could not be sent: ${err instanceof Error ? err.message : "try again"}. Press Choose this look again to resend.`);
+      }
     } finally {
+      choosing.current = false;
       setRetrying(false);
+      setChoosingSend(false);
       setStage("");
     }
   }
@@ -382,6 +451,8 @@ export function HomePage() {
     setWorking(true);
     setMailed("");
     setHandoff("");
+    setLeadSent(false);
+    lead.current = null;
     const gotcha = new FormData(event.currentTarget).get("_gotcha");
     try {
       setStage("read");
@@ -395,24 +466,12 @@ export function HomePage() {
       setVariation(0);
       scrollOnResult.current = true;
       showLooks(made.looks, [read.facts.note, made.note].filter(Boolean).join(" "));
-      // The lead email carries a picture of the first look's homepage (the one shown first), plus the links.
-      setStage("picture");
-      const picture = await previewPicture(made.looks[0], bareDomain(site));
-      setStage("send");
-      try {
-        await submitFormcarry({
-          email: email.trim(),
-          website: site,
-          note: notes.trim(),
-          gotcha: typeof gotcha === "string" ? gotcha : "",
-          previewUrl: made.looks[0]!.url,
-          previewPages: made.looks.map((look) => `${look.name}: ${look.url}`),
-          picture,
-        });
-        setMailed(picture.file ? THANKS : THANKS_NO_PICTURE);
-      } catch (err) {
-        setError(`Your preview is ready, but the form could not be sent: ${err instanceof Error ? err.message : "try again."}`);
-      }
+      // Nothing is sent yet: the form goes to Formcarry once, when the visitor chooses a look.
+      lead.current = {
+        form: { kind: "reimagine", email: email.trim(), website: site, note: notes.trim(), gotcha: typeof gotcha === "string" ? gotcha : "" },
+        sent: false,
+      };
+      setMailed(CHOOSE_PROMPT);
     } catch (err) {
       setError(err instanceof Error ? err.message : "The preview could not be made.");
     } finally {
@@ -434,6 +493,8 @@ export function HomePage() {
     setWorking(true);
     setMailed("");
     setHandoff("");
+    setLeadSent(false);
+    lead.current = null;
     let made: { looks: LookInfo[]; note: string } | null = null;
     let buildError = "";
     try {
@@ -448,23 +509,22 @@ export function HomePage() {
       } catch (err) {
         buildError = err instanceof Error ? err.message : "The preview could not be built.";
       }
-      let picture: PictureFields | undefined;
-      if (made?.looks[0]) {
-        setStage("picture");
-        picture = await previewPicture(made.looks[0], bareDomain(brief.domain || brief.existing_site || brief.business_name || "new-site"));
-      }
-      setStage("send");
-      await submitCreateBrief(email.trim(), gotcha, brief, files, made?.looks[0]?.url, picture);
-      setMailed(picture?.file ? THANKS : THANKS_NO_PICTURE);
       if (!made) {
+        // No looks to choose from: send the brief now (as before), so the answers still reach sales.
+        setStage("send");
+        await submitCreateBrief(email.trim(), gotcha, brief, files);
+        setLeadSent(true);
+        setMailed(THANKS_NO_LOOKS);
         setError(buildError);
         return;
       }
+      // Looks were built: hold the brief until the visitor chooses one (sent once, with its picture).
+      lead.current = { form: { kind: "create", email: email.trim(), gotcha, brief, files }, sent: false };
+      setMailed(CHOOSE_PROMPT);
       scrollOnResult.current = true;
       showLooks(made.looks, made.note);
     } catch (err) {
       setError(err instanceof Error ? err.message : "The form could not be sent. Try again.");
-      if (made) showLooks(made.looks, made.note);
     } finally {
       setWorking(false);
       setStage("");
@@ -594,11 +654,20 @@ export function HomePage() {
               <span className="absolute left-1/2 top-1/2 size-2 -translate-x-1/2 -translate-y-1/2 rounded-full bg-fg" />
             </div>
             <p className="mt-6 text-sm font-medium text-fg">
-              {stage === "finish" ? "Building your site in this look" : (LOOK_STAGES.find((item) => item.key === stage)?.label ?? "Building your site")}
+              {choosingSend
+                ? "Building your site and preparing your picture…"
+                : stage === "finish"
+                  ? "Building your site in this look"
+                  : (LOOK_STAGES.find((item) => item.key === stage)?.label ?? "Building your site")}
             </p>
             <ol className="mt-4 space-y-1.5 text-sm">
-              {(stage === "finish" ? FINISH_STAGES : LOOK_STAGES.filter((item) => (item.key !== "send" && item.key !== "picture") || stage === "send" || stage === "picture")).map((item) => {
-                const list = stage === "finish" ? FINISH_STAGES : LOOK_STAGES;
+              {(choosingSend
+                ? CHOOSE_STAGES
+                : stage === "finish"
+                  ? FINISH_STAGES
+                  : LOOK_STAGES.filter((item) => (item.key !== "send" && item.key !== "picture") || stage === "send" || stage === "picture")
+              ).map((item) => {
+                const list = choosingSend ? CHOOSE_STAGES : stage === "finish" ? FINISH_STAGES : LOOK_STAGES;
                 const order = list.findIndex((entry) => entry.key === item.key);
                 const current = list.findIndex((entry) => entry.key === stage);
                 const done = current > order;
@@ -617,7 +686,7 @@ export function HomePage() {
               })}
             </ol>
             <p className="mt-4 max-w-xs text-center text-xs text-muted">
-              {stage === "finish" ? "This usually takes about a minute." : "Three looks take a minute or two — worth the wait."}
+              {choosingSend || stage === "finish" ? "This usually takes about a minute." : "Three looks take a minute or two — worth the wait."}
             </p>
           </div>
         </div>
@@ -835,6 +904,7 @@ export function HomePage() {
                   onChoose={(look) => void chooseLook(look)}
                   onRetry={(look) => void retryAi(look)}
                   retryingId={retryingId}
+                  sent={leadSent}
                 />
               ) : null}
               {looksNote && !result ? <p className="mt-3 text-sm text-faint">{looksNote}</p> : null}
@@ -844,7 +914,20 @@ export function HomePage() {
                   if (result?.preview && (!focused || focused.id === chosenLook)) {
                     return <LivePreview key={`full-${result.preview.id}-${result.preview.rev ?? 0}`} preview={result.preview} host={result.host} />;
                   }
-                  if (focused) return <LivePreview key={`look-${focused.id}-${focused.rev ?? 0}`} preview={lookPreview(focused)} host={facts?.host || bareDomain(url) || focused.name} />;
+                  if (focused)
+                    return (
+                      <LivePreview
+                        key={`look-${focused.id}-${focused.rev ?? 0}`}
+                        preview={lookPreview(focused)}
+                        host={facts?.host || bareDomain(url) || focused.name}
+                        choice={{
+                          lookName: focused.name,
+                          onChoose: () => void chooseLook(focused),
+                          disabled: retrying || working || (focused.id === chosenLook && leadSent),
+                          chosen: focused.id === chosenLook,
+                        }}
+                      />
+                    );
                   return (
                     <p className="rounded-2xl border border-border bg-surface p-6 text-sm text-muted">
                       This saved draft was made with an older preview. Run the site again to build new looks.
@@ -854,7 +937,7 @@ export function HomePage() {
               </div>
               {looks && !result ? (
                 <p className="mt-3 text-sm text-muted">
-                  Homepages only for now — choose <strong>Use this look</strong> to build every page in that style.
+                  Homepages only for now — press <strong>Choose this look</strong> to build every page in that style and get a picture by email.
                 </p>
               ) : null}
               {result?.preview?.polish && result.preview.polish.notes.length ? (

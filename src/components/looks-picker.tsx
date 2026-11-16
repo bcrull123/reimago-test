@@ -1,15 +1,8 @@
 import { useEffect, useRef, useState } from "react";
-import { Check, Eye, RefreshCw, Sparkles } from "lucide-react";
+import { ArrowDown, Check, CheckCircle2, Eye, RefreshCw } from "lucide-react";
 import type { LookInfo } from "@/lib/preview/types";
+import { ARCHETYPE_LABEL } from "@/lib/preview/archetype-label";
 
-const ARCHETYPE_LABEL: Record<LookInfo["archetype"], string> = {
-  editorial: "Editorial",
-  "dark-premium": "Dark premium",
-  "bold-photo": "Bold photo-led",
-  playful: "Playful",
-  "minimal-luxury": "Minimal luxury",
-  "warm-craft": "Warm craft",
-};
 
 /** A live, scaled-down homepage thumbnail (sandboxed, not interactive). */
 function Thumb({ look }: { look: LookInfo }) {
@@ -41,7 +34,8 @@ function Thumb({ look }: { look: LookInfo }) {
 
 /**
  * The visitor's choice of homepage looks. Each card is a real, live homepage in
- * a different design direction; "Use this look" builds every page in that style.
+ * a different design direction. "Choose this look" is the main call to action: it builds every page
+ * in that style and sends the brief (with a picture of the chosen homepage) — nothing is sent before.
  */
 export function LooksPicker({
   looks,
@@ -52,6 +46,7 @@ export function LooksPicker({
   onChoose,
   onRetry,
   retryingId,
+  sent,
 }: {
   looks: LookInfo[];
   focused: string;
@@ -61,20 +56,37 @@ export function LooksPicker({
   onChoose: (look: LookInfo) => void;
   onRetry?: (look: LookInfo) => void;
   retryingId?: string;
+  /** The brief was emailed (after the visitor chose a look). */
+  sent?: boolean;
 }) {
   return (
     <div>
-      <div className="flex flex-wrap items-end justify-between gap-3">
-        <div>
-          <p className="text-xs font-medium uppercase tracking-eyebrow text-faint">Pick a look</p>
-          <h2 className="mt-1 font-display text-3xl leading-tight text-ink">
-            {looks.length} homepage {looks.length === 1 ? "direction" : "directions"} for your site
-          </h2>
+      {sent ? (
+        <div data-choose-banner className="flex items-center gap-4 rounded-2xl border-2 border-emerald-500 bg-emerald-50 px-5 py-5 sm:px-7" aria-live="polite">
+          <CheckCircle2 className="size-10 shrink-0 text-emerald-600" aria-hidden />
+          <div>
+            <h2 className="text-2xl font-bold leading-tight text-ink sm:text-3xl">Sent! Check your email.</h2>
+            <p className="mt-1 text-sm text-muted sm:text-base">Your chosen look is built below, and a picture of it is on its way.</p>
+          </div>
         </div>
-        <p className="max-w-md text-sm text-muted">
-          Preview each look, then choose your favorite. We build every page in that style and give it a designer polish.
-        </p>
-      </div>
+      ) : (
+        <div data-choose-banner className="flex items-center gap-4 rounded-2xl border-2 border-accent bg-accent/10 px-5 py-5 sm:px-7">
+          <div className="min-w-0 flex-1">
+            <h2 className="text-3xl font-extrabold leading-tight tracking-tight text-ink sm:text-4xl">
+              Choose your <span className="text-accent">favorite look</span>
+            </h2>
+            <p className="mt-2 text-base text-fg sm:text-lg">
+              Tap <strong>Choose this look</strong> on the one you like. We'll build every page in that style and email you a picture.
+            </p>
+            <p className="mt-1 text-xs text-muted">
+              {looks.length} homepage {looks.length === 1 ? "direction" : "directions"} for your site. Nothing is sent until you choose.
+            </p>
+          </div>
+          <span className="flex size-14 shrink-0 animate-bounce items-center justify-center rounded-full bg-accent text-white shadow-lg motion-reduce:animate-none" aria-hidden>
+            <ArrowDown className="size-8" strokeWidth={2.75} />
+          </span>
+        </div>
+      )}
       <div className="mt-6 grid gap-5 md:grid-cols-3">
         {looks.map((look) => {
           const isChosen = chosen === look.id;
@@ -138,21 +150,23 @@ export function LooksPicker({
                     {look.aiWarning}
                   </p>
                 ) : null}
-                <div className="mt-auto flex gap-2 pt-1">
+                <div className="mt-auto flex flex-col gap-2 pt-1">
                   <button
                     type="button"
-                    onClick={() => onFocus(look.id)}
-                    className="inline-flex h-10 flex-1 items-center justify-center gap-1.5 rounded-md border border-border bg-surface px-3 text-sm"
+                    disabled={busy || (isChosen && sent)}
+                    onClick={() => onChoose(look)}
+                    className="inline-flex h-14 w-full items-center justify-center gap-2 rounded-lg bg-primary px-4 text-lg font-semibold text-primary-fg shadow-md transition hover:brightness-110 focus-visible:ring-4 focus-visible:ring-primary/40 disabled:opacity-60"
                   >
-                    <Eye className="size-4" aria-hidden /> Preview
+                    {isChosen ? <Check className="size-5" aria-hidden /> : null}
+                    {isChosen ? "Chosen" : "Choose this look"}
                   </button>
                   <button
                     type="button"
-                    disabled={busy || isChosen}
-                    onClick={() => onChoose(look)}
-                    className="inline-flex h-10 flex-1 items-center justify-center gap-1.5 rounded-md bg-ink px-3 text-sm font-medium text-white disabled:opacity-40"
+                    onClick={() => onFocus(look.id)}
+                    aria-pressed={isFocused}
+                    className="inline-flex h-9 w-full items-center justify-center gap-1.5 rounded-md border border-border bg-surface px-3 text-sm text-muted"
                   >
-                    <Sparkles className="size-4" aria-hidden /> {isChosen ? "In use" : "Use this look"}
+                    <Eye className="size-4" aria-hidden /> {isFocused ? "Previewing below" : "Preview"}
                   </button>
                 </div>
               </div>

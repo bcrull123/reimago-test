@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { ExternalLink, Monitor, Smartphone } from "lucide-react";
+import { Check, ExternalLink, Monitor, Smartphone } from "lucide-react";
 import type { PreviewInfo } from "@/lib/preview/types";
 
 /**
@@ -8,13 +8,44 @@ import type { PreviewInfo } from "@/lib/preview/types";
  * cannot touch this app. Links navigate inside the frame; the contact form opens
  * Formcarry in a new tab (allow-forms + allow-popups).
  */
-export function LivePreview({ preview, host }: { preview: PreviewInfo; host: string }) {
+/** The "Choose this look" bar shown above a look's preview; it sticks to the top while the visitor scrolls the page. */
+export type PreviewChoice = { lookName: string; onChoose: () => void; disabled?: boolean; chosen?: boolean };
+
+export function LivePreview({ preview, host, choice }: { preview: PreviewInfo; host: string; choice?: PreviewChoice }) {
   const [device, setDevice] = useState<"desktop" | "mobile">("desktop");
   const [src, setSrc] = useState(preview.url);
 
   useEffect(() => setSrc(preview.url), [preview.url]);
 
   return (
+    <div>
+      {choice ? (
+        <div
+          data-choose-bar
+          className="sticky top-2 z-30 mb-3 flex flex-wrap items-center justify-between gap-3 rounded-2xl border-2 border-primary bg-bg/95 px-4 py-3 shadow-[0_18px_40px_-24px_rgba(0,104,232,0.85)] backdrop-blur"
+        >
+          <p className="text-sm text-fg">
+            {choice.chosen ? (
+              <>
+                <strong>{choice.lookName}</strong> is your chosen look.
+              </>
+            ) : (
+              <>
+                Like <strong>{choice.lookName}</strong>? Choose it and we'll build every page in this style and email you a picture.
+              </>
+            )}
+          </p>
+          <button
+            type="button"
+            onClick={choice.onChoose}
+            disabled={choice.disabled}
+            className="inline-flex h-12 items-center justify-center gap-2 rounded-lg bg-primary px-6 text-base font-semibold text-primary-fg shadow-md transition hover:brightness-110 disabled:opacity-50"
+          >
+            {choice.chosen ? <Check className="size-5" aria-hidden /> : null}
+            {choice.chosen ? "Chosen" : "Choose this look"}
+          </button>
+        </div>
+      ) : null}
     <div className="overflow-hidden rounded-2xl border border-border bg-surface shadow-2xl">
       <div className="flex flex-wrap items-center gap-3 border-b border-border px-4 py-3">
         <span className="flex gap-1.5" aria-hidden>
@@ -80,6 +111,7 @@ export function LivePreview({ preview, host }: { preview: PreviewInfo; host: str
           }
         />
       </div>
+    </div>
     </div>
   );
 }
