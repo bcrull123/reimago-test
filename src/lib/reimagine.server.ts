@@ -1,49 +1,19 @@
 import { lookup } from "node:dns/promises";
 import { isIP } from "node:net";
 import { getRequestIP } from "@tanstack/react-start/server";
-import type {
-  PaletteName,
-  ReimagineInput,
-  ReimagineOk,
-  ReimagineResult,
-  SiteDraft,
-  TemplateName,
-} from "@/lib/reimagine-types";
 
-const TEMPLATES = new Set<TemplateName>([
-  "yours",
-  "organization",
-  "technology",
-  "restaurant",
-  "professional",
-  "shop",
-  "local",
-]);
-
-const LEGACY_TEMPLATE: Record<string, TemplateName> = {
-  editorial: "organization",
-  poster: "restaurant",
-  ledger: "professional",
-  signal: "technology",
-};
-
-function chosenTemplate(value: unknown): TemplateName {
-  if (typeof value !== "string") return "organization";
-  const key = value.toLowerCase().trim();
-  if (TEMPLATES.has(key as TemplateName)) return key as TemplateName;
-  return LEGACY_TEMPLATE[key] ?? "organization";
-}
-
-function withTemplate(value: ReimagineOk, template: TemplateName): ReimagineOk {
-  return { ...value, draft: { ...value.draft, template } };
-}
+/*
+ * Crawl helpers shared by the live preview builder (src/lib/preview/*).
+ * The old Grok Imagine picture pipeline (grok-imagine-image-2.0 via
+ * /v1/images/generations and /v1/images/edits) was removed: previews are now
+ * real HTML pages built from the scraped facts.
+ */
 
 const hits = new Map<string, number[]>();
-const cache = new Map<string, { at: number; value: ReimagineOk }>();
 
-const REIMAGO_HOSTS = new Set(["reimago.ai", "www.reimago.ai"]);
+export const REIMAGO_HOSTS = new Set(["reimago.ai", "www.reimago.ai"]);
 
-const REIMAGO_SNAPSHOT = {
+export const REIMAGO_SNAPSHOT = {
   title: "Reimago — Social Network Software, Community Software, Social Login and Enterprise Single Sign-On",
   description:
     "Reimago provides social network software, community software, social login, and enterprise single sign-on for brands and agencies.",
@@ -59,7 +29,7 @@ const REIMAGO_SNAPSHOT = {
   text: `Reimago is social networking software, community software, social login, and enterprise single sign-on. Features include an activity feed, blog posts, bookmarks, calendars and events, document management, extensible profiles, friending and following, photo galleries, a setup wizard with social registration, status and mood updates, and videos. Advanced user-generated content covers commenting, forums, loyalty rewards and badges, live chat, polls, private messaging, questions and answers, ratings, reviews, sharing, and wiki. Moderation includes age gateways, user permissions, spam and profanity filters, trigger-word actions, pre-moderation, and flagged content. Customization includes an advertisement module, asset manager, custom menus, custom templating, drag-and-drop layout, theming, and integration. Call (405) 753-5300 or email sales@reimago.ai. Reimago is for brands, agencies, and outsourcing any website. Copyright Reimago, Inc., a subsidiary of Catalog.com, Inc., Oklahoma City.`,
 };
 
-function clip(value: unknown, max: number): string {
+export function clip(value: unknown, max: number): string {
   if (typeof value !== "string") return "";
   return value.replace(/<[^>]+>/g, "").replace(/\s+/g, " ").trim().slice(0, max);
 }
@@ -85,7 +55,7 @@ function blockedIp(ip: string): boolean {
   return false;
 }
 
-async function assertPublic(url: URL): Promise<void> {
+export async function assertPublic(url: URL): Promise<void> {
   if (url.username || url.password) throw new Error("Remove any login from that address.");
   if (url.protocol !== "http:" && url.protocol !== "https:") {
     throw new Error("Use an http or https address.");
@@ -119,7 +89,7 @@ async function assertPublic(url: URL): Promise<void> {
   }
 }
 
-function normalizeInput(raw: string): URL {
+export function normalizeInput(raw: string): URL {
   const trimmed = raw.trim();
   const withScheme = /^https?:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`;
   let url: URL;
@@ -133,7 +103,7 @@ function normalizeInput(raw: string): URL {
   return url;
 }
 
-async function fetchPage(start: URL, timeoutMs = 30_000): Promise<{ url: string; html: string }> {
+export async function fetchPage(start: URL, timeoutMs = 30_000): Promise<{ url: string; html: string }> {
   const deadline = Date.now() + timeoutMs;
   let current = start;
   let hops = 0;
@@ -165,8 +135,7 @@ async function fetchPage(start: URL, timeoutMs = 30_000): Promise<{ url: string;
       if (type && !/text\/html|application\/xhtml\+xml|text\/plain/i.test(type)) {
         throw new Error("That address did not return a web page.");
       }
-      const bytes = Buffer.from(await response.arrayBuffer());
-      const html = bytes.subarray(0, 500_000).toString("utf8");
+      const html = (await readCapped(response, 600_000)).toString("utf8");
       if (!html.trim()) throw new Error("That site returned an empty page.");
       return { url: current.toString(), html };
     } catch (error) {
@@ -182,25 +151,11 @@ async function fetchPage(start: URL, timeoutMs = 30_000): Promise<{ url: string;
   throw new Error("That site did not respond in time.");
 }
 
-function decode(text: string): string {
-  return text
-    .replace(/&nbsp;/gi, " ")
-    .replace(/&/gi, "&")
-    .replace(/"/gi, '"')
-    .replace(/&#39;|'/gi, "'")
-    .replace(/</gi, "<")
-    .replace(/>/gi, ">")
-    .replace(/&#(\d+);/g, (_, n: string) => {
-      const code = Number(n);
-      return code > 31 && code < 65535 ? String.fromCharCode(code) : " ";
-    });
-}
-
-function stripTags(html: string): string {
+export function stripTags(html: string): string {
   return decode(html.replace(/<[^>]+>/g, " ")).replace(/\s+/g, " ").trim();
 }
 
-function extract(html: string): {
+export function extract(html: string): {
   title: string;
   description: string;
   headings: string[];
@@ -225,7 +180,7 @@ function extract(html: string): {
   return { title: title.slice(0, 180), description: description.slice(0, 300), headings, text };
 }
 
-function httpUrl(value: string, base: string): string {
+export function httpUrl(value: string, base: string): string {
   try {
     const url = new URL(value, base);
     if (url.protocol !== "http:" && url.protocol !== "https:") return "";
@@ -235,7 +190,7 @@ function httpUrl(value: string, base: string): string {
   }
 }
 
-function extractLogo(html: string, base: string): string {
+export function extractLogo(html: string, base: string): string {
   const page = stripChrome(html);
   for (const tag of page.matchAll(/<img\b[^>]*>/gi)) {
     const raw = tag[0] ?? "";
@@ -261,7 +216,7 @@ function extractLogo(html: string, base: string): string {
   return icons[0] ? httpUrl(icons[0].href, base) : "";
 }
 
-function stripChrome(html: string): string {
+export function stripChrome(html: string): string {
   const open = /<([a-z0-9]+)[^>]*\bid=["']wpadminbar["'][^>]*>/i.exec(html);
   if (!open) {
     return html.replace(/https?:\/\/wordpress\.org\/?/gi, " ").replace(/About WordPress/gi, " ");
@@ -280,7 +235,7 @@ function stripChrome(html: string): string {
   return html.slice(0, open.index) + html.slice(open.index + open[0].length);
 }
 
-function scrubPlatform(value: string): string {
+export function scrubPlatform(value: string): string {
   return value
     .replace(/\babout\s*\.?\s*org\b/gi, "")
     .replace(/\babout\s+wordpress(?:\.org)?\b/gi, "")
@@ -297,18 +252,18 @@ function scrubPlatform(value: string): string {
     .trim();
 }
 
-function isWordPress(html: string): boolean {
+export function isWordPress(html: string): boolean {
   return /wp-content\/|wp-includes\/|wpadminbar|generator["'][^>]*wordpress|wordpress[^"']*["'][^>]*generator/i.test(html);
 }
 
-const MENU_NOISE =
+export const MENU_NOISE =
   /^(sample page|hello world!?|uncategorized|log in|login|sign in|sign up|register|my account|cart|checkout|wishlist|skip to content|search|shopping cart|about wordpress|wordpress\.org|about\.org|about \.org|documentation|learn wordpress|feedback|dashboard|updates|edit page|edit with elementor|howdy|log out|visit site|customize)$/i;
 
-function usefulNav(labels: string[]): string[] {
+export function usefulNav(labels: string[]): string[] {
   return labels.map(scrubPlatform).filter((label) => label.length > 1 && !MENU_NOISE.test(label));
 }
 
-function extractNav(html: string): string[] {
+export function extractNav(html: string): string[] {
   const page = stripChrome(html);
   const start = page.search(/id=["']primary-menu["']/i);
   const chunk = start >= 0 ? page.slice(start, start + 8000) : page.match(/<nav\b[\s\S]*?<\/nav>/i)?.[0] ?? "";
@@ -318,30 +273,7 @@ function extractNav(html: string): string[] {
   return [...new Set(labels)].slice(0, 7);
 }
 
-function extractStory(html: string): { headline: string; action: string; image: string } {
-  const page = stripChrome(html);
-  const box =
-    page.match(/class=["'][^"']*elementor-image-box[^"']*["'][\s\S]{0,2200}/i)?.[0] ??
-    page.match(/<h1\b[\s\S]{0,700}/i)?.[0] ??
-    "";
-  const descHtml = box.match(/image-box-description[^>]*>([\s\S]*?)<\/p>/i)?.[1] ?? "";
-  const descParts = descHtml
-    .split(/<br\s*\/?>/i)
-    .map((part) => stripTags(part))
-    .filter((part) => part.length > 2 && !MENU_NOISE.test(part));
-  const button = stripTags(
-    box.match(/<a\b[^>]*class=["'][^"']*button[^"']*["'][^>]*>([\s\S]*?)<\/a>/i)?.[1] ?? "",
-  );
-  const h1 = stripTags(page.match(/<h1\b[^>]*>([\s\S]*?)<\/h1>/i)?.[1] ?? "");
-  const image = box.match(/<img\b[^>]*\bsrc=["']([^"']+)["']/i)?.[1] ?? "";
-  return {
-    headline: descParts[0] || h1,
-    action: button || descParts[1] || h1,
-    image,
-  };
-}
-
-function extractImage(html: string, base: string): string {
+export function extractImage(html: string, base: string): string {
   const tag =
     html.match(/<meta[^>]+property=["']og:image["'][^>]*>/i)?.[0] ??
     html.match(/<meta[^>]+name=["']og:image["'][^>]*>/i)?.[0] ??
@@ -350,272 +282,56 @@ function extractImage(html: string, base: string): string {
   return content ? httpUrl(content, base) : "";
 }
 
-function sameHostLinks(html: string, base: URL): URL[] {
-  const found: URL[] = [];
-  const seen = new Set<string>();
-  for (const match of html.matchAll(/<a\s[^>]*href\s*=\s*["']([^"']+)["']/gi)) {
-    let next: URL;
-    try {
-      next = new URL(match[1] ?? "", base);
-    } catch {
-      continue;
-    }
-    if (next.protocol !== "http:" && next.protocol !== "https:") continue;
-    if (next.hostname !== base.hostname) continue;
-    if (!/about|service|product|pricing|company|solution|work|studio/i.test(next.pathname)) continue;
-    next.hash = "";
-    next.search = "";
-    const key = next.toString();
-    if (seen.has(key) || key === base.origin + base.pathname) continue;
-    seen.add(key);
-    found.push(next);
-    if (found.length >= 1) break;
-  }
-  return found;
-}
 
-function paletteOf(value: unknown): PaletteName {
-  const name = typeof value === "string" ? value.toLowerCase().trim() : "";
-  const PALETTES = new Set<PaletteName>(["copper", "forest", "harbor", "plum", "clay"]);
-  return PALETTES.has(name as PaletteName) ? (name as PaletteName) : "copper";
-}
-
-function pictureBrief(name: string, headline: string, offer: string): { heroPrompt: string; cardPrompt: string } {
-  return {
-    heroPrompt: `Editorial photograph of ${name}. ${headline}. Specific place, natural light, no people, no text, no logo.`,
-    cardPrompt: `Close editorial photograph of ${offer || name}. Natural light, no text, no logo.`,
-  };
-}
-
-function takeWords(value: string, count: number): string {
-  const parts = value.replace(/[.!?]+$/, "").split(/\s+/).filter(Boolean);
-  return parts.slice(0, count).join(" ");
-}
-
-function sentencesOf(text: string, title: string): string[] {
-  let body = text.replace(/\s+/g, " ").trim();
-  if (title && body.toLowerCase().startsWith(title.toLowerCase())) {
-    body = body.slice(title.length).trim();
-  }
-  return body
-    .split(/(?<=[.!?])\s+/)
-    .map((sentence) => sentence.trim())
-    .filter((sentence) => sentence.length >= 28 && sentence.length <= 280);
-}
-
-function fallbackDraft(
-  host: string,
-  title: string,
-  description: string,
-  headings: string[],
-  notes: string,
-  text: string,
-): { diagnosis: string; honored: string[]; draft: SiteDraft; heroPrompt: string; cardPrompt: string } {
-  const name = (title.replace(/\s*[|\-–—].*$/, "").trim() || host).slice(0, 60);
-  const lines = sentencesOf(text, title);
-  const lead = lines[0] || description || `${name} needs one sentence at the top of the page.`;
-  const fromHeadings = headings.filter((heading) => heading.length > 2).slice(0, 3);
-  const points =
-    fromHeadings.length >= 2
-      ? fromHeadings.map((heading, index) => ({
-          title: heading.slice(0, 60),
-          body: lines[index + 1] || lines[index] || lead,
-        }))
-      : lines.slice(0, 3).map((sentence) => ({
-          title: takeWords(sentence, 5).slice(0, 60),
-          body: sentence.slice(0, 220),
-        }));
-  while (points.length < 2) {
-    points.push({
-      title: notes ? "The change" : "The next step",
-      body: (notes || lead).slice(0, 220),
-    });
-  }
-  const extra = lines.slice(3, 6);
-  const steps = (extra.length ? extra : lines.slice(0, 3)).slice(0, 3).map((sentence, index) => ({
-    title: ["Start", "Shape", "Launch"][index] ?? "Next",
-    body: sentence.slice(0, 180),
-  }));
-  const pictures = pictureBrief(name, takeWords(lead, 10), points[0]?.title || name);
-  return {
-    diagnosis: description
-      ? `The live page introduces itself as “${title || host}.” ${description}`
-      : `The live page is titled “${title || host}.” ${lead}`,
-    honored: notes
-      ? [notes.slice(0, 180)]
-      : ["Lead with the sentence the page already uses, and drop everything that competes with it."],
-    heroPrompt: pictures.heroPrompt,
-    cardPrompt: pictures.cardPrompt,
-    draft: {
-      name,
-      kicker: host,
-      headline: takeWords(lead, 10).slice(0, 90),
-      subhead: (lines[1] || description || notes || lead).slice(0, 280),
-      action: "Start here",
-      nav: ["Offer", "How it works", "Contact"],
-      palette: "harbor",
-      points: points.slice(0, 3),
-      promise: (notes || lines[1] || lead).slice(0, 160),
-      steps,
-      bandTitle: notes ? "Built around what you asked to change" : "One page, one offer",
-      bandBody: (notes || lead).slice(0, 360),
-      close: `${name}. The next version of the site you already have.`,
-    },
-  };
-}
-
-function shapeModel(
-  raw: unknown,
-  host: string,
-  title: string,
-  description: string,
-  headings: string[],
-  notes: string,
-  text: string,
-): {
-  diagnosis: string;
-  honored: string[];
-  draft: SiteDraft;
-  heroPrompt: string;
-  cardPrompt: string;
-} {
-  const base = fallbackDraft(host, title, description, headings, notes, text);
-  if (!raw || typeof raw !== "object") return base;
-  const record = raw as Record<string, unknown>;
-  const draftRaw = (record.draft && typeof record.draft === "object" ? record.draft : {}) as Record<string, unknown>;
-  const pointsRaw = Array.isArray(draftRaw.points) ? draftRaw.points : [];
-  const points = pointsRaw
-    .map((point) => {
-      if (!point || typeof point !== "object") return null;
-      const item = point as Record<string, unknown>;
-      const pointTitle = clip(item.title, 60);
-      const body = clip(item.body, 220);
-      if (!pointTitle || !body) return null;
-      return { title: pointTitle, body };
+export function decode(text: string): string {
+  return text
+    .replace(/&nbsp;/gi, " ")
+    .replace(/&amp;/gi, "&")
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;|&apos;|&rsquo;|&lsquo;/gi, "'")
+    .replace(/&ldquo;|&rdquo;/gi, '"')
+    .replace(/&hellip;/gi, "…")
+    .replace(/&bull;/gi, "•")
+    .replace(/&middot;/gi, "·")
+    .replace(/&copy;/gi, "©")
+    .replace(/&reg;/gi, "®")
+    .replace(/&trade;/gi, "™")
+    .replace(/&ndash;/gi, "–")
+    .replace(/&mdash;/gi, "—")
+    .replace(/&lt;/gi, "<")
+    .replace(/&gt;/gi, ">")
+    .replace(/&#x([0-9a-f]+);/gi, (_, n: string) => {
+      const code = parseInt(n, 16);
+      return code > 31 && code < 65535 ? String.fromCharCode(code) : " ";
     })
-    .filter((point): point is { title: string; body: string } => Boolean(point))
-    .slice(0, 3);
-  const honored = (Array.isArray(record.honored) ? record.honored : [])
-    .map((item) => clip(item, 180))
-    .filter(Boolean)
-    .slice(0, 3);
-  const nav = (Array.isArray(draftRaw.nav) ? draftRaw.nav : [])
-    .map((item) => clip(item, 24))
-    .filter(Boolean)
-    .slice(0, 4);
-  const stepsRaw = Array.isArray(draftRaw.steps) ? draftRaw.steps : [];
-  const steps = stepsRaw
-    .map((point) => {
-      if (!point || typeof point !== "object") return null;
-      const item = point as Record<string, unknown>;
-      const stepTitle = clip(item.title, 40);
-      const body = clip(item.body, 160);
-      if (!stepTitle || !body) return null;
-      return { title: stepTitle, body };
-    })
-    .filter((point): point is { title: string; body: string } => Boolean(point))
-    .slice(0, 3);
-  const pictures = pictureBrief(base.draft.name, base.draft.headline, base.draft.points[0]?.title || base.draft.name);
-  return {
-    diagnosis: clip(record.diagnosis, 420) || base.diagnosis,
-    honored: honored.length ? honored : base.honored,
-    heroPrompt: clip(draftRaw.heroPrompt, 400) || pictures.heroPrompt,
-    cardPrompt: clip(draftRaw.cardPrompt, 400) || pictures.cardPrompt,
-    draft: {
-      name: clip(draftRaw.name, 60) || base.draft.name,
-      kicker: clip(draftRaw.kicker, 48) || base.draft.kicker,
-      headline: clip(draftRaw.headline, 110) || base.draft.headline,
-      subhead: clip(draftRaw.subhead, 320) || base.draft.subhead,
-      action: clip(draftRaw.action, 28) || base.draft.action,
-      nav: nav.length ? nav : base.draft.nav,
-      palette: paletteOf(record.palette),
-      points: points.length >= 2 ? points : base.draft.points,
-      promise: clip(draftRaw.promise, 180) || base.draft.promise,
-      steps: steps.length >= 2 ? steps : base.draft.steps,
-      bandTitle: clip(draftRaw.bandTitle, 80) || base.draft.bandTitle,
-      bandBody: clip(draftRaw.bandBody, 360) || base.draft.bandBody,
-      close: clip(draftRaw.close, 180) || base.draft.close,
-    },
-  };
-}
-
-async function askGrok(payload: {
-  url: string;
-  title: string;
-  description: string;
-  headings: string[];
-  text: string;
-  notes: string;
-  template: TemplateName;
-  wordpress: boolean;
-}): Promise<unknown> {
-  const apiKey = process.env.XAI_API_KEY;
-  if (!apiKey) throw new Error("AI is not available");
-  const body = {
-    model: "grok-4.5",
-    temperature: 0.5,
-    max_tokens: 2200,
-    messages: [
-      {
-        role: "system",
-        content:
-          "You are Grok Build, designing a finished homepage, not a wireframe. Reimago shows this draft to the customer. Return JSON only, no markdown. Shape: {\"diagnosis\":\"2 sentences grounded only in the crawl\",\"honored\":[\"up to 3 changes made because of the notes\"],\"palette\":\"copper|forest|harbor|plum|clay\",\"draft\":{\"name\":\"\",\"kicker\":\"short label\",\"headline\":\"under 10 words, a claim a stranger can repeat\",\"subhead\":\"under 36 words, specific to this business\",\"action\":\"2 or 3 words\",\"nav\":[\"\",\"\",\"\"],\"promise\":\"one sentence outcome\",\"points\":[{\"title\":\"a real part of the offer\",\"body\":\"under 28 words\"},{\"title\":\"\",\"body\":\"\"},{\"title\":\"\",\"body\":\"\"}],\"steps\":[{\"title\":\"2 words\",\"body\":\"under 18 words\"},{\"title\":\"\",\"body\":\"\"},{\"title\":\"\",\"body\":\"\"}],\"bandTitle\":\"\",\"bandBody\":\"2 sentences\",\"close\":\"one sentence\",\"heroPrompt\":\"one sentence, a photograph of the real place or product, no text in the picture\",\"cardPrompt\":\"one sentence, a close photograph of the main offer, no text in the picture\"}}. The three points must be three different parts of the business, not synonyms. The steps are how a customer starts, in order. If change notes exist, the headline and the first point must show that change. Use the customer's nouns. Never write elevate, seamless, cutting-edge, solutions, unlock, empower, or next-gen. Do not invent statistics, awards, client names, testimonials, prices, or compliance claims that are not in the crawl. Photographs must not contain letters, logos, or watermarks. Write in the customer's voice, not as Reimago or Grok. No emoji.",
-      },
-      {
-        role: "user",
-        content: JSON.stringify({
-          url: payload.url,
-          title: payload.title,
-          description: payload.description,
-          headings: payload.headings.slice(0, 12),
-          text: payload.text.slice(0, 5000),
-          changeNotes: payload.notes || "(none — tighten the homepage anyway)",
-          template: payload.template,
-          instruction:
-            payload.template === "yours"
-              ? "Keep their business name, the headline already on the page, and their real navigation. Reorganize the content so the page is clearer and more compelling. Do not invent another company or domain. Never mention WordPress, the toolbar, themes, or powered-by."
-              : payload.wordpress
-                ? "The page was on WordPress. Never mention WordPress, themes, plugins, or powered-by. Ignore sample pages and theme chrome. Read the real content and reorganize it into a clearer homepage with one offer and the actual parts of the work. Keep the business name."
-                : "",
-        }),
-      },
-    ],
-  };
-
-  const call = async () => {
-    const response = await fetch("https://api.x.ai/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${apiKey}`,
-      },
-      body: JSON.stringify(body),
-      signal: AbortSignal.timeout(25000),
+    .replace(/&#(\d+);/g, (_, n: string) => {
+      const code = Number(n);
+      return code > 31 && code < 65535 ? String.fromCharCode(code) : " ";
     });
-    if (!response.ok) {
-      const err = new Error(`xAI API error ${response.status}`);
-      (err as Error & { status?: number }).status = response.status;
-      throw err;
-    }
-    const json = (await response.json()) as { choices?: { message?: { content?: string } }[] };
-    return json.choices?.[0]?.message?.content ?? "";
-  };
-
-  let text = "";
-  try {
-    text = await call();
-  } catch (error) {
-    const status = (error as { status?: number }).status ?? 0;
-    if (status !== 429 && status < 500) throw error;
-    text = await call();
-  }
-  const start = text.indexOf("{");
-  const end = text.lastIndexOf("}");
-  if (start < 0 || end <= start) throw new Error("The draft came back unreadable.");
-  return JSON.parse(text.slice(start, end + 1)) as unknown;
 }
 
-function rateLimited(key: string): boolean {
+/** Read a response body but stop after `max` bytes (never buffer a huge download). */
+export async function readCapped(response: Response, max: number): Promise<Buffer> {
+  const declared = Number(response.headers.get("content-length") ?? 0);
+  if (declared && declared > max * 4) {
+    await response.body?.cancel().catch(() => undefined);
+    throw new Error("That page is too large to read.");
+  }
+  const reader = response.body?.getReader();
+  if (!reader) return Buffer.alloc(0);
+  const chunks: Buffer[] = [];
+  let total = 0;
+  while (total < max) {
+    const { done, value } = await reader.read();
+    if (done || !value) break;
+    chunks.push(Buffer.from(value));
+    total += value.length;
+  }
+  await reader.cancel().catch(() => undefined);
+  return Buffer.concat(chunks).subarray(0, max);
+}
+
+export function rateLimited(key: string): boolean {
   const now = Date.now();
   const recent = (hits.get(key) ?? []).filter((stamp) => now - stamp < 60 * 60 * 1000);
   if (recent.length >= 6) {
@@ -627,419 +343,11 @@ function rateLimited(key: string): boolean {
   return false;
 }
 
-const PHOTO: Record<TemplateName, string> = {
-  yours: "A clear photograph of the place or product already described, daylight, no text.",
-  organization: "Documentary photograph of a community room or people working together, natural light.",
-  technology: "Product photograph of a matte device on a dark desk, cool light, screen glow with no readable text.",
-  restaurant: "Editorial photograph of a plated dish and a warm dining room.",
-  professional: "Quiet photograph of a conference table in a calm office, no readable papers.",
-  shop: "Retail still life of one product on a clean surface, soft shadow.",
-  local: "Daylight photograph of finished trade work or a small storefront, no signage text.",
-};
-
-async function imagine(
-  prompt: string,
-  aspect: "16:9" | "1:1",
-  template: TemplateName,
-  plain = false,
-): Promise<string | undefined> {
-  const apiKey = process.env.XAI_API_KEY;
-  if (!apiKey || !prompt) return undefined;
+export function requestIp(): string {
   try {
-    const response = await fetch("https://api.x.ai/v1/images/generations", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${apiKey}`,
-      },
-      body: JSON.stringify({
-        model: "grok-imagine-image-2.0",
-        prompt: plain
-          ? `${prompt} Plain white background. No border. No watermark.`
-          : `${prompt} ${PHOTO[template]} No letters, no logo, no watermark.`,
-        aspect_ratio: aspect,
-        resolution: "1k",
-        quality: "low",
-        response_format: "b64_json",
-        n: 1,
-      }),
-      signal: AbortSignal.timeout(40000),
-    });
-    if (!response.ok) return undefined;
-    const json = (await response.json()) as { data?: { b64_json?: string }[] };
-    const encoded = json.data?.[0]?.b64_json;
-    if (!encoded) return undefined;
-    return `data:image/jpeg;base64,${encoded}`;
+    return getRequestIP({ xForwardedFor: true }) ?? "anonymous";
   } catch {
-    return undefined;
-  }
-}
-
-async function logoSource(url: string): Promise<string | undefined> {
-  if (!url || url.startsWith("data:")) return url.startsWith("data:image/") ? url : undefined;
-  try {
-    const response = await fetch(url, {
-      headers: { "User-Agent": "Reimago-reimagine/1.0" },
-      signal: AbortSignal.timeout(30000),
-      redirect: "follow",
-    });
-    if (!response.ok) return undefined;
-    const type = (response.headers.get("content-type") || "").split(";")[0].trim().toLowerCase();
-    if (!/^image\/(png|jpeg|jpg|webp|gif)$/.test(type)) return undefined;
-    const bytes = Buffer.from(await response.arrayBuffer());
-    if (bytes.length < 32 || bytes.length > 1_500_000) return undefined;
-    return `data:${type === "image/jpg" ? "image/jpeg" : type};base64,${bytes.toString("base64")}`;
-  } catch {
-    return undefined;
-  }
-}
-
-async function imagineRendition(prompt: string, logoUrl?: string): Promise<string | undefined> {
-  const apiKey = process.env.XAI_API_KEY;
-  if (!apiKey || !prompt) return undefined;
-  const logo = logoUrl ? await logoSource(logoUrl) : undefined;
-  const usingLogo = Boolean(logo);
-  try {
-    const response = await fetch(usingLogo ? "https://api.x.ai/v1/images/edits" : "https://api.x.ai/v1/images/generations", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${apiKey}`,
-      },
-      body: JSON.stringify({
-        model: "grok-imagine-image-2.0",
-        prompt: usingLogo
-          ? `${prompt} The source image is the site's real logo. Keep that logo exactly as it is, in the top-left of the header. Do not redraw, recolor, or replace the mark.`
-          : prompt,
-        ...(usingLogo ? { image: { url: logo, type: "image_url" } } : {}),
-        aspect_ratio: "16:9",
-        resolution: "1k",
-        quality: "low",
-        response_format: "url",
-        n: 1,
-      }),
-      signal: AbortSignal.timeout(30000),
-    });
-    if (!response.ok) {
-      console.error("[reimagine] imagine", response.status, await response.text());
-      if (!usingLogo) return undefined;
-      return imagineRendition(prompt);
-    }
-    const json = (await response.json()) as { data?: { url?: string; b64_json?: string }[] };
-    const url = json.data?.[0]?.url;
-    if (!url) return undefined;
-    const image = await fetch(url, { signal: AbortSignal.timeout(20000) });
-    if (!image.ok) return url;
-    const bytes = Buffer.from(await image.arrayBuffer());
-    const type = image.headers.get("content-type") || "image/jpeg";
-    return `data:${type};base64,${bytes.toString("base64")}`;
-  } catch (error) {
-    console.error("[reimagine] imagine failed", error instanceof Error ? error.message : error);
-    if (usingLogo) return imagineRendition(prompt);
-    return undefined;
-  }
-}
-
-export async function anotherRendition(draft: SiteDraft): Promise<string | undefined> {
-  const prompt = `${renditionPrompt(draft, draft.template ?? "yours")} A new composition, different from the last picture.`;
-  return imagineRendition(prompt, draft.logo);
-}
-
-function renditionPrompt(draft: SiteDraft, template: TemplateName): string {
-  const sections = draft.points.map((point) => `${point.title}: ${point.body}`).join(" ");
-  const look: Record<TemplateName, string> = {
-    yours: "Their own site, made clearer and more beautiful.",
-    organization: "A warm nonprofit homepage with a mission and a join button.",
-    technology: "A dark, precise product homepage.",
-    restaurant: "A restaurant homepage with food photography and a short menu.",
-    professional: "A calm white firm homepage with thin rules.",
-    shop: "A shop homepage with a large product and a buy button.",
-    local: "A local-service homepage with a bold headline and three services.",
-  };
-  const change = draft.change?.trim();
-  const asked = change ? ` What should change: ${change}. Show that change in the page.` : "";
-  return `A beautiful finished website homepage, full frame, the page itself, not a laptop and not a wireframe. ${look[template]} Name: ${draft.name}. Navigation: ${draft.nav.join(", ")}. Headline: ${draft.headline}. Supporting line: ${draft.subhead}. Button: ${draft.action}. Sections: ${sections}.${asked} Use those words. No WordPress. No lorem ipsum. No watermark.`;
-}
-
-export async function buildCreatedSite(brief: {
-  business_name?: string;
-  what?: string;
-  industry?: string;
-  location?: string;
-  customers?: string;
-  services?: string;
-  goal?: string;
-  pages?: string[];
-  style?: string;
-  brand_color?: string;
-  emulate_url_1?: string;
-  anything_else?: string;
-  files_note?: string;
-  existing_site?: string;
-}): Promise<ReimagineResult> {
-  try {
-    let ip = "anonymous";
-    try {
-      ip = getRequestIP({ xForwardedFor: true }) ?? "anonymous";
-    } catch {
-      ip = "anonymous";
-    }
-    if (rateLimited(ip)) {
-      return { ok: false, error: "Too many drafts from this network in the last hour. Try again shortly." };
-    }
-    const name = (brief.business_name || "New site").trim().slice(0, 60);
-    const pages = (brief.pages?.length ? brief.pages : ["Home", "About", "Services", "Contact"]).slice(0, 6);
-    const services = (brief.services || "")
-      .split(/\n|,/)
-      .map((item) => item.trim())
-      .filter(Boolean)
-      .slice(0, 4);
-    const text = [brief.what, brief.customers, brief.services, brief.location, brief.anything_else].filter(Boolean).join(". ");
-    const notes = [brief.style && `Style: ${brief.style}`, brief.brand_color && `Color: ${brief.brand_color}`, brief.files_note]
-      .filter(Boolean)
-      .join(". ");
-    const industry = brief.industry || "";
-    const template: TemplateName =
-      /restaurant/i.test(industry) ? "restaurant"
-      : /retail/i.test(industry) ? "shop"
-      : /nonprofit/i.test(industry) ? "organization"
-      : /home/i.test(industry) ? "local"
-      : /health|professional/i.test(industry) ? "professional"
-      : "local";
-    const shaped = fallbackDraft(name, name, brief.what || brief.customers || name, pages, notes, text || `${name}. ${brief.location || ""}`.trim());
-    shaped.draft.name = name;
-    shaped.draft.template = template;
-    shaped.draft.nav = pages.map((page) => page.replace("/Products", "")).slice(0, 5);
-    shaped.draft.action = (brief.goal || "Get started").slice(0, 28);
-    shaped.draft.headline = (brief.what || `${name}`).slice(0, 90);
-    shaped.draft.subhead = (brief.customers || brief.location || brief.what || "").slice(0, 280);
-    if (services.length >= 2) {
-      shaped.draft.points = services.slice(0, 3).map((service) => ({ title: service.slice(0, 60), body: service.slice(0, 220) }));
-    }
-    shaped.draft.change = [notes, brief.emulate_url_1 && `Layout inspiration only: ${brief.emulate_url_1}`].filter(Boolean).join(". ").slice(0, 800);
-    const rendition = await imagineRendition(
-      `${renditionPrompt(shaped.draft, template)} This is a brand-new site, not a redesign of an old one.`,
-    );
-    if (rendition) shaped.draft.rendition = rendition;
-    const host = (brief.existing_site || name).replace(/^https?:\/\//, "").split("/")[0] || name;
-    return {
-      ok: true,
-      source: "grok",
-      live: false,
-      finalUrl: brief.existing_site || "",
-      host,
-      foundTitle: name,
-      foundDescription: brief.what || "",
-      diagnosis: shaped.diagnosis,
-      honored: shaped.honored,
-      draft: shaped.draft,
-      note: rendition ? undefined : "The brief is saved. Imagine did not return a page picture.",
-    };
-  } catch (error) {
-    console.error("[create] build failed", error instanceof Error ? error.message : error);
-    return { ok: false, error: "The page could not be drawn." };
-  }
-}
-
-export async function runReimagine(input: ReimagineInput): Promise<ReimagineResult> {
-  try {
-    let ip = "anonymous";
-    try {
-      ip = getRequestIP({ xForwardedFor: true }) ?? "anonymous";
-    } catch {
-      ip = "anonymous";
-    }
-    if (rateLimited(ip)) {
-      return { ok: false, error: "Too many drafts from this network in the last hour. Try again shortly." };
-    }
-
-    const startUrl = normalizeInput(input.url);
-    await assertPublic(startUrl);
-    let note: string | undefined;
-    const template = chosenTemplate(input.template);
-    const cacheKey = `${startUrl.toString()}|${input.notes.toLowerCase()}|v9`;
-
-    let live = true;
-    let finalUrl = startUrl.toString();
-    let title = "";
-    let description = "";
-    let headings: string[] = [];
-    let text = "";
-    let logo = "";
-    let ownImage = "";
-    let crawledNav: string[] = [];
-    let wordpress = false;
-    let story = { headline: "", action: "", image: "" };
-
-    try {
-      const page = await fetchPage(startUrl, 30000);
-      finalUrl = page.url;
-      const main = extract(page.html);
-      title = main.title;
-      description = main.description;
-      headings = [...main.headings];
-      text = main.text;
-      logo = extractLogo(page.html, page.url);
-      ownImage = extractImage(page.html, page.url);
-      crawledNav = extractNav(page.html);
-      story = extractStory(page.html);
-      if (story.image) {
-        const picture = httpUrl(story.image, page.url);
-        if (picture && picture !== logo) ownImage = picture;
-      }
-      wordpress = isWordPress(page.html);
-      title = scrubPlatform(title);
-      description = scrubPlatform(description);
-      headings = headings
-        .map(scrubPlatform)
-        .filter((heading) => heading.length > 1 && !MENU_NOISE.test(heading) && !/shopping cart/i.test(heading));
-      text = scrubPlatform(text);
-      crawledNav = usefulNav(crawledNav);
-      if (wordpress && /wp-includes|wordpress\.org|w-logo|wordpress-logo/i.test(logo)) logo = "";
-      const extra = sameHostLinks(page.html, new URL(page.url))[0];
-      if (extra) {
-        try {
-          const second = await fetchPage(extra, 30000);
-          const more = extract(second.html);
-          if (more.headings.length) headings = [...headings, ...more.headings].slice(0, 16);
-          if (more.text) text = `${text}\n${more.text}`.slice(0, 7000);
-        } catch {
-          // A second page is optional.
-        }
-      }
-    } catch (error) {
-      if (!REIMAGO_HOSTS.has(startUrl.hostname)) throw error;
-      live = false;
-      title = REIMAGO_SNAPSHOT.title;
-      description = REIMAGO_SNAPSHOT.description;
-      headings = REIMAGO_SNAPSHOT.headings;
-      text = REIMAGO_SNAPSHOT.text;
-      note = "reimago.ai did not answer in time, so this draft uses the public homepage copy already on file. Nothing on the live domain was changed.";
-    }
-
-    if (text.length < 40 && !REIMAGO_HOSTS.has(startUrl.hostname)) {
-      return { ok: false, error: "That page did not include enough public text to draft from." };
-    }
-    if (text.length < 40 && REIMAGO_HOSTS.has(startUrl.hostname)) {
-      title = REIMAGO_SNAPSHOT.title;
-      description = REIMAGO_SNAPSHOT.description;
-      headings = REIMAGO_SNAPSHOT.headings;
-      text = REIMAGO_SNAPSHOT.text;
-      live = false;
-      note = "The live page had almost no readable text, so this draft uses the public homepage copy already on file.";
-    }
-
-    const host = new URL(finalUrl).hostname;
-    let source: "grok" | "crawl" = "grok";
-    let shaped: ReturnType<typeof fallbackDraft>;
-    try {
-      const model = await askGrok({
-        url: finalUrl,
-        title,
-        description,
-        headings,
-        text,
-        notes: input.notes,
-        template,
-        wordpress,
-      });
-      shaped = shapeModel(model, host, title, description, headings, input.notes, text);
-    } catch (error) {
-      console.error("[reimagine] grok failed", error instanceof Error ? error.message : error);
-      source = "crawl";
-      shaped = fallbackDraft(host, title, description, headings, input.notes, text);
-      note = note
-        ? `${note} The writing model did not accept the request, so the draft was composed from the page text.`
-        : "The writing model did not accept the request, so this draft was composed from the page text.";
-    }
-
-    shaped.diagnosis = scrubPlatform(shaped.diagnosis);
-    shaped.honored = shaped.honored.map(scrubPlatform).filter(Boolean);
-    const draft = shaped.draft;
-    draft.name = scrubPlatform(draft.name);
-    draft.kicker = scrubPlatform(draft.kicker);
-    draft.headline = scrubPlatform(draft.headline);
-    draft.subhead = scrubPlatform(draft.subhead);
-    draft.action = scrubPlatform(draft.action);
-    draft.bandTitle = scrubPlatform(draft.bandTitle);
-    draft.bandBody = scrubPlatform(draft.bandBody);
-    draft.close = scrubPlatform(draft.close);
-    if (draft.promise) draft.promise = scrubPlatform(draft.promise);
-    draft.nav = usefulNav(draft.nav);
-    draft.points = draft.points
-      .map((point) => ({ title: scrubPlatform(point.title), body: scrubPlatform(point.body) }))
-      .filter((point) => point.title && point.body);
-    draft.steps = (draft.steps ?? [])
-      .map((step) => ({ title: scrubPlatform(step.title), body: scrubPlatform(step.body) }))
-      .filter((step) => step.title && step.body);
-
-    if (logo) shaped.draft.logo = logo;
-    if (template === "yours") {
-      const brand = scrubPlatform(title.split(/\s+[|\-–—]\s+/)[0] ?? "").slice(0, 60);
-      const tagline = scrubPlatform(title.split(/\s+[|\-–—]\s+/).slice(1).join(" — ")).slice(0, 80);
-      if (brand) shaped.draft.name = brand;
-      if (story.headline) shaped.draft.headline = story.headline.slice(0, 110);
-      if (story.action) shaped.draft.action = story.action.slice(0, 28);
-      if (crawledNav.length >= 2) shaped.draft.nav = crawledNav.slice(0, 5);
-      const domainOnly = /^[a-z0-9.-]+\.[a-z]{2,}$/i.test(shaped.draft.kicker.trim());
-      if (tagline && !/^[a-z0-9.-]+\.[a-z]{2,}$/i.test(tagline)) shaped.draft.kicker = tagline;
-      else if (domainOnly || /about\.org/i.test(shaped.draft.kicker)) shaped.draft.kicker = "";
-      if (ownImage) shaped.draft.heroImage = ownImage;
-    } else if (crawledNav.length >= 2 && !wordpress) {
-      shaped.draft.nav = shaped.draft.nav.length ? shaped.draft.nav : crawledNav;
-    }
-
-    const logoJob =
-      template === "yours" && !logo
-        ? imagine(
-            `A simple horizontal wordmark. The only text is "${(shaped.draft.name || host).replace(/"/g, "")}". Black letters on white. One line. No icon. No slogan.`,
-            "16:9",
-            "yours",
-            true,
-          )
-        : Promise.resolve(undefined);
-
-    if (input.notes.trim()) shaped.draft.change = input.notes.trim().slice(0, 800);
-    const [rendition, made] = await Promise.all([
-      imagineRendition(
-        `${renditionPrompt(shaped.draft, template)} A new composition. Variation ${Date.now()}.`,
-        logo || undefined,
-      ),
-      logoJob,
-    ]);
-    if (rendition) shaped.draft.rendition = rendition;
-    if (made) shaped.draft.logo = made;
-
-    const value: ReimagineOk = {
-      ok: true,
-      source,
-      live,
-      finalUrl,
-      host,
-      foundTitle: title || host,
-      foundDescription: description,
-      diagnosis: shaped.diagnosis,
-      honored: shaped.honored,
-      draft: shaped.draft,
-      layout: {
-        submitted: input.url,
-        url: finalUrl,
-        title: title || host,
-        description,
-        nav: crawledNav.slice(0, 8),
-        headings: headings.slice(0, 16),
-        text: text.slice(0, 2500),
-      },
-      note,
-    };
-    cache.set(cacheKey, { at: Date.now(), value });
-    return withTemplate(value, template);
-  } catch (error) {
-    const message = error instanceof Error ? error.message : "The draft could not be made.";
-    if (/fetch failed|aborted|timeout|Timeout/i.test(message)) {
-      return { ok: false, error: "That site did not respond in time. Check the address and try again." };
-    }
-    return { ok: false, error: message };
+    return "anonymous";
   }
 }
 
@@ -1053,37 +361,33 @@ export type CursorHandoff = {
   headings: string[];
   text: string;
   notes: string;
-  image: string;
+  previewUrl: string;
+  pages: string[];
 };
 
-function cursorPrompt(input: CursorHandoff): string {
+export function cursorConfigured(): boolean {
+  return Boolean(process.env.CURSOR_API_KEY?.trim());
+}
+
+export function cursorPrompt(input: CursorHandoff): string {
   const site = input.submitted || input.url || input.host;
   return [
     `Rebuild the website entered in the form: ${site}.`,
     "That address is the only site. Do not switch to a different business.",
-    "Match the attached Imagine rendering for color, type, spacing, and the new look.",
-    "Keep the existing site's section order and navigation.",
+    input.previewUrl
+      ? `Start from the approved live preview at ${input.previewUrl}. Open every page and match its layout, colors, type, copy, and navigation.`
+      : "",
+    input.pages.length ? `Preview pages:\n${input.pages.map((page) => `- ${page}`).join("\n")}` : "",
     input.title ? `Title: ${input.title}` : "",
     input.description ? `Description: ${input.description}` : "",
     input.nav.length ? `Navigation: ${input.nav.join(" · ")}` : "",
     input.headings.length ? `Headings, in order:\n${input.headings.map((heading) => `- ${heading}`).join("\n")}` : "",
     input.text ? `Page text:\n${input.text}` : "",
     input.notes ? `Customer note: ${input.notes}` : "",
-    "Ship one static page that opens in a browser. Do not change the live site.",
+    "Never invent phone numbers, emails, or addresses. Ship static pages that open in a browser. Do not change the live site.",
   ]
     .filter(Boolean)
     .join("\n\n");
-}
-
-function cursorImage(image: string): { data: string; mimeType: string } | { url: string } | undefined {
-  const match = image.match(/^data:(image\/(?:png|jpeg|gif|webp));base64,([A-Za-z0-9+/=\r\n]+)$/);
-  if (match) {
-    const data = match[2].replace(/\s/g, "");
-    if (data.length > 14_000_000) return undefined;
-    return { data, mimeType: match[1] };
-  }
-  if (image.startsWith("https://")) return { url: image };
-  return undefined;
 }
 
 export async function sendToCursor(
@@ -1092,15 +396,8 @@ export async function sendToCursor(
   const prompt = cursorPrompt(input);
   const deeplink = `https://cursor.com/link/prompt?text=${encodeURIComponent(prompt.slice(0, 1800))}`;
   const key = process.env.CURSOR_API_KEY?.trim();
-  const picture = cursorImage(input.image);
-  if (!key || !picture) {
-    return {
-      ok: false,
-      error: key
-        ? "The Imagine picture could not be attached."
-        : "Opened Cursor with the site from the form. The Imagine picture downloaded beside it.",
-      deeplink,
-    };
+  if (!key) {
+    return { ok: false, error: "CURSOR_API_KEY is not set, so the brief was prepared as a download instead.", deeplink };
   }
   try {
     const response = await fetch("https://api.cursor.com/v1/agents", {
@@ -1111,7 +408,7 @@ export async function sendToCursor(
       },
       body: JSON.stringify({
         name: `Reimago ${input.host || "site"}`.slice(0, 100),
-        prompt: { text: prompt, images: [picture] },
+        prompt: { text: prompt },
       }),
       signal: AbortSignal.timeout(30000),
     });
