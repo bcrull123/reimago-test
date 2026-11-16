@@ -122,7 +122,7 @@ export function contactFormHtml(site: Pick<StoredSite, "id" | "host" | "name" | 
 
 function pendingBody(site: StoredSite, page: StoredPage): string {
   return `<section class="sec s-page-hero t-tint"><div class="wrap"><div class="hero-copy"><span class="eyebrow">${escapeHtml(page.navLabel)}</span><h1>${escapeHtml(page.title)}</h1><p class="lead">This page is built when you choose this look.</p></div></div></section>
-<section class="sec t-light"><div class="wrap narrow"><div class="notice"><p><strong>Homepage preview only.</strong> Go back to Reimago and press <em>Use this look</em> to build ${escapeHtml(
+<section class="sec t-light"><div class="wrap narrow"><div class="notice"><p><strong>Homepage preview only.</strong> Go back to Reimago and press <em>Choose this look</em> to build ${escapeHtml(
     page.navLabel,
   )} and every other page in this style.</p><div class="actions"><a class="btn primary" href="@page:home">Back to the homepage</a></div></div></div></section>`;
 }
