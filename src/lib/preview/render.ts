@@ -141,13 +141,16 @@ export function renderSitePage(site: StoredSite, slug: string, options?: RenderO
   const stored = (name: string | undefined) => (name && site.images?.[name] ? options?.imageUrl?.(name) ?? imageHref(site.id, slug, name) : undefined);
   const logoOn = (surface: string) => {
     const t = logoTreatment(site.logoMeta, surface);
+    if (t.kind === "wordmark") return `<span class="wordmark">${escapeHtml(site.name)}</span>`;
     const src = stored(t.image) ?? stored(site.logoMeta?.image) ?? site.logo;
     return `<span class="logo ${t.kind}"${t.plate ? ` style="--plate:${t.plate}"` : ""}><img src="${escapeHtml(src)}" alt="${escapeHtml(site.name)}"></span>`;
   };
   const headerKind = site.design ? (site.design.header === "overlay" && !firstIsPhoto ? "light" : site.design.header) : "light";
   const headerSurface = headerKind === "dark" ? darkSurface(site.palette) : headerKind === "overlay" ? "#1c1c1c" : site.palette.background;
-  const brand = !site.logo ? `<span>${escapeHtml(site.name)}</span>` : v3 ? logoOn(headerSurface) : `<img src="${escapeHtml(site.logo)}" alt="${escapeHtml(site.name)}">`;
-  const footerBrand = v3 && site.logo ? `<div class="flogo">${logoOn(darkSurface(site.palette))}</div>` : "";
+  // No logo, or one that couldn't be loaded/read: the business name as a text wordmark (never an empty chip).
+  const hasLogo = Boolean(site.logo) && !site.logoMeta?.wordmark;
+  const brand = !hasLogo ? `<span>${escapeHtml(site.name)}</span>` : v3 ? logoOn(headerSurface) : `<img src="${escapeHtml(site.logo)}" alt="${escapeHtml(site.name)}">`;
+  const footerBrand = v3 && hasLogo ? `<div class="flogo">${logoOn(darkSurface(site.palette))}</div>` : "";
   const contactItems = [
     site.phone ? `<li><a href="${telHref(site.phone)}">${escapeHtml(site.phone)}</a></li>` : "",
     site.email ? `<li><a href="mailto:${escapeHtml(site.email)}">${escapeHtml(site.email)}</a></li>` : "",

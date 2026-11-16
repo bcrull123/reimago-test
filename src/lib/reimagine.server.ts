@@ -1,6 +1,7 @@
 import { lookup } from "node:dns/promises";
 import { isIP } from "node:net";
 import { getRequestIP } from "@tanstack/react-start/server";
+import { pickLogo } from "@/lib/preview/logo-pick";
 
 /*
  * Crawl helpers shared by the live preview builder (src/lib/preview/*).
@@ -190,16 +191,10 @@ export function httpUrl(value: string, base: string): string {
   }
 }
 
-export function extractLogo(html: string, base: string): string {
+export function extractLogo(html: string, base: string, siteName = ""): string {
   const page = stripChrome(html);
-  for (const tag of page.matchAll(/<img\b[^>]*>/gi)) {
-    const raw = tag[0] ?? "";
-    if (/avatar|emoji|gravatar|w-logo|wordpress-logo/i.test(raw)) continue;
-    if (!/\blogo\b|class=["'][^"']*logo|src=["'][^"']*logo/i.test(raw)) continue;
-    const src = raw.match(/\bsrc=["']([^"']+)["']/i)?.[1];
-    const resolved = src ? httpUrl(src, base) : "";
-    if (resolved) return resolved;
-  }
+  const picked = pickLogo(page, base, siteName);
+  if (picked) return picked;
   const icons: { href: string; score: number }[] = [];
   for (const tag of html.matchAll(/<link\b[^>]*>/gi)) {
     const raw = tag[0] ?? "";

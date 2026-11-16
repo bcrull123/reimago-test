@@ -500,8 +500,9 @@ export async function scrapeSite(rawUrl: string, notes: string): Promise<SiteFac
   const titleParts = scrubPlatform(title).split(/\s+[|\-–—:·•]\s+/).map((p) => p.trim());
   const tagline = titleParts.find((p) => p && p !== name && !/^(home|welcome)$/i.test(p) && p.length < 90) ?? "";
 
-  let logo = extractLogo(home.html, home.url) || httpUrl((ldFirst("logo") as string) || "", home.url);
+  let logo = extractLogo(home.html, home.url, name) || httpUrl((ldFirst("logo") as string) || "", home.url);
   if (isWordPress(home.html) && /wp-includes|wordpress\.org|w-logo|wordpress-logo/i.test(logo)) logo = "";
+  if (logo.startsWith("http://")) logo = `https://${logo.slice(7)}`;
   if (!logo.startsWith("https://")) logo = "";
 
   const pageOf = (pattern: RegExp) => docs.find((doc) => pattern.test(new URL(doc.url).pathname));
