@@ -29,7 +29,7 @@ const brief = {
   contact_email: "",
   address: "",
   hours: "Tue–Sat 8am–5pm",
-  domain_choice: "later", domain: "",
+  domain_choice: "find", domain: "prairiepawsgrooming.net", domain_status: "selected-pending-checkout", domain_checkout_url: "",
   features: ["Booking"], product_count: "", files_link: "", copy_text: "", video_link: "",
   anything_else: "", files_note: "", ai_suggested: [],
 };
@@ -40,7 +40,8 @@ await page.context().route("**/formcarry.com/**", async (route) => {
   formcarry.push(route.request().postData()?.slice(0, 6000) ?? "");
   await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ code: 200 }) });
 });
-await page.addInitScript((value) => localStorage.setItem("reimago-create-brief-v1", JSON.stringify({ step: 14, brief: value })), brief);
+// The wizard keeps answers in memory only; this test hook seeds it at the review step.
+await page.addInitScript((value) => { window.__reimagoSeedBrief = { step: 14, brief: value }; }, brief);
 await page.goto(base, { waitUntil: "networkidle" });
 await page.getByLabel("Create a New Site").check();
 await page.locator("#site-email").fill("e2e-test@example.com");
@@ -68,7 +69,15 @@ for (const [i, href] of links.slice(1).entries()) {
   console.log(href, res?.status(), await site.locator("h1").first().textContent());
   await site.screenshot({ path: join(outDir, `0${i + 4}-site-${href.split("/").pop()}.png`), fullPage: true });
 }
+// A reload starts fresh (no looks, no preview), but the preview link still works.
+await page.addInitScript(() => { delete window.__reimagoSeedBrief; });
+await page.reload({ waitUntil: "networkidle" });
+const looksAfterReload = await page.locator("[data-look]").count();
+const framesAfterReload = await page.locator('iframe[title^="Live preview"]').count();
+const linkStatus = (await site.goto(src, { waitUntil: "domcontentloaded" }))?.status();
+await page.screenshot({ path: join(outDir, "09-after-reload.png") });
+console.log("after reload: looks", looksAfterReload, "preview frames", framesAfterReload, "preview link status", linkStatus);
 const hasPreviewUrl = formcarry.some((body) => body.includes('name="preview_url"') && body.includes("/made/"));
 console.log("looks:", lookNames, "preview:", src, "formcarry posts:", formcarry.length, "preview_url included:", hasPreviewUrl);
-writeFileSync(join(outDir, "summary.json"), JSON.stringify({ looks: lookNames, previewUrl: src, links, formcarryPosts: formcarry.length, hasPreviewUrl }, null, 2));
+writeFileSync(join(outDir, "summary.json"), JSON.stringify({ looks: lookNames, previewUrl: src, links, formcarryPosts: formcarry.length, hasPreviewUrl, looksAfterReload, framesAfterReload, linkStatus }, null, 2));
 await browser.close();
