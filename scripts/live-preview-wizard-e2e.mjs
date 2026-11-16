@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 /**
  * E2E for the Create a New Site wizard -> live preview path.
- * Seeds the wizard's saved brief (review step) and clicks "Build my new site".
+ * Seeds the wizard's saved brief (review step), clicks "Build my new site",
+ * waits for the three looks, then chooses one (argv[3], default 0) to build every page.
  * Formcarry is intercepted, so no real lead is sent.
  */
 import { mkdirSync, writeFileSync } from "node:fs";
@@ -17,7 +18,7 @@ const brief = {
   industry: "Other",
   location: "Edmond, OK",
   existing_site: "",
-  emulate_url_1: "", emulate_url_2: "", emulate_url_3: "", emulate_likes: [], emulate_note: "",
+  emulate_url_1: "https://www.tartinebakery.com/", emulate_url_2: "", emulate_url_3: "", emulate_likes: ["Colors", "Fonts"], emulate_note: "Calm, warm and premium.",
   goal: "Book an appointment",
   customers: "Busy pet owners in north OKC who want gentle, fear-free grooming.",
   services: "Full groom\nBath and brush\nNail trim\nDe-shedding treatment\nPuppy's first groom",
@@ -45,22 +46,29 @@ await page.getByLabel("Create a New Site").check();
 await page.locator("#site-email").fill("e2e-test@example.com");
 await page.locator('input[type="checkbox"]').last().check();
 await page.getByRole("button", { name: "Build my new site" }).click();
+const cards = page.locator("[data-look]");
+await cards.nth(2).waitFor({ timeout: 300_000 });
+await page.waitForTimeout(3000);
+await cards.first().scrollIntoViewIfNeeded();
+await page.screenshot({ path: join(outDir, "01-app-wizard-looks.png") });
+const lookNames = await cards.locator("h3").allTextContents();
+await cards.nth(Number(process.argv[3] ?? 0)).getByRole("button", { name: /Use this look/ }).click();
+await page.waitForFunction(() => [...document.querySelectorAll("button")].some((b) => /Hand off to Cursor|Send to Cursor/.test(b.textContent ?? "")), null, { timeout: 300_000 });
 const frame = page.locator('iframe[title^="Live preview"]');
-await frame.waitFor({ timeout: 180_000 });
 await page.waitForTimeout(2500);
 await frame.scrollIntoViewIfNeeded();
-await page.screenshot({ path: join(outDir, "01-app-wizard-preview.png") });
+await page.screenshot({ path: join(outDir, "02-app-wizard-preview.png") });
 const src = await frame.getAttribute("src");
-const site = await browser.newPage({ viewport: { width: 1280, height: 900 } });
+const site = await browser.newPage({ viewport: { width: 1280, height: 900 }, reducedMotion: "reduce" });
 await site.goto(src, { waitUntil: "networkidle" });
-await site.screenshot({ path: join(outDir, "02-site-home.png"), fullPage: true });
+await site.screenshot({ path: join(outDir, "03-site-home.png"), fullPage: true });
 const links = await site.locator(".site-nav a").evaluateAll((els) => els.map((el) => el.href));
 for (const [i, href] of links.slice(1).entries()) {
   const res = await site.goto(href, { waitUntil: "networkidle" });
   console.log(href, res?.status(), await site.locator("h1").first().textContent());
-  await site.screenshot({ path: join(outDir, `0${i + 3}-site-${href.split("/").pop()}.png`), fullPage: true });
+  await site.screenshot({ path: join(outDir, `0${i + 4}-site-${href.split("/").pop()}.png`), fullPage: true });
 }
 const hasPreviewUrl = formcarry.some((body) => body.includes('name="preview_url"') && body.includes("/made/"));
-console.log("preview:", src, "formcarry posts:", formcarry.length, "preview_url included:", hasPreviewUrl);
-writeFileSync(join(outDir, "summary.json"), JSON.stringify({ previewUrl: src, links, formcarryPosts: formcarry.length, hasPreviewUrl }, null, 2));
+console.log("looks:", lookNames, "preview:", src, "formcarry posts:", formcarry.length, "preview_url included:", hasPreviewUrl);
+writeFileSync(join(outDir, "summary.json"), JSON.stringify({ looks: lookNames, previewUrl: src, links, formcarryPosts: formcarry.length, hasPreviewUrl }, null, 2));
 await browser.close();
