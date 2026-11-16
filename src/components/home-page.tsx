@@ -4,7 +4,8 @@ import { ArrowRight } from "lucide-react";
 import { SiteShell, Wordmark } from "@/components/site-shell";
 import { CreateSiteWizard, type CreateBrief, type CreateFiles } from "@/components/create-site-wizard";
 import { checkDomainName, handOffToCursor } from "@/lib/reimagine.functions";
-import { cursorStatus, previewDirections, previewFinish, previewFromBrief, previewLook, previewRead, previewRetryAi } from "@/lib/preview.functions";
+import { cursorStatus, previewDirections, previewFinish, previewFromBrief, previewLook, previewRead, previewRetryAi, savePreviewPicture } from "@/lib/preview.functions";
+import { capturePreviewPicture, pictureFileName } from "@/lib/preview-picture";
 import { LivePreview } from "@/components/live-preview";
 import { LooksPicker } from "@/components/looks-picker";
 import type { LookInfo, PreviewInfo, SiteFacts } from "@/lib/preview/types";
@@ -20,13 +21,14 @@ const REBUILDS = [
 ] as const;
 
 
-type Stage = "" | "read" | "dream" | "paint" | "send" | "finish";
+type Stage = "" | "read" | "dream" | "paint" | "picture" | "send" | "finish";
 
 /** Progress shown while looks are made (phase 1) and while the chosen look is finished (phase 2). */
 const LOOK_STAGES: { key: Stage; label: string }[] = [
   { key: "read", label: "Reading your site…" },
   { key: "dream", label: "Dreaming up looks…" },
   { key: "paint", label: "Painting images and homepages…" },
+  { key: "picture", label: "Preparing your preview image…" },
   { key: "send", label: "Sending your preview link…" },
 ];
 const FINISH_STAGES: { key: Stage; label: string }[] = [
@@ -61,7 +63,33 @@ const fieldClass =
   "mt-1.5 flex h-11 w-full rounded-md border border-border bg-bg px-3 text-sm text-fg outline-none placeholder:text-faint focus-visible:ring-2 focus-visible:ring-ring/70";
 
 const FORMCARRY = "https://formcarry.com/s/NipZS0fF4w4";
-const THANKS = "We got the brief. The site, your email, the note, and a link to your live preview were sent. Nothing on the live site was changed.";
+const THANKS = "We got the brief. The site, your email, the note, a picture of your preview, and a link to it were sent. Nothing on the live site was changed.";
+const THANKS_NO_PICTURE = "We got the brief. The site, your email, the note, and a link to your live preview were sent. Nothing on the live site was changed.";
+
+/** The screenshot sent with the form as `picture` (plus `picture_url` when stored, or `picture_error`). */
+type PictureFields = { file?: File; url?: string; error?: string };
+
+/** Screenshot a look's homepage for the lead email. Never throws: a failure becomes `picture_error`. */
+async function previewPicture(look: LookInfo | undefined, domain: string): Promise<PictureFields> {
+  if (!look) return { error: "No preview was built." };
+  try {
+    const shot = await capturePreviewPicture(look);
+    const file = new File([shot.blob], pictureFileName(domain), { type: "image/png" });
+    const stored = await savePreviewPicture({ data: { id: look.id, png: shot.dataUrl } }).catch(() => null);
+    return { file, url: stored?.ok ? stored.url : undefined };
+  } catch (err) {
+    const reason = err instanceof Error ? err.message : String(err);
+    console.warn("[reimago] preview picture failed:", reason);
+    return { error: `The preview picture could not be made (${reason.slice(0, 200)}). Use the preview link.` };
+  }
+}
+
+function appendPicture(data: FormData, picture?: PictureFields) {
+  if (!picture) return;
+  if (picture.file) data.append("picture", picture.file, picture.file.name);
+  if (picture.url) data.append("picture_url", picture.url);
+  if (picture.error) data.append("picture_error", picture.error);
+}
 
 function bareDomain(site: string): string {
   try {
@@ -79,6 +107,7 @@ async function submitFormcarry(fields: {
   gotcha: string;
   previewUrl?: string;
   previewPages?: string[];
+  picture?: PictureFields;
 }): Promise<void> {
   const domain = bareDomain(fields.website);
   const data = new FormData();
@@ -88,6 +117,7 @@ async function submitFormcarry(fields: {
   data.append("_gotcha", fields.gotcha);
   data.append("preview_url", fields.previewUrl ?? "");
   data.append("preview_pages", (fields.previewPages ?? []).join("\n"));
+  appendPicture(data, fields.picture);
 
   const response = await fetch(FORMCARRY, {
     method: "POST",
@@ -100,7 +130,7 @@ async function submitFormcarry(fields: {
   }
 }
 
-async function submitCreateBrief(email: string, gotcha: string, brief: CreateBrief, files: CreateFiles, previewUrl?: string): Promise<void> {
+async function submitCreateBrief(email: string, gotcha: string, brief: CreateBrief, files: CreateFiles, previewUrl?: string, picture?: PictureFields): Promise<void> {
   const pages = brief.pages.length ? brief.pages : ["Home", "About", "Services", "Contact"];
   const industry = [brief.industry, brief.what].filter(Boolean).join(": ");
   const data = new FormData();
@@ -141,6 +171,7 @@ async function submitCreateBrief(email: string, gotcha: string, brief: CreateBri
   data.append("anything_else", brief.anything_else);
   data.append("ai_suggested", (brief.ai_suggested ?? []).join(", "));
   data.append("preview_url", previewUrl ?? "");
+  appendPicture(data, picture);
   const named: [string, File | null][] = [
     ["logo", files.logo],
     ["brand_guide", files.brand],
@@ -364,6 +395,9 @@ export function HomePage() {
       setVariation(0);
       scrollOnResult.current = true;
       showLooks(made.looks, [read.facts.note, made.note].filter(Boolean).join(" "));
+      // The lead email carries a picture of the first look's homepage (the one shown first), plus the links.
+      setStage("picture");
+      const picture = await previewPicture(made.looks[0], bareDomain(site));
       setStage("send");
       try {
         await submitFormcarry({
@@ -373,8 +407,9 @@ export function HomePage() {
           gotcha: typeof gotcha === "string" ? gotcha : "",
           previewUrl: made.looks[0]!.url,
           previewPages: made.looks.map((look) => `${look.name}: ${look.url}`),
+          picture,
         });
-        setMailed(THANKS);
+        setMailed(picture.file ? THANKS : THANKS_NO_PICTURE);
       } catch (err) {
         setError(`Your preview is ready, but the form could not be sent: ${err instanceof Error ? err.message : "try again."}`);
       }
@@ -413,9 +448,14 @@ export function HomePage() {
       } catch (err) {
         buildError = err instanceof Error ? err.message : "The preview could not be built.";
       }
+      let picture: PictureFields | undefined;
+      if (made?.looks[0]) {
+        setStage("picture");
+        picture = await previewPicture(made.looks[0], bareDomain(brief.domain || brief.existing_site || brief.business_name || "new-site"));
+      }
       setStage("send");
-      await submitCreateBrief(email.trim(), gotcha, brief, files, made?.looks[0]?.url);
-      setMailed(THANKS);
+      await submitCreateBrief(email.trim(), gotcha, brief, files, made?.looks[0]?.url, picture);
+      setMailed(picture?.file ? THANKS : THANKS_NO_PICTURE);
       if (!made) {
         setError(buildError);
         return;
@@ -557,7 +597,7 @@ export function HomePage() {
               {stage === "finish" ? "Building your site in this look" : (LOOK_STAGES.find((item) => item.key === stage)?.label ?? "Building your site")}
             </p>
             <ol className="mt-4 space-y-1.5 text-sm">
-              {(stage === "finish" ? FINISH_STAGES : LOOK_STAGES.filter((item) => item.key !== "send" || stage === "send")).map((item) => {
+              {(stage === "finish" ? FINISH_STAGES : LOOK_STAGES.filter((item) => (item.key !== "send" && item.key !== "picture") || stage === "send" || stage === "picture")).map((item) => {
                 const list = stage === "finish" ? FINISH_STAGES : LOOK_STAGES;
                 const order = list.findIndex((entry) => entry.key === item.key);
                 const current = list.findIndex((entry) => entry.key === stage);
