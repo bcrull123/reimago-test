@@ -79,6 +79,24 @@ This applies to the header and footer of every look and page.
 
 The Formcarry lead still carries `preview_url` (the first look) and `preview_pages`, which lists all three look links.
 
+### The lead picture (Formcarry `picture`)
+
+The lead email also gets a PNG of the homepage, as the old flow did. The form is sent when the three looks appear, before the visitor picks one, so the picture shows the first look, the same one `preview_url` points at. The Create New Site wizard does the same when its preview was built.
+
+- **How it's made.** The browser does the capture; no server-side Chrome is used, so it works on Vercel.
+  - The page is loaded in a hidden, same-origin, unsandboxed iframe at 1280px wide (`src/lib/preview-picture.ts`). The visible preview iframes are sandboxed, so their DOM can't be read.
+  - It waits for images and fonts, and freezes animations so the finished state shows.
+  - `modern-screenshot` then draws the top of the page to PNG at 1280×(page height, at most 2400). If that comes out at 9.5 MB or more, it draws 1280×720 instead.
+  - The visitor sees "Preparing your preview image…" while this runs, usually 1–3 seconds. It gives up after 30 seconds.
+- **No tainted canvas.** Preview photos are already same-origin (`/made/$id/img/…`). Anything the page still hotlinks, mainly SVG logos, is fetched through `/made/$id/img/remote?u=…` (`remote-image.server.ts`). Google Fonts are CORS-enabled and embedded by the library.
+  - The proxy only fetches URLs that the stored homepage itself shows as `<img src>`. It is not an open proxy.
+  - Fetches go through `fetchLogoFile`, which refuses private hosts and caps files at 2 MB.
+- **Fields sent.**
+  - `picture`: the PNG, named `<domain>.png`.
+  - `picture_url`: a stored copy at `/made/$id/img/capture`, when it was 4.2 MB or less as base64. Above that, the file is only attached.
+  - `picture_error`: the reason, if the capture failed. The lead is still sent, with the links, and capture never blocks it.
+- **Formcarry plan.** The plan must allow file uploads. The old flow already relied on this.
+
 ### The section library
 
 The AI never writes HTML. It returns JSON sections, and trusted templates render them:
@@ -193,6 +211,6 @@ XAI_API_KEY=fake AI_BASE_URL=http://localhost:9999/v1 IMAGE_BASE_URL=http://loca
 CHROME_PATH=/usr/bin/google-chrome node scripts/live-preview-e2e.mjs https://www.morganplumbingokc.com/ live-preview-shots/morgan-ai 1
 ```
 
-To simulate real-API failures with the fake server, set `FAKE_FAIL=slow|length|badjson|reject-reasoning` (add `FAKE_FAIL_ALL=1` to make the fallback model fail too). `scripts/live-preview-retry-e2e.mjs` records each card's error and can click "Retry with AI". `FAKE_SHAPE=alt` answers in drifted shapes (type under `section`/`component`, CamelCase names, nested `props`). `scripts/create-wizard-domain-e2e.mjs` screenshots the domain-first wizard steps.
+To simulate real-API failures with the fake server, set `FAKE_FAIL=slow|length|badjson|reject-reasoning` (add `FAKE_FAIL_ALL=1` to make the fallback model fail too). `scripts/live-preview-retry-e2e.mjs` records each card's error and can click "Retry with AI". `FAKE_SHAPE=alt` answers in drifted shapes (type under `section`/`component`, CamelCase names, nested `props`). `scripts/create-wizard-domain-e2e.mjs` screenshots the domain-first wizard steps. `scripts/preview-picture-e2e.mjs reimagine|wizard <url|-> <outDir>` submits the form, pulls `picture` out of the intercepted Formcarry body and saves it. Set `BREAK_CANVAS=1` to check the `picture_error` path.
 
 The last argument picks which look to choose (0–2); `APP_URL` points the script at another port. The e2e scripts intercept Formcarry, so no real lead is sent. The fake AI server deliberately returns an invented phone, email, stats and review so you can see the validators remove them.
