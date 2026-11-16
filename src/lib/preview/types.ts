@@ -166,6 +166,8 @@ export type LookInfo = {
   mock: boolean;
   /** Why the AI homepage could not be used (the look then uses the section library). */
   aiError?: string;
+  /** The AI homepage was used, but some of its sections were dropped (first reasons). */
+  aiWarning?: string;
   /** Bumped after "Retry with AI" so thumbnails reload. */
   rev?: number;
 };
@@ -243,3 +245,6 @@ export type PreviewInfo = {
 };
 
 export type PreviewStepResult<T> = ({ ok: true } & T) | { ok: false; error: string };
+
+/** What the AI sent when some of its sections were dropped: the reasons and a short, masked raw sample. */
+export type AiDebug = { model: string; at: string; total: number; used: number; rejected: string[]; sample: string };

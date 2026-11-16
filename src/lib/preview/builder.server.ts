@@ -12,9 +12,10 @@
  */
 import { aiAvailable, aiFallbackModel, aiModel, chatJson, isMockMode } from "@/lib/ai-provider.server";
 import { BODY_FONTS, HEADING_FONTS, defaultPalette, hashString, safeFont, safePalette } from "@/lib/preview/theme";
-import { ARCHETYPES, type DesignDirection, type PlanPage, type PlanSection, type Section, type SiteFacts, type SitePlan, type StoredImage } from "@/lib/preview/types";
+import { ARCHETYPES, type DesignDirection, type PlanPage, type PlanSection, type Section, type SiteFacts, type SitePlan, type StoredImage, type AiDebug } from "@/lib/preview/types";
 import { PRESETS, archetypesFor, mockDirections, normalizeDirection, HEADING_FONTS as DISPLAY_FONTS, BODY_FONTS as TEXT_FONTS } from "@/lib/preview/design";
-import { SECTION_GUIDE, composeImages, composeMockPage, corpusFor, normalizeSections, type NormalizeContext } from "@/lib/preview/sections";
+import { SECTION_GUIDE, checkSections, composeImages, composeMockPage, corpusFor, type NormalizeContext } from "@/lib/preview/sections";
+import { redact } from "@/lib/ai-json";
 import type { StoredPage, StoredSite } from "@/lib/preview/render";
 
 const MAX_PAGES = 6;
@@ -383,7 +384,20 @@ Content rules:
   });
 }
 
-export type SectionsResult = { sections: Section[]; ai: boolean; error?: string; model?: string; seconds?: number };
+
+export type SectionsResult = { sections: Section[]; ai: boolean; error?: string; model?: string; seconds?: number; debug?: AiDebug };
+
+/** ~2 KB of the raw AI answer, secrets masked, for the preview record. */
+export function rawSample(raw: unknown, max = 2000): string {
+  let text = "";
+  try {
+    text = typeof raw === "string" ? raw : JSON.stringify(raw);
+  } catch {
+    text = String(raw);
+  }
+  text = redact(text ?? "");
+  return text.length > max ? `${text.slice(0, max)}… (${text.length} chars)` : text;
+}
 
 /**
  * AI sections for a page, validated; falls back to the deterministic composer.
@@ -409,6 +423,7 @@ export async function sectionsFor(
   const deadline = started + budgetMs;
   const home = page.slug === "home";
   const errors: string[] = [];
+  let debug: AiDebug | undefined;
   const main = aiModel();
   const fast = aiFallbackModel();
   const attempts: { model: string; timeoutMs: number }[] = [
@@ -422,7 +437,12 @@ export async function sectionsFor(
     const t0 = Date.now();
     try {
       const raw = await aiSections(page, facts, plan, design, list, Math.min(attempt.timeoutMs, left), attempt.model);
-      const sections = normalizeSections(raw, ctx);
+      const check = checkSections(raw, ctx);
+      const sections = check.sections;
+      if (check.rejected.length) {
+        debug = { model: attempt.model, at: new Date().toISOString(), total: check.total, used: sections.length, rejected: check.rejected.slice(0, 12), sample: rawSample(raw) };
+        console.error(`[preview] page ${page.slug}: ${attempt.model} sections dropped: ${check.rejected.slice(0, 5).join(" | ")}`);
+      }
       // A homepage hero of the wrong kind is fixed, not rejected.
       if (home && sections[0]?.type === "page-hero") sections[0].type = HERO_FOR[design.hero] as Section["type"];
       if (home && sections[0] && !sections[0].type.startsWith("hero-")) sections.unshift({ ...fallback()[0]! });
@@ -430,10 +450,10 @@ export async function sectionsFor(
       const min = home ? 3 : 2;
       if (sections.length >= min) {
         if (page.slug === "contact" && !sections.some((s) => s.type === "contact-block")) sections.push({ type: "contact-block", tone: "light", heading: "Get in touch" });
-        return { sections, ai: true, model: attempt.model, seconds: Math.round((Date.now() - started) / 1000) };
+        return { sections, ai: true, model: attempt.model, seconds: Math.round((Date.now() - started) / 1000), debug };
       }
-      const rawCount = Array.isArray((raw as { sections?: unknown[] })?.sections) ? (raw as { sections: unknown[] }).sections.length : 0;
-      errors.push(`${attempt.model} answered in ${Math.round((Date.now() - t0) / 1000)}s but only ${sections.length} of ${rawCount} sections were usable`);
+      const why = check.rejected.slice(0, 3).join("; ");
+      errors.push(`${attempt.model} answered in ${Math.round((Date.now() - t0) / 1000)}s but only ${check.sections.length} of ${check.total} sections were usable${why ? ` (${why})` : ""}`);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       errors.push(message.includes(attempt.model) ? message : `${attempt.model}: ${message}`);
@@ -441,7 +461,7 @@ export async function sectionsFor(
     console.error(`[preview] page ${page.slug}: ${errors.at(-1)}`);
   }
   if (!errors.length) errors.push(`no time left in the ${Math.round(budgetMs / 1000)}s step budget`);
-  return { sections: fallback(), ai: false, error: errors.join("; then ") };
+  return { sections: fallback(), ai: false, error: errors.join("; then "), debug };
 }
 
 /** Point image references at images that really exist (generation can fail): real photos first, else placeholder. */
@@ -474,7 +494,7 @@ export async function buildLook(
   plan: SitePlan,
   design: DesignDirection,
   index: number,
-): Promise<{ site: StoredSite; ai: boolean; aiError?: string; generated: number; photos: number }> {
+): Promise<{ site: StoredSite; ai: boolean; aiError?: string; aiWarning?: string; generated: number; photos: number }> {
   const { goodPhotos, heroWorthy, storePhotos, imagesEnabled, imagePrompt, generateAndStore } = await import("@/lib/preview/images.server");
   const budget = stepBudgetMs();
   const stepStart = Date.now();
@@ -551,10 +571,12 @@ export async function buildLook(
     lookIndex: index,
     finished: false,
     aiErrors: result.error ? { home: result.error } : undefined,
+    aiDebug: result.debug ? { home: result.debug } : undefined,
     logoMeta,
   };
   const generated = Object.values(images).filter((i) => i.source === "generated").length;
-  return { site, ai: result.ai, aiError: result.error, generated, photos: photos.length };
+  const aiWarning = result.ai && result.debug ? skippedNote(result.debug) : undefined;
+  return { site, ai: result.ai, aiError: result.error, aiWarning, generated, photos: photos.length };
 }
 
 /** Build every remaining page for the chosen look, add service images, and critique/revise the homepage. */
@@ -585,12 +607,14 @@ export async function finishSite(site: StoredSite): Promise<{ site: StoredSite; 
   }
   let failed = 0;
   const aiErrors: Record<string, string> = {};
+  const aiDebug: Record<string, AiDebug> = { ...(site.aiDebug ?? {}) };
   const stepStart = Date.now();
   const todo = site.pages.filter((p) => p.slug !== "home");
   const pagesJob = Promise.all(
     todo.map(async (page) => {
       const planned = plan.pages.find((p) => p.slug === page.slug) ?? { slug: page.slug, title: page.title, navLabel: page.navLabel, purpose: "", sections: [] };
       const result = await sectionsFor(planned, facts, plan, design, images, pending, useAi, budget - (Date.now() - stepStart) - 6_000);
+      if (result.debug) aiDebug[page.slug] = result.debug;
       if (useAi && !result.ai) {
         failed += 1;
         if (result.error) aiErrors[page.slug] = result.error;
@@ -608,13 +632,18 @@ export async function finishSite(site: StoredSite): Promise<{ site: StoredSite; 
     return { ...page, sections: resolveImages(done?.sections ?? [], available), pending: false };
   });
   const mergedErrors = { ...(site.aiErrors?.home ? { home: site.aiErrors.home } : {}), ...aiErrors };
-  const next: StoredSite = { ...site, images, pages, finished: true, polish: polished.polish, aiErrors: Object.keys(mergedErrors).length ? mergedErrors : undefined };
+  const next: StoredSite = { ...site, images, pages, finished: true, polish: polished.polish, aiErrors: Object.keys(mergedErrors).length ? mergedErrors : undefined, aiDebug: Object.keys(aiDebug).length ? aiDebug : undefined };
   const first = Object.values(aiErrors)[0];
   const note = failed ? `${failed} of ${todo.length} pages were assembled from the section library because the AI failed${first ? `: ${first}` : ""}. Use "Retry with AI" to try again.` : undefined;
   return { site: next, failed, note };
 }
 
 export { hashString };
+
+/** "AI homepage used; 2 of 8 sections skipped: …" — shown under a look that the AI built anyway. */
+export function skippedNote(debug: AiDebug): string {
+  return `${debug.total - debug.used > 0 ? `${debug.total - debug.used} of ${debug.total}` : "Some"} AI sections were skipped: ${debug.rejected.slice(0, 3).join("; ")}`;
+}
 
 /**
  * "Retry with AI": re-run the AI for the homepage (and, for a finished site, any page that fell back).
@@ -639,9 +668,11 @@ export async function retryAiPages(site: StoredSite): Promise<{ site: StoredSite
   const available = Object.keys(images);
   const errors: Record<string, string> = {};
   const fixed: string[] = [];
+  const aiDebug: Record<string, AiDebug> = { ...(site.aiDebug ?? {}) };
   const pages = site.pages.map((page) => {
     const hit = results.find((r) => r.slug === page.slug);
     if (!hit) return page;
+    if (hit.result.debug) aiDebug[page.slug] = hit.result.debug;
     if (!hit.result.ai) {
       errors[page.slug] = hit.result.error ?? "the AI answer could not be used";
       return page;
@@ -649,6 +680,6 @@ export async function retryAiPages(site: StoredSite): Promise<{ site: StoredSite
     fixed.push(page.slug);
     return { ...page, sections: resolveImages(hit.result.sections, available) };
   });
-  const next: StoredSite = { ...site, pages, aiErrors: Object.keys(errors).length ? errors : undefined };
+  const next: StoredSite = { ...site, pages, aiErrors: Object.keys(errors).length ? errors : undefined, aiDebug: Object.keys(aiDebug).length ? aiDebug : undefined };
   return { site: next, fixed, errors };
 }

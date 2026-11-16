@@ -4,7 +4,7 @@ import { darkSurface, designClasses, fontsHref, siteCss } from "./theme.ts";
 import { logoTreatment } from "./logo.ts";
 import { legacyCss } from "./legacy-theme.ts";
 import { renderSection, type RenderContext } from "./sections.ts";
-import type { DesignDirection, LogoMeta, Section, SiteFacts, SitePalette, SitePlan, StoredImage } from "./types.ts";
+import type { AiDebug, DesignDirection, LogoMeta, Section, SiteFacts, SitePalette, SitePlan, StoredImage } from "./types.ts";
 
 export const FORMCARRY_ENDPOINT = "https://formcarry.com/s/NipZS0fF4w4";
 
@@ -53,6 +53,8 @@ export type StoredSite = {
   polish?: PolishInfo;
   /** Why the AI could not write a page (slug → reason), shown to the visitor with a "Retry with AI" button. */
   aiErrors?: Record<string, string>;
+  /** Why AI sections were dropped, with a short masked raw sample (debugging real-model output). */
+  aiDebug?: Record<string, AiDebug>;
   /** How the scraped logo is shown on light and dark surfaces (see logo.server.ts). */
   logoMeta?: LogoMeta;
 };

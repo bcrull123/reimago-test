@@ -153,20 +153,173 @@ export function statIsReal(title: string, corpus: string): boolean {
   return numbers.every((n) => new RegExp(`(^|[^\\d])${n.replace(/,/g, "").replace(/\./g, "\\.")}([^\\d]|$)`).test(digits));
 }
 
+// ---------------------------------------------------------------- tolerant reading of AI answers
+//
+// Real models drift from the documented shape: the type may live under "section"/"kind"/"component",
+// fields may be nested under "props"/"content", names may be "HeroPhoto" or "Hero photo section",
+// items may be called "cards"/"steps"/"faqs", and CTAs may be plain strings. All of that is mapped
+// onto the library here, before validation. Safety rules (real stats/testimonials/contacts only) still apply.
+
+const TYPE_KEYS = ["type", "section", "section_type", "sectionType", "kind", "component", "block", "layout", "template", "name", "id"] as const;
+const NEST_KEYS = ["props", "fields", "content", "data", "copy", "attributes", "settings", "config", "values"] as const;
+const ITEM_KEYS = ["items", "cards", "services", "steps", "faqs", "questions", "stats", "features", "list", "points", "bullets", "entries", "testimonials", "reviews", "photos", "images", "words", "columns", "blocks"] as const;
+
+/** Map a model's section name onto a library type: exact, alias, camelCase, prefixes/suffixes, then containment. */
+export function sectionTypeOf(value: unknown): SectionType | undefined {
+  if (typeof value !== "string") return undefined;
+  const base = value
+    .replace(/([a-z0-9])([A-Z])/g, "$1-$2")
+    .toLowerCase()
+    .replace(/\(.*?\)/g, "")
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  if (!base) return undefined;
+  const candidates = [base, base.replace(/^(section|block|component)-|-(section|block|component|band-section)$/g, ""), base.replace(/-?(section|block|component)-?/g, "-").replace(/^-+|-+$/g, "")];
+  for (const c of candidates) {
+    if ((SECTION_TYPES as readonly string[]).includes(c)) return c as SectionType;
+    if (ALIASES[c]) return ALIASES[c];
+  }
+  // Containment: "hero-photo-overlay" -> hero-photo, "faq-accordion" -> faq. Longest library id first.
+  const byLength = [...SECTION_TYPES].sort((x, y) => y.length - x.length);
+  const hit = byLength.find((t) => base.includes(t)) ?? Object.keys(ALIASES).sort((x, y) => y.length - x.length).find((k) => k.length > 3 && base.split("-").join("-").includes(k));
+  if (!hit) return undefined;
+  return (SECTION_TYPES as readonly string[]).includes(hit) ? (hit as SectionType) : ALIASES[hit];
+}
+
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : undefined;
+}
+
+/** Text from a string, a number, or a list of strings (joined as paragraphs). */
+function textOf(value: unknown): string | undefined {
+  if (typeof value === "string") return value;
+  if (typeof value === "number") return String(value);
+  if (Array.isArray(value) && value.every((v) => typeof v === "string")) return (value as string[]).join("\n");
+  const rec = asRecord(value);
+  if (rec) return textOf(rec.text ?? rec.value ?? rec.content ?? rec.body);
+  return undefined;
+}
+
+function pick(r: Record<string, unknown>, keys: string[]): unknown {
+  for (const k of keys) if (r[k] !== undefined && r[k] !== null && r[k] !== "") return r[k];
+  return undefined;
+}
+
+/** Bring one raw section into the documented flat shape (type + fields at the top level). */
+export function flattenSection(raw: unknown): Record<string, unknown> | undefined {
+  let r = asRecord(raw);
+  if (!r) return undefined;
+  // {"hero-photo": {...}} — the type is the only key.
+  const keys = Object.keys(r);
+  if (keys.length === 1 && asRecord(r[keys[0]!]) && sectionTypeOf(keys[0])) r = { type: keys[0], ...asRecord(r[keys[0]!]) };
+  const out: Record<string, unknown> = {};
+  // Nested props/content first, top level wins.
+  for (const k of NEST_KEYS) {
+    const nested = asRecord(r[k]);
+    if (nested) Object.assign(out, nested);
+  }
+  for (const [k, v] of Object.entries(r)) if (!(NEST_KEYS as readonly string[]).includes(k) || !asRecord(v)) out[k] = v;
+  if (typeof r.content === "string" && out.text === undefined) out.text = r.content;
+  let type: SectionType | undefined;
+  for (const k of TYPE_KEYS) {
+    type = sectionTypeOf(out[k]);
+    if (type) break;
+  }
+  out.type = type ?? out.type ?? out.section ?? out.kind ?? out.component;
+  out.heading = pick(out, ["heading", "headline", "title", "h1", "h2", "heading_text", "header"]);
+  out.text = textOf(pick(out, ["text", "body", "subheading", "subheadline", "subtitle", "description", "paragraph", "paragraphs", "lead", "copy", "message", "quote"]));
+  out.eyebrow = pick(out, ["eyebrow", "kicker", "overline", "pretitle", "label", "tag"]);
+  const items = pick(out, [...ITEM_KEYS]);
+  const itemMap = asRecord(items);
+  out.items = Array.isArray(items) ? items : Array.isArray(r.content) ? r.content : itemMap ? Object.entries(itemMap).map(([title, text]) => ({ title, text: textOf(text) ?? "" })) : undefined;
+  const cta = pick(out, ["cta", "button", "primary_cta", "primaryCta", "primary_button", "action", "buttons"]);
+  out.cta = ctaOf(Array.isArray(cta) ? cta[0] : cta);
+  const secondary = pick(out, ["secondary", "secondary_cta", "secondaryCta", "secondary_button"]) ?? (Array.isArray(cta) ? cta[1] : undefined);
+  out.secondary = ctaOf(secondary);
+  out.image = imageRef(pick(out, ["image", "img", "photo", "background_image", "backgroundImage", "media"]));
+  if (typeof out.tone === "string") out.tone = toneOf(out.tone);
+  else if (typeof out.theme === "string") out.tone = toneOf(out.theme);
+  else if (typeof out.background === "string") out.tone = toneOf(out.background);
+  if (typeof out.call === "string") out.call = /^(true|yes|1)$/i.test(out.call);
+  if (typeof out.reverse === "string") out.reverse = /^(true|yes|1)$/i.test(out.reverse);
+  return out;
+}
+
+function ctaOf(value: unknown): { label: string; page: string } | undefined {
+  if (typeof value === "string" && value.trim()) return { label: value, page: "contact" };
+  const r = asRecord(value);
+  if (!r) return undefined;
+  const label = textOf(pick(r, ["label", "text", "title", "cta", "name"]));
+  if (!label) return undefined;
+  const page = pick(r, ["page", "slug", "href", "link", "url", "target", "to"]);
+  return { label, page: typeof page === "string" ? page.replace(/^https?:\/\/[^/]+/, "").replace(/^\/+|\/+$/g, "") || "home" : "contact" };
+}
+
+function imageRef(value: unknown): unknown {
+  const r = asRecord(value);
+  if (r) return pick(r, ["name", "id", "token", "src", "image"]);
+  return value;
+}
+
+function toneOf(value: string): string {
+  const v = value.toLowerCase();
+  if (["light", "tint", "dark", "brand"].includes(v)) return v;
+  if (/white|plain|default|paper|cream/.test(v)) return "light";
+  if (/tint|muted|soft|alt|subtle|grey|gray|neutral/.test(v)) return "tint";
+  if (/dark|black|night|inverse|invert/.test(v)) return "dark";
+  if (/brand|accent|primary|color|gradient|bold/.test(v)) return "brand";
+  return "light";
+}
+
+/** Find the list of sections in whatever wrapper the model used. */
+export function sectionListOf(raw: unknown): unknown[] {
+  if (Array.isArray(raw)) return raw;
+  const r = asRecord(raw);
+  if (!r) return [];
+  for (const k of ["sections", "page_sections", "pageSections", "blocks", "components", "layout", "content", "body", "modules"]) {
+    const v = r[k];
+    if (Array.isArray(v)) return v;
+    if (asRecord(v)) {
+      const inner = sectionListOf(v);
+      if (inner.length) return inner;
+      // {"sections": {"hero-photo": {...}, "faq": {...}}}
+      const entries = Object.entries(v as Record<string, unknown>).filter(([key, val]) => sectionTypeOf(key) && asRecord(val));
+      if (entries.length) return entries.map(([key, val]) => ({ type: key, ...(val as object) }));
+    }
+  }
+  for (const k of ["page", "home", "result", "data", "response", "output"]) {
+    const inner = sectionListOf(r[k]);
+    if (inner.length) return inner;
+  }
+  return [];
+}
+
+export type SectionCheck = { section?: Section; reason?: string };
+
 export function normalizeSection(raw: unknown, ctx: NormalizeContext): Section | undefined {
-  if (!raw || typeof raw !== "object") return undefined;
-  const r = raw as Record<string, unknown>;
-  const typeRaw = clip(r.type, 40).toLowerCase().replace(/[\s_]+/g, "-");
-  const type = ((SECTION_TYPES as readonly string[]).includes(typeRaw) ? typeRaw : ALIASES[typeRaw]) as SectionType | undefined;
-  if (!type) return undefined;
+  return checkSection(raw, ctx).section;
+}
+
+/** Validate one AI section; returns the section or why it was dropped. */
+export function checkSection(raw: unknown, ctx: NormalizeContext): SectionCheck {
+  const r = flattenSection(raw);
+  if (!r) return { reason: `not an object (${typeof raw})` };
+  const type = sectionTypeOf(r.type);
+  if (!type) {
+    const shown = TYPE_KEYS.map((k) => (typeof r[k] === "string" ? `${k}="${clip(r[k], 30)}"` : "")).find(Boolean);
+    return { reason: shown ? `unknown section type ${shown}` : `no section type (keys: ${Object.keys(asRecord(raw) ?? {}).slice(0, 6).join(", ")})` };
+  }
   const tone = (["light", "tint", "dark", "brand"] as const).find((t) => t === r.tone) ?? "light";
   const items: SectionItem[] = (Array.isArray(r.items) ? r.items : [])
     .map((it) => {
-      if (typeof it === "string") return { title: cleanText(it, 120, ctx), text: "" };
-      if (!it || typeof it !== "object") return undefined;
-      const o = it as Record<string, unknown>;
-      const item: SectionItem = { title: cleanText(o.title ?? o.label ?? o.name ?? o.question ?? o.value, 140, ctx), text: cleanText(o.text ?? o.body ?? o.answer ?? o.description, 600, ctx) };
-      const img = imageName(o.image, ctx);
+      if (typeof it === "string" || typeof it === "number") return { title: cleanText(String(it), 120, ctx), text: "" };
+      const o = asRecord(it);
+      if (!o) return undefined;
+      const item: SectionItem = {
+        title: cleanText(textOf(pick(o, ["title", "label", "name", "question", "q", "value", "number", "stat", "heading", "author", "step"])), 140, ctx),
+        text: cleanText(textOf(pick(o, ["text", "body", "answer", "a", "description", "desc", "quote", "detail", "details", "caption", "content"])), 600, ctx),
+      };
+      const img = imageName(imageRef(o.image ?? o.photo ?? o.img), ctx);
       if (img) item.image = img;
       const ic = clip(o.icon, 20).toLowerCase();
       if (ICON_NAMES.includes(ic)) item.icon = ic;
@@ -174,12 +327,12 @@ export function normalizeSection(raw: unknown, ctx: NormalizeContext): Section |
     })
     .filter((it): it is SectionItem => Boolean(it && (it.title || it.text || it.image)))
     .slice(0, 9);
-  const cta = r.cta && typeof r.cta === "object" ? (r.cta as Record<string, unknown>) : undefined;
-  const secondary = r.secondary && typeof r.secondary === "object" ? (r.secondary as Record<string, unknown>) : undefined;
+  const cta = asRecord(r.cta);
+  const secondary = asRecord(r.secondary);
   const section: Section = {
     type,
     tone,
-    variant: clip(r.variant, 20).toLowerCase() || undefined,
+    variant: clip(r.variant ?? r.style, 20).toLowerCase() || undefined,
     eyebrow: cleanText(r.eyebrow, 60, ctx) || undefined,
     heading: cleanText(r.heading, 160, ctx) || undefined,
     text: cleanText(r.text, 1400, ctx) || undefined,
@@ -191,13 +344,14 @@ export function normalizeSection(raw: unknown, ctx: NormalizeContext): Section |
     align: r.align === "center" ? "center" : "left",
     reverse: r.reverse === true,
   };
-  // Content guarantees per type.
+  const hasCopy = Boolean(section.heading || section.text);
+  // Content guarantees per type. Where a list-type section has no usable list but has copy, keep the copy.
   if (type === "stat-bar") {
     section.items = (section.items ?? []).filter((it) => statIsReal(it.title, ctx.corpus)).slice(0, 4);
-    if (section.items.length < 2) return undefined;
+    if (section.items.length < 2) return { reason: `stat-bar: fewer than 2 numbers that appear in the facts` };
   }
   if (type === "reviews") {
-    if (!ctx.testimonials.length) return undefined;
+    if (!ctx.testimonials.length) return { reason: "reviews: the site has no real testimonials to quote" };
     const matched = (section.items ?? [])
       .map((it) => {
         const probe = normQuote(it.text || it.title).slice(0, 60);
@@ -209,30 +363,71 @@ export function normalizeSection(raw: unknown, ctx: NormalizeContext): Section |
   }
   if (type === "gallery") {
     section.items = (section.items ?? []).filter((it) => it.image);
-    if (section.items.length < 3) return undefined;
+    if (section.items.length < 3) {
+      const pool = ctx.images.filter((n) => n.startsWith("photo-") || n.startsWith("service-") || n === "feature" || n === "hero");
+      if (pool.length >= 3) section.items = pool.slice(0, 6).map((image) => ({ title: "", text: "", image }));
+      else return { reason: `gallery: fewer than 3 known images` };
+    }
   }
-  if (type === "before-after" && (section.items ?? []).length < 2) return undefined;
-  if (["services-grid", "process", "faq", "marquee"].includes(type) && !(section.items ?? []).length) return undefined;
-  if (type === "faq") section.items = section.items!.filter((it) => it.title && it.text);
-  return section;
+  if (type === "before-after" && (section.items ?? []).length < 2) {
+    if (!hasCopy) return { reason: "before-after: needs 2 items" };
+    section.type = "feature-split";
+  }
+  if (["services-grid", "process", "faq", "marquee"].includes(type) && !(section.items ?? []).length) {
+    // Lines of text can become items; otherwise keep the copy as a text section.
+    const lines = (section.text ?? "").split(/\n+/).map((l) => l.replace(/^[-*•\d.)\s]+/, "").trim()).filter(Boolean);
+    if (lines.length >= 2 && type !== "faq") {
+      section.items = lines.slice(0, 8).map((title) => ({ title, text: "" }));
+      section.text = undefined;
+    } else if (hasCopy) section.type = "rich-text";
+    else return { reason: `${type}: no items and no text` };
+  }
+  if (section.type === "faq") {
+    section.items = section.items!.filter((it) => it.title && it.text);
+    if (!section.items.length) {
+      if (!hasCopy) return { reason: "faq: no question with an answer" };
+      section.type = "rich-text";
+      section.items = undefined;
+    }
+  }
+  if (["statement", "rich-text", "cta-band", "feature-split"].includes(section.type) && !hasCopy && !(section.items ?? []).length) {
+    return { reason: `${type}: no heading or text` };
+  }
+  return { section };
 }
+
+export type SectionsCheck = { sections: Section[]; total: number; rejected: string[] };
 
 /** Validate a page worth of AI sections; guarantee a hero first and sensible length. */
 export function normalizeSections(raw: unknown, ctx: NormalizeContext): Section[] {
-  const list = Array.isArray(raw) ? raw : raw && typeof raw === "object" && Array.isArray((raw as { sections?: unknown }).sections) ? (raw as { sections: unknown[] }).sections : [];
+  return checkSections(raw, ctx).sections;
+}
+
+/** Like normalizeSections, plus the number of sections the AI sent and why any were dropped. */
+export function checkSections(raw: unknown, ctx: NormalizeContext): SectionsCheck {
+  const list = sectionListOf(raw);
   const out: Section[] = [];
-  for (const item of list) {
-    const section = normalizeSection(item, ctx);
-    if (!section) continue;
-    if (HERO_TYPES.has(section.type) && out.some((s) => HERO_TYPES.has(s.type))) continue;
-    if (section.type === "contact-block" && out.some((s) => s.type === "contact-block")) continue;
+  const rejected: string[] = [];
+  list.forEach((item, index) => {
+    if (out.length >= 9) return;
+    const { section, reason } = checkSection(item, ctx);
+    if (!section) {
+      rejected.push(`#${index + 1} ${reason}`);
+      return;
+    }
+    if (HERO_TYPES.has(section.type) && out.some((s) => HERO_TYPES.has(s.type))) {
+      // A second hero still has copy worth keeping.
+      if (!section.heading && !section.text) return void rejected.push(`#${index + 1} a second hero`);
+      section.type = "feature-split";
+    }
+    if (section.type === "contact-block" && out.some((s) => s.type === "contact-block")) return void rejected.push(`#${index + 1} a second contact-block`);
     out.push(section);
-    if (out.length >= 9) break;
-  }
+  });
+  if (!list.length) rejected.push(`no section list found (top-level keys: ${Object.keys(asRecord(raw) ?? {}).slice(0, 8).join(", ") || typeof raw})`);
   const heroIndex = out.findIndex((s) => HERO_TYPES.has(s.type));
   if (heroIndex > 0) out.unshift(...out.splice(heroIndex, 1));
   if (ctx.page !== "home" && out[0] && ["hero-split", "hero-photo", "hero-type"].includes(out[0].type)) out[0].type = "page-hero";
-  return out;
+  return { sections: out, total: list.length, rejected };
 }
 
 export function corpusFor(facts: SiteFacts): string {
@@ -629,6 +824,30 @@ export function composeImages(available: string[]): ComposeImages {
   };
 }
 
+/** One valid example per section type, shown to the AI so it returns the exact shape. */
+export const SECTION_EXAMPLE_LIST: Record<SectionType, Record<string, unknown>> = {
+  "hero-split": { type: "hero-split", tone: "light", eyebrow: "Tulsa plumbers", heading: "Fixed *today*.", text: "One sentence.", image: "hero", cta: { label: "Get a quote", page: "contact" }, secondary: { label: "Services", page: "services" }, call: true },
+  "hero-photo": { type: "hero-photo", tone: "dark", heading: "Built to *last*.", text: "One sentence.", image: "hero", cta: { label: "Book now", page: "contact" } },
+  "hero-type": { type: "hero-type", tone: "light", eyebrow: "Since 1998", heading: "Good work, *close to home*.", text: "One sentence.", image: "hero", cta: { label: "Start", page: "contact" } },
+  "page-hero": { type: "page-hero", tone: "tint", eyebrow: "About", heading: "Who we *are*", text: "One sentence." },
+  "stat-bar": { type: "stat-bar", tone: "brand", items: [{ title: "25+", text: "years" }, { title: "4.9", text: "rating" }] },
+  marquee: { type: "marquee", tone: "dark", items: [{ title: "Repairs" }, { title: "Installs" }] },
+  "services-grid": { type: "services-grid", tone: "light", variant: "icons", eyebrow: "What we do", heading: "Services", items: [{ title: "Repairs", text: "One line.", icon: "wrench" }] },
+  "feature-split": { type: "feature-split", tone: "tint", eyebrow: "About", heading: "Why *us*", text: "Two sentences.", items: [{ title: "Licensed" }], image: "feature", reverse: false, cta: { label: "About us", page: "about" } },
+  process: { type: "process", tone: "light", heading: "How it works", items: [{ title: "Call", text: "One line." }, { title: "Visit", text: "One line." }, { title: "Done", text: "One line." }] },
+  reviews: { type: "reviews", tone: "tint", heading: "What customers say", items: [{ title: "Author", text: "Exact quote from the facts." }] },
+  "before-after": { type: "before-after", tone: "light", heading: "Before and after", items: [{ title: "Before", image: "photo-1" }, { title: "After", image: "photo-2" }] },
+  gallery: { type: "gallery", tone: "light", heading: "Recent work", items: [{ title: "", image: "photo-1" }, { title: "", image: "photo-2" }, { title: "", image: "photo-3" }] },
+  statement: { type: "statement", tone: "brand", eyebrow: "Our promise", text: "One big sentence." },
+  faq: { type: "faq", tone: "light", heading: "Questions", items: [{ title: "Question?", text: "Answer from the facts." }] },
+  "cta-band": { type: "cta-band", tone: "brand", heading: "Ready when *you are*", text: "One line.", cta: { label: "Get in touch", page: "contact" }, call: true },
+  "contact-block": { type: "contact-block", tone: "light", heading: "Get in touch", text: "One line." },
+  "rich-text": { type: "rich-text", tone: "light", heading: "Our story", text: "Paragraph one.\nParagraph two." },
+};
+const SECTION_EXAMPLES = Object.values(SECTION_EXAMPLE_LIST)
+  .map((e) => JSON.stringify(e))
+  .join("\n");
+
 /** A compact description of the section library for AI prompts. */
 export const SECTION_GUIDE = `Section library (pick, order, and fill — you never write HTML):
 - "hero-split": home hero, copy + tall image. fields: eyebrow, heading, text, image, cta, secondary, call
@@ -651,4 +870,6 @@ export const SECTION_GUIDE = `Section library (pick, order, and fill — you nev
 Every section has "tone": "light" | "tint" | "dark" | "brand" (alternate tones for rhythm; never two "dark"/"brand" in a row) and optional "align": "center".
 Headings may emphasize ONE word or short phrase with *asterisks* (rendered as the accent style).
 Buttons: cta = {"label": short, "page": a page slug}. "call": true adds the real tap-to-call button (only if a phone is known).
-Images: use ONLY these image names in "image" fields: {IMAGES}`;
+Images: use ONLY these image names in "image" fields: {IMAGES}
+OUTPUT SHAPE — exactly {"sections":[...]}; every section is a FLAT object whose "type" is one of the library ids above (lowercase, hyphenated). Do not nest fields under "props"/"content". One valid example of each type (copy the shape, not the words):
+${SECTION_EXAMPLES}`;
