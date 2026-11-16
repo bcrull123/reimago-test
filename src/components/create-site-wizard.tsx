@@ -314,7 +314,7 @@ export function CreateSiteWizard({
       if (step === 13) {
         setBrief((current) => ({
           ...current,
-          files_note: "AI will create a draft logo and use AI images.",
+          files_note: "AI will draft the pages and use placeholder images until you send photos.",
           ai_suggested: current.ai_suggested.includes(id) ? current.ai_suggested : [...current.ai_suggested, id],
         }));
       } else {

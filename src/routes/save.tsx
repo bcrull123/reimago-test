@@ -23,11 +23,11 @@ function SavePage() {
             <p>
               A typical rebuild starts blank. You pay for discovery, a sitemap, copy, design, and a developer
               before there is a page you can reject. Reimago starts from the site you already have. Enter the
-              address. The public pages are read, and Imagine draws a new version you can see on the screen.
+              address. The public pages are read, and AI builds a new version, a working site you can click through on the screen.
             </p>
             <p>
-              That first picture is the draft, not a finished launch. You are not buying a studio engagement just
-              to find out whether a new direction is worth it. If the picture is wrong, Try Again asks for
+              That first preview is the draft, not a finished launch. You are not buying a studio engagement just
+              to find out whether a new direction is worth it. If the preview is wrong, Try Again builds
               another one. If you do not have a site yet, pick a domain and start from that name instead of
               commissioning a build with nothing to point at.
             </p>
@@ -53,7 +53,7 @@ function SavePage() {
               company for the address and another company to make the address work.
             </p>
             <p>
-              Nothing on the live site changes when you submit the form. The rendering is a draft you review.
+              Nothing on the live site changes when you submit the form. The preview is a draft you review.
               You publish when the page is the one you want, instead of paying for a rebuild because the last
               design aged out.
             </p>

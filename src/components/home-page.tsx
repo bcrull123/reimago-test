@@ -3,11 +3,14 @@ import { Link } from "@tanstack/react-router";
 import { ArrowRight } from "lucide-react";
 import { SiteShell, Wordmark } from "@/components/site-shell";
 import { CreateSiteWizard, type CreateBrief, type CreateFiles } from "@/components/create-site-wizard";
-import { reimagineSite, retryRendition, checkDomainName, buildCreatedSite } from "@/lib/reimagine.functions";
+import { checkDomainName, handOffToCursor } from "@/lib/reimagine.functions";
+import { cursorStatus, previewBuild, previewFromBrief, previewPlan, previewRead } from "@/lib/preview.functions";
+import { LivePreview } from "@/components/live-preview";
+import type { SiteFacts } from "@/lib/preview/types";
 import type { DomainOffer } from "@/lib/logicboxes-types";
 import type { ReimagineOk } from "@/lib/reimagine-types";
 
-const STORAGE_KEY = "reimago-reimagine-v2";
+const STORAGE_KEY = "reimago-reimagine-v3";
 
 const REBUILDS = [
   ["Website", "A new first impression. Structure, copy, and conversion — rebuilt from what you already have."],
@@ -21,7 +24,18 @@ type Saved = {
   email: string;
   notes: string;
   result: ReimagineOk;
+  facts?: SiteFacts;
+  variation?: number;
 };
+
+type Stage = "" | "read" | "plan" | "build" | "send";
+
+const STAGES: { key: Exclude<Stage, "">; label: string }[] = [
+  { key: "read", label: "Reading your site…" },
+  { key: "plan", label: "Planning pages…" },
+  { key: "build", label: "Building pages…" },
+  { key: "send", label: "Sending your preview link…" },
+];
 
 function isEmail(value: string): boolean {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
@@ -36,6 +50,7 @@ function briefMailto(email: string, url: string, notes: string, result: Reimagin
     "",
     `Read: ${result.diagnosis}`,
     `Draft headline: ${result.draft.headline}`,
+    result.preview ? `Live preview: ${result.preview.url}` : "",
   ].join("\n");
   return `mailto:marketing@reimago.ai?subject=${encodeURIComponent(result.host)}&body=${encodeURIComponent(body)}`;
 }
@@ -44,7 +59,7 @@ const fieldClass =
   "mt-1.5 flex h-11 w-full rounded-md border border-border bg-bg px-3 text-sm text-fg outline-none placeholder:text-faint focus-visible:ring-2 focus-visible:ring-ring/70";
 
 const FORMCARRY = "https://formcarry.com/s/NipZS0fF4w4";
-const THANKS = "We got the brief. The site, your email, the note, and the picture were sent. Nothing on the live site was changed.";
+const THANKS = "We got the brief. The site, your email, the note, and a link to your live preview were sent. Nothing on the live site was changed.";
 
 function bareDomain(site: string): string {
   try {
@@ -55,31 +70,13 @@ function bareDomain(site: string): string {
   }
 }
 
-async function pictureFile(image: string, domain: string): Promise<File> {
-  const response = await fetch(image);
-  const blob = await response.blob();
-  if (!blob.size) throw new Error("The picture was not ready.");
-  const canvas = document.createElement("canvas");
-  const bitmap = await createImageBitmap(blob);
-  canvas.width = bitmap.width;
-  canvas.height = bitmap.height;
-  const context = canvas.getContext("2d");
-  if (!context) throw new Error("The picture could not be prepared.");
-  context.drawImage(bitmap, 0, 0);
-  bitmap.close();
-  const png = await new Promise<Blob>((resolve, reject) => {
-    canvas.toBlob((next) => (next ? resolve(next) : reject(new Error("The picture could not be prepared."))), "image/png");
-  });
-  if (png.size >= 10_000_000) throw new Error("The picture is over 10 MB.");
-  return new File([png], `${domain}.png`, { type: "image/png" });
-}
-
 async function submitFormcarry(fields: {
   email: string;
   website: string;
   note: string;
   gotcha: string;
-  image?: string;
+  previewUrl?: string;
+  previewPages?: string[];
 }): Promise<void> {
   const domain = bareDomain(fields.website);
   const data = new FormData();
@@ -87,8 +84,8 @@ async function submitFormcarry(fields: {
   data.append("website", domain);
   data.append("note", fields.note);
   data.append("_gotcha", fields.gotcha);
-  if (!fields.image) throw new Error("The picture was not ready.");
-  data.append("picture", await pictureFile(fields.image, domain));
+  data.append("preview_url", fields.previewUrl ?? "");
+  data.append("preview_pages", (fields.previewPages ?? []).join("\n"));
 
   const response = await fetch(FORMCARRY, {
     method: "POST",
@@ -101,7 +98,7 @@ async function submitFormcarry(fields: {
   }
 }
 
-async function submitCreateBrief(email: string, gotcha: string, brief: CreateBrief, files: CreateFiles, image?: string): Promise<void> {
+async function submitCreateBrief(email: string, gotcha: string, brief: CreateBrief, files: CreateFiles, previewUrl?: string): Promise<void> {
   const pages = brief.pages.length ? brief.pages : ["Home", "About", "Services", "Contact"];
   const industry = [brief.industry, brief.what].filter(Boolean).join(": ");
   const data = new FormData();
@@ -138,13 +135,7 @@ async function submitCreateBrief(email: string, gotcha: string, brief: CreateBri
   data.append("video_link", brief.video_link);
   data.append("anything_else", brief.anything_else);
   data.append("ai_suggested", (brief.ai_suggested ?? []).join(", "));
-  if (image) {
-    try {
-      data.append("picture", await pictureFile(image, bareDomain(brief.existing_site || brief.domain || brief.business_name || "new-site")));
-    } catch {
-      // The brief still sends if the picture cannot be attached.
-    }
-  }
+  data.append("preview_url", previewUrl ?? "");
   const named: [string, File | null][] = [
     ["logo", files.logo],
     ["brand_guide", files.brand],
@@ -179,10 +170,14 @@ export function HomePage() {
   const [agreed, setAgreed] = useState(false);
   const [working, setWorking] = useState(false);
   const [retrying, setRetrying] = useState(false);
+  const [stage, setStage] = useState<Stage>("");
   const [handing, setHanding] = useState(false);
   const [handoff, setHandoff] = useState("");
+  const [cursorApi, setCursorApi] = useState(false);
   const [error, setError] = useState("");
   const [result, setResult] = useState<ReimagineOk | null>(null);
+  const [facts, setFacts] = useState<SiteFacts | null>(null);
+  const [variation, setVariation] = useState(0);
   const [mailed, setMailed] = useState<string>("");
   const [checkingName, setCheckingName] = useState(false);
   const [offers, setOffers] = useState<DomainOffer[] | null>(null);
@@ -201,9 +196,17 @@ export function HomePage() {
       setNotes(saved.notes || "");
       setAgreed(true);
       setResult(saved.result);
+      setFacts(saved.facts ?? null);
+      setVariation(saved.variation ?? 0);
     } catch {
       // Ignore a bad local draft.
     }
+  }, []);
+
+  useEffect(() => {
+    cursorStatus()
+      .then((status) => setCursorApi(Boolean(status?.api)))
+      .catch(() => setCursorApi(false));
   }, []);
 
   useEffect(() => {
@@ -211,6 +214,31 @@ export function HomePage() {
     scrollOnResult.current = false;
     draftRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
   }, [result]);
+
+  function remember(next: ReimagineOk, nextFacts: SiteFacts | null, nextVariation: number, site = url) {
+    const saved: Saved = { url: site, email: email.trim(), notes: notes.trim(), result: next, facts: nextFacts ?? undefined, variation: nextVariation };
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(saved));
+    } catch {
+      try {
+        localStorage.setItem(STORAGE_KEY, JSON.stringify({ ...saved, facts: undefined }));
+      } catch {
+        // The preview is still on screen if storage is full.
+      }
+    }
+  }
+
+  /** Plan + build a live preview from facts. Returns the result or throws with a readable message. */
+  async function planAndBuild(nextFacts: SiteFacts, nextVariation: number): Promise<ReimagineOk> {
+    setStage("plan");
+    const planned = await previewPlan({ data: { facts: nextFacts, variation: nextVariation } });
+    if (!planned.ok) throw new Error(planned.error);
+    setStage("build");
+    const built = await previewBuild({ data: { facts: nextFacts, plan: planned.plan, variation: nextVariation } });
+    if (!built.ok) throw new Error(built.error);
+    const note = [built.result.note, planned.note].filter(Boolean).filter((v, i, list) => list.indexOf(v) === i).join(" ");
+    return { ...built.result, note: note || undefined };
+  }
 
   async function lookupDomain(nameInput?: string) {
     setError("");
@@ -262,37 +290,40 @@ export function HomePage() {
     }
     setWorking(true);
     setMailed("");
+    setHandoff("");
     const gotcha = new FormData(event.currentTarget).get("_gotcha");
     try {
-      const next = await reimagineSite({ data: { url: site, notes: notes.trim(), email: email.trim() } });
-      if (!next.ok) {
-        setError(next.error);
+      setStage("read");
+      const read = await previewRead({ data: { url: site, notes: notes.trim() } });
+      if (!read.ok) {
+        setError(read.error);
         return;
       }
-      await submitFormcarry({
-        email: email.trim(),
-        website: site,
-        note: notes.trim(),
-        gotcha: typeof gotcha === "string" ? gotcha : "",
-        image: next.draft.rendition,
-      });
-      setMailed(THANKS);
-      const saved: Saved = { url: site, email: email.trim(), notes: notes.trim(), result: next };
-      try {
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(saved));
-      } catch {
-        const slim: Saved = {
-          ...saved,
-          result: { ...next, draft: { ...next.draft, heroImage: undefined, cardImage: undefined, rendition: undefined } },
-        };
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(slim));
-      }
+      const next = await planAndBuild(read.facts, 0);
+      setFacts(read.facts);
+      setVariation(0);
+      remember(next, read.facts, 0, site);
       scrollOnResult.current = true;
       setResult(next);
+      setStage("send");
+      try {
+        await submitFormcarry({
+          email: email.trim(),
+          website: site,
+          note: notes.trim(),
+          gotcha: typeof gotcha === "string" ? gotcha : "",
+          previewUrl: next.preview?.url ?? next.pageUrl,
+          previewPages: next.preview?.pages.map((page) => page.url),
+        });
+        setMailed(THANKS);
+      } catch (err) {
+        setError(`Your preview is ready, but the form could not be sent: ${err instanceof Error ? err.message : "try again."}`);
+      }
     } catch (err) {
-      setError(err instanceof Error ? err.message : "The draft could not be made.");
+      setError(err instanceof Error ? err.message : "The preview could not be made.");
     } finally {
       setWorking(false);
+      setStage("");
     }
   }
 
@@ -308,46 +339,59 @@ export function HomePage() {
     }
     setWorking(true);
     setMailed("");
+    setHandoff("");
+    let next: ReimagineOk | null = null;
+    let buildError = "";
     try {
       const gotcha = document.querySelector<HTMLInputElement>('input[name="_gotcha"]')?.value ?? "";
-      const next = await buildCreatedSite({ data: brief });
-      await submitCreateBrief(email.trim(), gotcha, brief, files, next.ok ? next.draft.rendition : undefined);
+      try {
+        setStage("plan");
+        const start = await previewFromBrief({ data: { brief: brief as unknown as Record<string, unknown> } });
+        if (!start.ok) throw new Error(start.error);
+        next = await planAndBuild(start.facts, 0);
+        setFacts(start.facts);
+        setVariation(0);
+        remember(next, start.facts, 0, brief.existing_site || brief.domain || "");
+      } catch (err) {
+        buildError = err instanceof Error ? err.message : "The preview could not be built.";
+      }
+      setStage("send");
+      await submitCreateBrief(email.trim(), gotcha, brief, files, next?.preview?.url);
       setMailed(THANKS);
-      if (!next.ok) {
-        setError(next.error);
+      if (!next) {
+        setError(buildError);
         return;
       }
       scrollOnResult.current = true;
       setResult(next);
     } catch (err) {
       setError(err instanceof Error ? err.message : "The form could not be sent. Try again.");
+      if (next) setResult(next);
     } finally {
       setWorking(false);
+      setStage("");
     }
   }
 
   async function tryAgain() {
     if (!result) return;
+    if (!facts) {
+      setError("Run the site again to build a new version.");
+      return;
+    }
     setRetrying(true);
     setError("");
     try {
-      const next = await retryRendition({ data: { draft: result.draft } });
-      if (!next.ok) {
-        setError(next.error);
-        return;
-      }
-      const updated = { ...result, draft: { ...result.draft, rendition: next.image } };
-      setResult(updated);
-      try {
-        const saved: Saved = { url, email, notes, result: updated };
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(saved));
-      } catch {
-        // The new picture is still on screen if storage is full.
-      }
+      const nextVariation = variation + 1;
+      const next = await planAndBuild(facts, nextVariation);
+      setVariation(nextVariation);
+      setResult(next);
+      remember(next, facts, nextVariation);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Imagine did not return a new rendering.");
+      setError(err instanceof Error ? err.message : "A new version could not be built.");
     } finally {
       setRetrying(false);
+      setStage("");
     }
   }
 
@@ -361,7 +405,8 @@ export function HomePage() {
   }
 
   async function handOff() {
-    if (!result?.draft.rendition) return;
+    const previewUrl = result?.preview?.url ?? result?.pageUrl;
+    if (!result || !previewUrl) return;
     const submitted = url.trim() || result.layout?.submitted || result.finalUrl;
     const layout = {
       submitted,
@@ -372,19 +417,31 @@ export function HomePage() {
       headings: result.layout?.headings ?? [],
       text: result.layout?.text || result.diagnosis,
     };
-    const domain = bareDomain(submitted);
+    const pages = result.preview?.pages.map((page) => `${page.title}: ${page.url}`) ?? [previewUrl];
+    const domain = bareDomain(submitted || result.host);
     setHanding(true);
     setHandoff("");
     try {
-      const file = await pictureFile(result.draft.rendition, domain);
+      if (cursorApi) {
+        const sent = await handOffToCursor({
+          data: { host: result.host, ...layout, notes: notes.trim(), previewUrl, pages },
+        });
+        if (sent.ok) {
+          setHandoff(`Cursor started building it: ${sent.url}`);
+          return;
+        }
+        setHandoff(`${sent.error} Downloading the brief instead.`);
+      }
       const brief = [
         "# Cursor handoff",
         "",
         "Open this folder in the Cursor you already use. Do not sign out of that account.",
         "",
         `Rebuild the website from the form: ${submitted}`,
-        `The Imagine picture is ${file.name}. Match that picture.`,
-        "Keep the navigation and section order below. Do not change the live site.",
+        `Start from the live preview: ${previewUrl}`,
+        "Open every preview page below and match its layout, colors, type, copy, and navigation.",
+        pages.map((page) => `- ${page}`).join("\n"),
+        "Never invent phone numbers, emails, or addresses. Do not change the live site.",
         "",
         `Fetched page: ${layout.url}`,
         layout.title ? `Title: ${layout.title}` : "",
@@ -396,9 +453,10 @@ export function HomePage() {
       ]
         .filter(Boolean)
         .join("\n\n");
-      downloadBlob(file, file.name);
       downloadBlob(new Blob([brief], { type: "text/markdown" }), `${domain}-cursor.md`);
-      setHandoff("Saved the form site’s layout and the Imagine picture. Open those two files in the Cursor you already use.");
+      setHandoff((current) =>
+        `${current ? `${current} ` : ""}Saved ${domain}-cursor.md with the preview links. Open it in the Cursor you already use.`,
+      );
     } catch (err) {
       setHandoff(err instanceof Error ? err.message : "The handoff could not be saved.");
     } finally {
@@ -438,7 +496,29 @@ export function HomePage() {
               </div>
               <span className="absolute left-1/2 top-1/2 size-2 -translate-x-1/2 -translate-y-1/2 rounded-full bg-fg" />
             </div>
-            <p className="mt-6 text-sm text-fg">Building your site</p>
+            <p className="mt-6 text-sm font-medium text-fg">
+              {STAGES.find((item) => item.key === stage)?.label ?? "Building your site"}
+            </p>
+            <ol className="mt-4 space-y-1.5 text-sm">
+              {STAGES.filter((item) => item.key !== "send" || stage === "send").map((item) => {
+                const order = STAGES.findIndex((entry) => entry.key === item.key);
+                const current = STAGES.findIndex((entry) => entry.key === stage);
+                const done = current > order;
+                const active = current === order;
+                return (
+                  <li
+                    key={item.key}
+                    className={`flex items-center gap-2 ${active ? "text-fg" : done ? "text-muted" : "text-faint"}`}
+                  >
+                    <span aria-hidden className="inline-block w-4 text-center">
+                      {done ? "✓" : active ? "•" : "○"}
+                    </span>
+                    {item.label}
+                  </li>
+                );
+              })}
+            </ol>
+            <p className="mt-4 max-w-xs text-center text-xs text-muted">This usually takes about a minute.</p>
           </div>
         </div>
       ) : null}
@@ -645,35 +725,30 @@ export function HomePage() {
         {result ? (
           <section ref={draftRef} className="scroll-mt-16 border-t border-border">
             <div className="mx-auto max-w-6xl px-4 pt-8 sm:px-6">
-              {result.draft.rendition ? (
-                <figure className="overflow-hidden rounded-2xl border border-border bg-surface shadow-2xl">
-                  <img
-                    src={result.draft.rendition}
-                    alt={`Imagine rendition of ${result.draft.name}`}
-                    className="w-full"
-                  />
-                </figure>
+              {result.preview ? (
+                <LivePreview preview={result.preview} host={result.host} />
               ) : (
                 <p className="rounded-2xl border border-border bg-surface p-6 text-sm text-muted">
-                  Imagine did not return a page. Try the site again.
+                  This saved draft was made with the old picture preview. Run the site again to build a live, clickable
+                  preview.
                 </p>
               )}
               <div className="mt-4 flex flex-col gap-3 sm:flex-row">
                 <button
                   type="button"
                   onClick={() => void tryAgain()}
-                  disabled={retrying}
+                  disabled={retrying || !facts}
                   className="inline-flex h-12 items-center justify-center rounded-md border border-border bg-surface px-6 text-sm font-medium disabled:opacity-40"
                 >
-                  Try Again
+                  {retrying ? "Building another version…" : "Try Again"}
                 </button>
                 <button
                   type="button"
                   onClick={() => void handOff()}
-                  disabled={handing || !result.draft.rendition}
+                  disabled={handing || !result.preview}
                   className="inline-flex h-12 items-center justify-center rounded-md bg-ink px-6 text-sm font-medium text-white disabled:opacity-40"
                 >
-                  {handing ? "Handing off…" : "Hand off to Cursor"}
+                  {handing ? "Handing off…" : cursorApi ? "Send to Cursor" : "Hand off to Cursor"}
                 </button>
               </div>
               {handoff ? <p className="mt-3 text-sm text-muted">{handoff}</p> : null}
@@ -712,7 +787,7 @@ export function HomePage() {
                   </button>
                 </div>
                 <p className="mt-3 text-sm text-muted">
-                  {mailed || "The rendering is emailed to marketing@reimago.ai."}{" "}
+                  {mailed || "The preview link is emailed to marketing@reimago.ai."}{" "}
                   Nothing was changed on {result.host}.
                 </p>
               </div>
