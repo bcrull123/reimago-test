@@ -28,6 +28,29 @@ If the AI cannot write a homepage, the look falls back to the section library an
 - **Fallback model.** Each page call gets the main model first. If that fails or times out, one retry goes to a faster non-reasoning model (`AI_FALLBACK_MODEL`, default `grok-4.20-0309-non-reasoning`) within the same step budget.
 - **Robust parsing.** JSON is extracted even from fenced code or prose and tolerates trailing commas. Cut-off answers are reported as such.
 
+### Reading the AI's sections tolerantly
+
+Real models drift from the documented shape, so `checkSections` in `sections.ts` reads what they actually send:
+
+- **Section types** can sit under `type`, `section`, `kind` or `component`.
+- **Type names** can be `HeroPhoto`, `hero_photo`, `"Hero photo section"` or an alias like `testimonials`.
+- **Fields** can be nested under `props`, `content` or `data`.
+- **Field aliases** are mapped: `headline`→heading, `body`/`subtitle`→text, `cards`/`steps`/`faqs`→items, `button`/`href`→cta.
+- **Coercions:** a CTA can be a plain string, text can be an array, and sections can be keyed by type or wrapped in `{"page": {...}}`.
+- **Partially valid sections are kept.** A list section without items but with copy becomes text, and a second hero becomes a feature split.
+
+The safety rules still apply: stats must use real numbers, reviews must be real quotes, and contacts are never invented. The prompt now includes one valid JSON example per section type.
+
+When sections are dropped, each one gets a reason, for example `#3 unknown section type kind="pricing-table"`.
+
+- If too few remain, the first reasons appear in the look card's amber note.
+- If the AI page was still used, a small grey note lists what was skipped.
+- The preview record (`aiDebug`, per page) keeps the reasons plus about 2 KB of the raw AI answer, with secrets masked.
+
+### Reloading starts fresh
+
+Results, look cards, previews and wizard answers are kept only in memory; a page reload starts over. Old saved copies (`reimago-reimagine-v*` and `reimago-create-brief-v*` in localStorage) are deleted on load. Each preview stays reachable at its `/made/<id>` link.
+
 ### Logos
 
 The scraped logo is downloaded and analysed in pure JS (`pngjs` / `jpeg-js`, Vercel-safe):
@@ -81,12 +104,35 @@ Each request is budgeted to about 85 s (`PREVIEW_STEP_BUDGET_MS`); slow AI or im
 - 20–40 s for looks (dominated by image generation);
 - 20–40 s for the finish step.
 
+## Create a New Site: domain first
+
+Step 1 of the wizard asks **"Do you already have a domain?"**
+
+- **Yes.** The visitor types a domain. It is validated and normalized: lowercase, no `https://`, `www.`, path or port. It is stored with `domain_status: "owned"`.
+- **No.** The visitor searches a name. The existing LogicBoxes availability check (`checkDomainName` → `logicboxes.server.ts`, read-only) lists .com/.net/… results.
+  - **Select** on an available result stores it with `domain_status: "selected-pending-checkout"`. The rest of the flow treats it as theirs.
+  - **Nothing is registered or charged.** Real registration will go through the Webhero cart; see `DOMAIN_CHECKOUT_URL` and `TODO(webhero-cart)`.
+  - **If LogicBoxes is unreachable,** or when `PREVIEW_MOCK=1` is set or the token is missing, the wizard gets a clearly labelled sample after one quick attempt instead of an error.
+- **Let AI decide** suggests three domain ideas, and tapping one checks it.
+- **Skip** records "Decide later".
+
+The chosen domain:
+
+- shows as a badge on every later step;
+- offers the business name (and, if owned, the existing site);
+- appears first on the review screen;
+- becomes the preview's site address (`facts.host`);
+- is sent with the lead as `domain`, `domain_status` and the `website` field.
+
+The old domain step (step 12) is gone. Wizard answers are kept in memory only (see "Reloading starts fresh").
+
 ## Environment variables
 
 | Variable | Needed | What it does |
 | --- | --- | --- |
 | `XAI_API_KEY` | yes (for AI) | Grok text model (plans, directions, sections, critique) and Grok Imagine images. |
 | `Onesite_Domains_API` | yes | Webhero proxy token for domain search (unchanged). |
+| **`DOMAIN_CHECKOUT_URL`** | no | Unused by default. A future hook for the Webhero cart (alpha.webhero.com) that will register a domain the visitor selected in the wizard. See `src/lib/domain-checkout.server.ts`. Nothing is ever registered today. |
 | `AI_PROVIDER` | no | `xai` (default), `openai`, or `mock`. |
 | `AI_MODEL` | no | Override the text model (default `grok-4.5`; `gpt-4.1-mini` for openai). |
 | `OPENAI_API_KEY` | only for openai text or images | |
@@ -135,6 +181,6 @@ XAI_API_KEY=fake AI_BASE_URL=http://localhost:9999/v1 IMAGE_BASE_URL=http://loca
 CHROME_PATH=/usr/bin/google-chrome node scripts/live-preview-e2e.mjs https://www.morganplumbingokc.com/ live-preview-shots/morgan-ai 1
 ```
 
-To simulate real-API failures with the fake server, set `FAKE_FAIL=slow|length|badjson|reject-reasoning` (add `FAKE_FAIL_ALL=1` to make the fallback model fail too). `scripts/live-preview-retry-e2e.mjs` records each card's error and can click "Retry with AI".
+To simulate real-API failures with the fake server, set `FAKE_FAIL=slow|length|badjson|reject-reasoning` (add `FAKE_FAIL_ALL=1` to make the fallback model fail too). `scripts/live-preview-retry-e2e.mjs` records each card's error and can click "Retry with AI". `FAKE_SHAPE=alt` answers in drifted shapes (type under `section`/`component`, CamelCase names, nested `props`). `scripts/create-wizard-domain-e2e.mjs` screenshots the domain-first wizard steps.
 
 The last argument picks which look to choose (0–2); `APP_URL` points the script at another port. The e2e scripts intercept Formcarry, so no real lead is sent. The fake AI server deliberately returns an invented phone, email, stats and review so you can see the validators remove them.

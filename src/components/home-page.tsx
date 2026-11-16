@@ -11,7 +11,6 @@ import type { LookInfo, PreviewInfo, SiteFacts } from "@/lib/preview/types";
 import type { DomainOffer } from "@/lib/logicboxes-types";
 import type { ReimagineOk } from "@/lib/reimagine-types";
 
-const STORAGE_KEY = "reimago-reimagine-v4";
 
 const REBUILDS = [
   ["Website", "A new first impression. Structure, copy, and conversion — rebuilt from what you already have."],
@@ -20,15 +19,6 @@ const REBUILDS = [
   ["Life", "Personal sites, practices, and reputations that should look like the work behind them."],
 ] as const;
 
-type Saved = {
-  url: string;
-  email: string;
-  notes: string;
-  result?: ReimagineOk | null;
-  looks?: LookInfo[];
-  facts?: SiteFacts;
-  variation?: number;
-};
 
 type Stage = "" | "read" | "dream" | "paint" | "send" | "finish";
 
@@ -115,7 +105,7 @@ async function submitCreateBrief(email: string, gotcha: string, brief: CreateBri
   const industry = [brief.industry, brief.what].filter(Boolean).join(": ");
   const data = new FormData();
   data.append("email", email);
-  data.append("website", bareDomain(brief.existing_site || brief.domain || brief.business_name || "new-site"));
+  data.append("website", bareDomain(brief.domain || brief.existing_site || brief.business_name || "new-site"));
   data.append("note", brief.anything_else);
   data.append("_gotcha", gotcha);
   data.append("mode", "create_new_site");
@@ -140,6 +130,9 @@ async function submitCreateBrief(email: string, gotcha: string, brief: CreateBri
   data.append("hours", brief.hours);
   data.append("domain_choice", brief.domain_choice);
   data.append("domain", brief.domain);
+  // "owned" or "selected-pending-checkout" (chosen in the wizard, not registered or paid for yet).
+  data.append("domain_status", brief.domain_status ?? "");
+  if (brief.domain_checkout_url) data.append("domain_checkout_url", brief.domain_checkout_url);
   data.append("features", brief.features.join(", "));
   data.append("product_count", brief.product_count);
   data.append("files_link", brief.files_link);
@@ -202,27 +195,16 @@ export function HomePage() {
   const draftRef = useRef<HTMLElement>(null);
   const scrollOnResult = useRef(false);
 
+  // A page reload starts fresh: results, looks, and wizard answers are kept only in memory.
+  // Earlier versions saved them in localStorage; remove those copies so they can't come back.
+  // Previews stay reachable at their /made/<id> links.
   useEffect(() => {
     try {
-      const raw = localStorage.getItem(STORAGE_KEY);
-      if (!raw) return;
-      const saved = JSON.parse(raw) as Saved;
-      if (!saved?.result?.ok && !saved?.looks?.length) return;
-      setUrl(saved.url || "");
-      setEmail(saved.email || "");
-      setNotes(saved.notes || "");
-      setAgreed(true);
-      setResult(saved.result?.ok ? saved.result : null);
-      if (saved.looks?.length) {
-        setLooks(saved.looks);
-        const chosen = saved.result?.preview?.id ?? "";
-        setChosenLook(chosen);
-        setFocusedLook(chosen || saved.looks[0]!.id);
+      for (const key of Object.keys(localStorage)) {
+        if (/^reimago-(reimagine|create-brief)-v\d+$/.test(key)) localStorage.removeItem(key);
       }
-      setFacts(saved.facts ?? null);
-      setVariation(saved.variation ?? 0);
     } catch {
-      // Ignore a bad local draft.
+      // Storage may be blocked; nothing to clean.
     }
   }, []);
 
@@ -237,27 +219,6 @@ export function HomePage() {
     scrollOnResult.current = false;
     draftRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
   }, [result, looks]);
-
-  function remember(next: ReimagineOk | null, nextLooks: LookInfo[] | null, nextFacts: SiteFacts | null, nextVariation: number, site = url) {
-    const saved: Saved = {
-      url: site,
-      email: email.trim(),
-      notes: notes.trim(),
-      result: next,
-      looks: nextLooks ?? undefined,
-      facts: nextFacts ?? undefined,
-      variation: nextVariation,
-    };
-    try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(saved));
-    } catch {
-      try {
-        localStorage.setItem(STORAGE_KEY, JSON.stringify({ ...saved, facts: undefined }));
-      } catch {
-        // The preview is still on screen if storage is full.
-      }
-    }
-  }
 
   /**
    * Phase 1: plan the pages + three design directions, then build each look's images and
@@ -307,12 +268,11 @@ export function HomePage() {
       const done = await previewRetryAi({ data: { id: look.id } });
       if (!done.ok) throw new Error(done.error);
       const nextLooks = (looks ?? []).map((item) =>
-        item.id === look.id ? { ...item, aiError: done.errors.home, rev: (item.rev ?? 0) + 1 } : item,
+        item.id === look.id ? { ...item, aiError: done.errors.home, aiWarning: undefined, rev: (item.rev ?? 0) + 1 } : item,
       );
       setLooks(nextLooks);
       const nextResult = done.result ? { ...done.result, preview: done.result.preview ? { ...done.result.preview, rev: (result?.preview?.rev ?? 0) + 1 } : undefined } : result;
       if (done.result) setResult(nextResult);
-      remember(nextResult, nextLooks, facts, variation);
       if (done.note) setError(done.note);
     } catch (err) {
       setError(err instanceof Error ? err.message : "The AI retry failed. Try again.");
@@ -332,7 +292,6 @@ export function HomePage() {
       setChosenLook(look.id);
       setFocusedLook(look.id);
       setResult(finished.result);
-      remember(finished.result, looks, facts, variation);
     } catch (err) {
       setError(err instanceof Error ? err.message : "That look could not be finished. Try again.");
     } finally {
@@ -403,7 +362,6 @@ export function HomePage() {
       const made = await makeLooks(read.facts, 0);
       setFacts(read.facts);
       setVariation(0);
-      remember(null, made.looks, read.facts, 0, site);
       scrollOnResult.current = true;
       showLooks(made.looks, [read.facts.note, made.note].filter(Boolean).join(" "));
       setStage("send");
@@ -452,7 +410,6 @@ export function HomePage() {
         made = await makeLooks(start.facts, 0);
         setFacts(start.facts);
         setVariation(0);
-        remember(null, made.looks, start.facts, 0, brief.existing_site || brief.domain || "");
       } catch (err) {
         buildError = err instanceof Error ? err.message : "The preview could not be built.";
       }
@@ -487,7 +444,6 @@ export function HomePage() {
       const made = await makeLooks(facts, nextVariation);
       setVariation(nextVariation);
       showLooks(made.looks, made.note);
-      remember(null, made.looks, facts, nextVariation);
     } catch (err) {
       setError(err instanceof Error ? err.message : "A new version could not be built.");
     } finally {

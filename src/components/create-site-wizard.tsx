@@ -1,8 +1,10 @@
 import { useEffect, useState, type DragEvent, type ReactNode } from "react";
 import { Link } from "@tanstack/react-router";
-import { suggestCreateStep } from "@/lib/reimagine.functions";
+import { checkDomainName, selectDomain, suggestCreateStep } from "@/lib/reimagine.functions";
+import { CREATE_STEP_IDS, stepIndex } from "@/lib/create-steps";
+import { normalizeDomain, type DomainStatus } from "@/lib/domain-name";
+import type { DomainCheck } from "@/lib/logicboxes-types";
 
-const BRIEF_KEY = "reimago-create-brief-v1";
 const MAX_FILE = 10_000_000;
 const MAX_PHOTOS = 20;
 
@@ -34,8 +36,13 @@ export type CreateBrief = {
   contact_email: string;
   address: string;
   hours: string;
+  /** "have" = Yes, they own it; "find" = No, they searched and selected one; "later" = skipped. */
   domain_choice: "" | "have" | "find" | "later";
   domain: string;
+  /** "owned", or "selected-pending-checkout" for a searched domain (not registered or paid for yet). */
+  domain_status: DomainStatus;
+  /** Set only when DOMAIN_CHECKOUT_URL (future Webhero cart) is configured. */
+  domain_checkout_url: string;
   features: string[];
   product_count: string;
   files_link: string;
@@ -79,6 +86,8 @@ const emptyBrief = (): CreateBrief => ({
   hours: "",
   domain_choice: "",
   domain: "",
+  domain_status: "",
+  domain_checkout_url: "",
   features: [],
   product_count: "",
   files_link: "",
@@ -89,22 +98,8 @@ const emptyBrief = (): CreateBrief => ({
   ai_suggested: [],
 });
 
-const STEP_IDS = [
-  "business_name",
-  "industry",
-  "location",
-  "existing_site",
-  "emulate",
-  "goal",
-  "customers",
-  "services",
-  "pages",
-  "style",
-  "contact",
-  "domain",
-  "features",
-  "files",
-] as const;
+const STEP_IDS = CREATE_STEP_IDS;
+const LAST_STEP = STEP_IDS.length; // the review screen
 
 const emptyFiles = (): CreateFiles => ({
   logo: null,
@@ -119,15 +114,19 @@ const emptyFiles = (): CreateFiles => ({
 const fieldClass =
   "mt-1.5 flex h-12 w-full rounded-md border border-border bg-bg px-3 text-base text-fg outline-none placeholder:text-faint focus-visible:ring-2 focus-visible:ring-ring/70";
 
+/**
+ * Wizard answers live in memory only: they survive switching between the intent tabs, but a page
+ * reload starts fresh. (E2E scripts may seed a brief via window.__reimagoSeedBrief before load.)
+ */
+let memory: { step: number; brief: CreateBrief } | null = null;
+
 function loadBrief(): { step: number; brief: CreateBrief } {
-  try {
-    const raw = localStorage.getItem(BRIEF_KEY);
-    if (!raw) return { step: 0, brief: emptyBrief() };
-    const saved = JSON.parse(raw) as { step?: number; brief?: Partial<CreateBrief> };
-    return { step: Math.min(14, Math.max(0, saved.step ?? 0)), brief: { ...emptyBrief(), ...saved.brief } };
-  } catch {
-    return { step: 0, brief: emptyBrief() };
+  if (memory) return memory;
+  const seed = typeof window !== "undefined" ? (window as { __reimagoSeedBrief?: { step?: number; brief?: Partial<CreateBrief> } }).__reimagoSeedBrief : undefined;
+  if (seed && typeof seed === "object") {
+    return { step: Math.min(LAST_STEP, Math.max(0, seed.step ?? 0)), brief: { ...emptyBrief(), ...seed.brief } };
   }
+  return { step: 0, brief: emptyBrief() };
 }
 
 function toggle(list: string[], value: string): string[] {
@@ -255,13 +254,13 @@ export function CreateSiteWizard({
   const [choices, setChoices] = useState<string[]>([]);
   const [attempt, setAttempt] = useState(1);
   const [suggestError, setSuggestError] = useState("");
+  const [domainQuery, setDomainQuery] = useState(saved.brief.domain_status === "selected-pending-checkout" ? saved.brief.domain : "");
+  const [domainResult, setDomainResult] = useState<DomainCheck | null>(null);
+  const [domainChecking, setDomainChecking] = useState(false);
+  const [domainError, setDomainError] = useState("");
 
   useEffect(() => {
-    try {
-      localStorage.setItem(BRIEF_KEY, JSON.stringify({ step, brief }));
-    } catch {
-      // A full browser store should not block the wizard.
-    }
+    memory = { step, brief };
   }, [step, brief]);
 
   function patch(partial: Partial<CreateBrief>) {
@@ -272,27 +271,93 @@ export function CreateSiteWizard({
     setAiNote("");
     setChoices([]);
     setSuggestError("");
-    setStep((current) => Math.min(14, current + 1));
+    setDomainError("");
+    setStep((current) => Math.min(LAST_STEP, current + 1));
+  }
+
+  /** Continue: the domain step checks its answer first; every other step moves on. */
+  function onContinue() {
+    if (STEP_IDS[step] === "domain") {
+      if (brief.domain_choice === "have") {
+        const result = normalizeDomain(brief.domain);
+        if (!result.domain) {
+          setDomainError(result.error ?? "");
+          return;
+        }
+        patch({ domain: result.domain, domain_status: "owned", domain_checkout_url: "" });
+      } else if (brief.domain_choice === "find" && brief.domain_status !== "selected-pending-checkout") {
+        setDomainError("Check a name and tap Select on an available domain, or tap Skip to decide later.");
+        return;
+      } else if (!brief.domain_choice) {
+        patch({ domain_choice: "later", domain: "", domain_status: "", domain_checkout_url: "" });
+      }
+    }
+    forward();
+  }
+
+  function chooseDomainPath(value: "have" | "find") {
+    setDomainError("");
+    if (value === brief.domain_choice) return;
+    // Switching paths drops the other path's answer so a typed domain is never mistaken for a selected one.
+    patch({ domain_choice: value, domain: "", domain_status: value === "have" ? "owned" : "", domain_checkout_url: "" });
+    setDomainResult(null);
+  }
+
+  async function searchDomain(input?: string) {
+    const query = (input ?? domainQuery).trim();
+    setDomainError("");
+    if (input !== undefined) setDomainQuery(query);
+    if (!query) {
+      setDomainError("Type a name to check, like yourbusiness.");
+      return;
+    }
+    if (brief.domain_choice !== "find") patch({ domain_choice: "find", domain: "", domain_status: "", domain_checkout_url: "" });
+    setDomainChecking(true);
+    try {
+      // degrade: in mock/dev, or if LogicBoxes is unreachable, the server returns a labelled sample instead of failing.
+      setDomainResult(await checkDomainName({ data: { name: query, degrade: true } }));
+    } catch (err) {
+      setDomainResult(null);
+      setDomainError(err instanceof Error ? err.message : "The domain check did not answer.");
+    } finally {
+      setDomainChecking(false);
+    }
+  }
+
+  /**
+   * "Select" only records the choice (domain_status "selected-pending-checkout"); nothing is registered or charged.
+   * TODO(webhero-cart): real registration/checkout will go through the Webhero cart at alpha.webhero.com —
+   * see src/lib/domain-checkout.server.ts and DOMAIN_CHECKOUT_URL (unset by default).
+   */
+  function chooseOffer(domain: string) {
+    setDomainError("");
+    patch({ domain_choice: "find", domain, domain_status: "selected-pending-checkout", domain_checkout_url: "" });
+    void selectDomain({ data: { domain } })
+      .then((result) => {
+        if (result.checkoutUrl) setBrief((current) => (current.domain === domain ? { ...current, domain_checkout_url: result.checkoutUrl ?? "" } : current));
+      })
+      .catch(() => undefined);
   }
 
   function clearStep(index: number): Partial<CreateBrief> {
-    const blanks: Partial<CreateBrief>[] = [
-      { business_name: "" },
-      { what: "", industry: "" },
-      { location: "" },
-      { existing_site: "" },
-      { emulate_url_1: "", emulate_url_2: "", emulate_url_3: "", emulate_likes: [], emulate_note: "" },
-      { goal: "" },
-      { customers: "" },
-      { services: "" },
-      { pages: [] },
-      { style: "", brand_color: "" },
-      { phone: "", contact_email: "", address: "", hours: "" },
-      { domain_choice: "", domain: "" },
-      { features: [], product_count: "" },
-      { files_note: "" },
-    ];
-    return blanks[index] ?? {};
+    const blanks: Record<(typeof STEP_IDS)[number], Partial<CreateBrief>> = {
+      domain: { domain_choice: "later", domain: "", domain_status: "", domain_checkout_url: "" },
+      business_name: { business_name: "" },
+      industry: { what: "", industry: "" },
+      location: { location: "" },
+      existing_site: { existing_site: "" },
+      emulate: { emulate_url_1: "", emulate_url_2: "", emulate_url_3: "", emulate_likes: [], emulate_note: "" },
+      goal: { goal: "" },
+      customers: { customers: "" },
+      services: { services: "" },
+      pages: { pages: [] },
+      style: { style: "", brand_color: "" },
+      contact: { phone: "", contact_email: "", address: "", hours: "" },
+      features: { features: [], product_count: "" },
+      files: { files_note: "" },
+    };
+    const id = STEP_IDS[index];
+    return id ? blanks[id] : {};
   }
 
   function skip() {
@@ -311,7 +376,7 @@ export function CreateSiteWizard({
     try {
       const result = await suggestCreateStep({ data: { step, brief, attempt } });
       const id = STEP_IDS[step];
-      if (step === 13) {
+      if (id === "files") {
         setBrief((current) => ({
           ...current,
           files_note: "AI will draft the pages and use placeholder images until you send photos.",
@@ -334,33 +399,161 @@ export function CreateSiteWizard({
     }
   }
 
-  const review = step === 14;
-  const title = [
-    "Business name",
-    "What do you do?",
-    "Location",
-    "Existing website",
-    "Sites you want to emulate",
-    "Main goal",
-    "Who are your customers?",
-    "Services or products",
-    "Pages you need",
-    "Style and colors",
-    "Contact info and hours",
-    "Domain",
-    "Features",
-    "Add your files",
-  ][step];
+  const review = step === LAST_STEP;
+  const domainLabel = brief.domain.split(".")[0] ?? "";
+  const nameFromDomain = brief.domain && brief.domain_status ? domainLabel.replace(/-/g, " ").replace(/\b\w/g, (c) => c.toUpperCase()) : "";
+  const domainSummary = !brief.domain
+    ? brief.domain_choice === "later"
+      ? "Decide later"
+      : ""
+    : brief.domain_status === "selected-pending-checkout"
+      ? `${brief.domain} (selected — registration at checkout)`
+      : `${brief.domain} (yours)`;
+  const stepId = STEP_IDS[step];
+  const titles: Record<(typeof STEP_IDS)[number], string> = {
+    domain: "Do you already have a domain?",
+    business_name: "Business name",
+    industry: "What do you do?",
+    location: "Location",
+    existing_site: "Existing website",
+    emulate: "Sites you want to emulate",
+    goal: "Main goal",
+    customers: "Who are your customers?",
+    services: "Services or products",
+    pages: "Pages you need",
+    style: "Style and colors",
+    contact: "Contact info and hours",
+    features: "Features",
+    files: "Add your files",
+  };
+  const title = stepId ? titles[stepId] : "";
 
   let body: ReactNode = null;
-  if (step === 0) {
+  if (stepId === "domain") {
+    body = (
+      <div className="space-y-4" data-step="domain">
+        <div className="grid grid-cols-2 gap-2" role="radiogroup" aria-label="Do you already have a domain?">
+          {(
+            [
+              ["have", "Yes, I have one"],
+              ["find", "No, help me find one"],
+            ] as const
+          ).map(([value, label]) => (
+            <label
+              key={value}
+              className={`flex min-h-12 cursor-pointer items-center gap-3 rounded-md border px-3 text-base ${
+                brief.domain_choice === value ? "border-primary bg-primary/5 text-fg" : "border-border text-fg"
+              }`}
+            >
+              <input type="radio" name="has-domain" checked={brief.domain_choice === value} onChange={() => chooseDomainPath(value)} className="size-5 accent-primary" />
+              {label}
+            </label>
+          ))}
+        </div>
+        {brief.domain_choice === "have" ? (
+          <label className="block text-sm font-medium text-fg">
+            Your domain
+            <input
+              id="owned-domain"
+              className={fieldClass}
+              inputMode="url"
+              autoCapitalize="none"
+              autoCorrect="off"
+              spellCheck={false}
+              placeholder="yourbusiness.com"
+              value={brief.domain}
+              onChange={(event) => {
+                setDomainError("");
+                patch({ domain: event.target.value, domain_status: "owned", domain_checkout_url: "" });
+              }}
+              onBlur={() => {
+                const result = normalizeDomain(brief.domain);
+                if (result.domain) patch({ domain: result.domain });
+                else if (brief.domain.trim()) setDomainError(result.error ?? "");
+              }}
+            />
+            <span className="mt-1 block text-xs font-normal text-muted">No need for https:// or www — we'll tidy it up.</span>
+          </label>
+        ) : null}
+        {brief.domain_choice === "find" ? (
+          <div className="space-y-3">
+            <div className="flex gap-2">
+              <label className="block min-w-0 flex-1 text-sm font-medium text-fg">
+                Search for a domain
+                <input
+                  id="domain-search"
+                  className={fieldClass}
+                  autoCapitalize="none"
+                  autoCorrect="off"
+                  spellCheck={false}
+                  placeholder={brief.business_name ? brief.business_name.toLowerCase().replace(/[^a-z0-9]+/g, "") : "yourbusiness"}
+                  value={domainQuery}
+                  onChange={(event) => setDomainQuery(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") {
+                      event.preventDefault();
+                      void searchDomain();
+                    }
+                  }}
+                />
+              </label>
+              <button
+                type="button"
+                className="mt-[1.6rem] h-12 shrink-0 rounded-md bg-primary px-4 text-sm font-semibold text-white disabled:opacity-40"
+                disabled={domainChecking}
+                onClick={() => void searchDomain()}
+              >
+                {domainChecking ? "Checking…" : "Check availability"}
+              </button>
+            </div>
+            {domainResult?.note ? <p className="text-sm text-muted">{domainResult.note}</p> : null}
+            {domainResult ? (
+              <ul className="divide-y divide-border rounded-md border border-border text-sm" aria-label="Domain availability">
+                {domainResult.offers.map((offer) => {
+                  const chosen = brief.domain === offer.domain && brief.domain_status === "selected-pending-checkout";
+                  return (
+                    <li key={offer.domain} className="flex min-h-12 items-center justify-between gap-3 px-3">
+                      <span className="font-medium text-fg">{offer.domain}</span>
+                      {offer.state === "available" ? (
+                        <button
+                          type="button"
+                          aria-pressed={chosen}
+                          className={`h-9 min-w-24 rounded-md px-3 text-sm font-semibold ${chosen ? "bg-primary text-white" : "border border-primary text-primary"}`}
+                          onClick={() => chooseOffer(offer.domain)}
+                        >
+                          {chosen ? "Selected ✓" : "Select"}
+                        </button>
+                      ) : (
+                        <span className="text-muted">{offer.state === "taken" ? "Taken" : offer.state === "premium" ? "Premium, not offered" : "Unknown"}</span>
+                      )}
+                    </li>
+                  );
+                })}
+              </ul>
+            ) : null}
+            {brief.domain && brief.domain_status === "selected-pending-checkout" ? (
+              <p className="rounded-md border border-primary/40 bg-primary/5 px-3 py-2 text-sm text-fg">
+                <span className="font-semibold">{brief.domain}</span> is selected. We'll build your site for it. Registration happens at checkout — nothing has been purchased yet.
+              </p>
+            ) : null}
+          </div>
+        ) : null}
+        {domainError ? <p className="text-sm text-danger">{domainError}</p> : null}
+      </div>
+    );
+  } else if (stepId === "business_name") {
     body = (
       <label className="block text-sm font-medium text-fg">
         Business name
-        <input className={fieldClass} placeholder="Acme Dental" value={brief.business_name} onChange={(event) => patch({ business_name: event.target.value })} />
+        <input className={fieldClass} placeholder={nameFromDomain || "Acme Dental"} value={brief.business_name} onChange={(event) => patch({ business_name: event.target.value })} />
+        {nameFromDomain && !brief.business_name ? (
+          <button type="button" className="mt-2 min-h-11 rounded-full border border-primary px-4 text-sm font-medium text-primary" onClick={() => patch({ business_name: nameFromDomain })}>
+            Use “{nameFromDomain}” from your domain
+          </button>
+        ) : null}
       </label>
     );
-  } else if (step === 1) {
+  } else if (stepId === "industry") {
     body = (
       <div className="space-y-3">
         <label className="block text-sm font-medium text-fg">
@@ -376,21 +569,26 @@ export function CreateSiteWizard({
         </div>
       </div>
     );
-  } else if (step === 2) {
+  } else if (stepId === "location") {
     body = (
       <label className="block text-sm font-medium text-fg">
         Location / service area
         <input className={fieldClass} placeholder="Oklahoma City metro" value={brief.location} onChange={(event) => patch({ location: event.target.value })} />
       </label>
     );
-  } else if (step === 3) {
+  } else if (stepId === "existing_site") {
     body = (
       <label className="block text-sm font-medium text-fg">
         Existing website, if any
         <input className={fieldClass} inputMode="url" placeholder="https://" value={brief.existing_site} onChange={(event) => patch({ existing_site: event.target.value })} />
+        {brief.domain_status === "owned" && brief.domain && !brief.existing_site ? (
+          <button type="button" className="mt-2 min-h-11 rounded-full border border-primary px-4 text-sm font-medium text-primary" onClick={() => patch({ existing_site: `https://${brief.domain}` })}>
+            Use {brief.domain}
+          </button>
+        ) : null}
       </label>
     );
-  } else if (step === 4) {
+  } else if (stepId === "emulate") {
     body = (
       <div className="space-y-3 rounded-xl border-2 border-primary bg-bg p-3">
         {([1, 2, 3] as const).map((index) => {
@@ -417,7 +615,7 @@ export function CreateSiteWizard({
         <p className="text-sm text-muted">We'll use these sites for layout and style inspiration only, not to copy their words, pictures, logo, or brand.</p>
       </div>
     );
-  } else if (step === 5) {
+  } else if (stepId === "goal") {
     body = (
       <div className="flex flex-wrap gap-2">
         {GOALS.map((item) => (
@@ -427,21 +625,21 @@ export function CreateSiteWizard({
         ))}
       </div>
     );
-  } else if (step === 6) {
+  } else if (stepId === "customers") {
     body = (
       <label className="block text-sm font-medium text-fg">
         Who are your customers?
         <textarea className="mt-1.5 min-h-24 w-full rounded-md border border-border bg-bg px-3 py-2 text-base text-fg outline-none" value={brief.customers} onChange={(event) => patch({ customers: event.target.value })} />
       </label>
     );
-  } else if (step === 7) {
+  } else if (stepId === "services") {
     body = (
       <label className="block text-sm font-medium text-fg">
         Services or products
         <textarea className="mt-1.5 min-h-24 w-full rounded-md border border-border bg-bg px-3 py-2 text-base text-fg outline-none" placeholder="One per line, or paste a list" value={brief.services} onChange={(event) => patch({ services: event.target.value })} />
       </label>
     );
-  } else if (step === 8) {
+  } else if (stepId === "pages") {
     body = (
       <div className="flex flex-wrap gap-2">
         {PAGES.map((item) => (
@@ -451,7 +649,7 @@ export function CreateSiteWizard({
         ))}
       </div>
     );
-  } else if (step === 9) {
+  } else if (stepId === "style") {
     body = (
       <div className="space-y-3">
         <div className="flex flex-wrap gap-2">
@@ -470,7 +668,7 @@ export function CreateSiteWizard({
         </label>
       </div>
     );
-  } else if (step === 10) {
+  } else if (stepId === "contact") {
     body = (
       <div className="space-y-3">
         {(
@@ -488,27 +686,7 @@ export function CreateSiteWizard({
         ))}
       </div>
     );
-  } else if (step === 11) {
-    body = (
-      <div className="space-y-3">
-        {(
-          [
-            ["have", "I have one"],
-            ["find", "Help me find one"],
-            ["later", "Decide later"],
-          ] as const
-        ).map(([value, label]) => (
-          <label key={value} className="flex min-h-11 items-center gap-3 text-base text-fg">
-            <input type="radio" checked={brief.domain_choice === value} onChange={() => patch({ domain_choice: value })} className="size-5 accent-primary" />
-            {label}
-          </label>
-        ))}
-        {brief.domain_choice === "have" ? (
-          <input className={fieldClass} placeholder="yourbusiness.com" value={brief.domain} onChange={(event) => patch({ domain: event.target.value })} />
-        ) : null}
-      </div>
-    );
-  } else if (step === 12) {
+  } else if (stepId === "features") {
     body = (
       <div className="space-y-3">
         <div className="flex flex-wrap gap-2">
@@ -526,7 +704,7 @@ export function CreateSiteWizard({
         ) : null}
       </div>
     );
-  } else if (step === 13) {
+  } else if (stepId === "files") {
     body = (
       <div className="space-y-4">
         <FileSlot label="Logo" accept=".svg,.pdf,.png,.jpg,.jpeg" hint="SVG, PDF, PNG, or JPG." files={files.logo ? [files.logo] : []} onAdd={(next) => setFiles((current) => ({ ...current, logo: next[0] ?? current.logo }))} onRemove={() => setFiles((current) => ({ ...current, logo: null }))} />
@@ -553,20 +731,20 @@ export function CreateSiteWizard({
   }
 
   const rows: { label: string; value: string; edit: number }[] = [
-    { label: "Business name", value: brief.business_name, edit: 0 },
-    { label: "What you do", value: [brief.industry, brief.what].filter(Boolean).join(" — "), edit: 1 },
-    { label: "Location", value: brief.location, edit: 2 },
-    { label: "Existing site", value: brief.existing_site, edit: 3 },
-    { label: "Emulate", value: [brief.emulate_url_1, brief.emulate_url_2, brief.emulate_url_3].filter(Boolean).join(", "), edit: 4 },
-    { label: "Likes", value: brief.emulate_likes.join(", "), edit: 4 },
-    { label: "Goal", value: brief.goal, edit: 5 },
-    { label: "Customers", value: brief.customers, edit: 6 },
-    { label: "Services", value: brief.services, edit: 7 },
-    { label: "Pages", value: (brief.pages.length ? brief.pages : ["Home", "About", "Services", "Contact"]).join(", "), edit: 8 },
-    { label: "Style", value: [brief.style, brief.brand_color].filter(Boolean).join(" "), edit: 9 },
-    { label: "Contact", value: [brief.phone, brief.contact_email, brief.address, brief.hours].filter(Boolean).join(" · "), edit: 10 },
-    { label: "Domain", value: brief.domain_choice === "have" ? brief.domain : brief.domain_choice, edit: 11 },
-    { label: "Features", value: [brief.features.join(", "), brief.product_count].filter(Boolean).join(" · "), edit: 12 },
+    { label: "Domain", value: domainSummary, edit: stepIndex("domain") },
+    { label: "Business name", value: brief.business_name, edit: stepIndex("business_name") },
+    { label: "What you do", value: [brief.industry, brief.what].filter(Boolean).join(" — "), edit: stepIndex("industry") },
+    { label: "Location", value: brief.location, edit: stepIndex("location") },
+    { label: "Existing site", value: brief.existing_site, edit: stepIndex("existing_site") },
+    { label: "Emulate", value: [brief.emulate_url_1, brief.emulate_url_2, brief.emulate_url_3].filter(Boolean).join(", "), edit: stepIndex("emulate") },
+    { label: "Likes", value: brief.emulate_likes.join(", "), edit: stepIndex("emulate") },
+    { label: "Goal", value: brief.goal, edit: stepIndex("goal") },
+    { label: "Customers", value: brief.customers, edit: stepIndex("customers") },
+    { label: "Services", value: brief.services, edit: stepIndex("services") },
+    { label: "Pages", value: (brief.pages.length ? brief.pages : ["Home", "About", "Services", "Contact"]).join(", "), edit: stepIndex("pages") },
+    { label: "Style", value: [brief.style, brief.brand_color].filter(Boolean).join(" "), edit: stepIndex("style") },
+    { label: "Contact", value: [brief.phone, brief.contact_email, brief.address, brief.hours].filter(Boolean).join(" · "), edit: stepIndex("contact") },
+    { label: "Features", value: [brief.features.join(", "), brief.product_count].filter(Boolean).join(" · "), edit: stepIndex("features") },
     {
       label: "Files",
       value: [files.logo, files.brand, ...files.photos, files.copy, files.testimonials, files.licenses, files.video]
@@ -575,7 +753,7 @@ export function CreateSiteWizard({
         .concat(brief.files_link ? [brief.files_link] : [])
         .concat(brief.files_note ? [brief.files_note] : [])
         .join(", "),
-      edit: 13,
+      edit: stepIndex("files"),
     },
   ];
 
@@ -622,7 +800,7 @@ export function CreateSiteWizard({
           </button>
           {error ? <p className="text-sm text-danger">{error}</p> : null}
           {mailed ? <p className="text-sm text-muted">{mailed}</p> : null}
-          <button type="button" className="h-12 text-sm font-medium text-fg" onClick={() => setStep(13)}>
+          <button type="button" className="h-12 text-sm font-medium text-fg" onClick={() => setStep(stepIndex("files"))}>
             Back
           </button>
         </div>
@@ -630,14 +808,25 @@ export function CreateSiteWizard({
         <div className="space-y-4">
           <div>
             <div className="mb-2 flex items-center justify-between text-sm text-muted">
-              <span>Step {step + 1} of 14</span>
+              <span>Step {step + 1} of {LAST_STEP}</span>
               <span>{title}</span>
             </div>
             <div className="h-2 overflow-hidden rounded-full bg-border">
-              <div className="h-full bg-primary" style={{ width: `${((step + 1) / 14) * 100}%` }} />
+              <div className="h-full bg-primary" style={{ width: `${((step + 1) / LAST_STEP) * 100}%` }} />
             </div>
           </div>
           <h2 className="font-display text-2xl text-ink">{title}</h2>
+          {stepId !== "domain" && brief.domain ? (
+            <p className="inline-flex flex-wrap items-center gap-2 rounded-full border border-border bg-bg px-3 py-1 text-sm text-muted" data-domain-badge>
+              <span>
+                Domain: <span className="font-semibold text-fg">{brief.domain}</span>
+              </span>
+              <span className="text-xs">{brief.domain_status === "selected-pending-checkout" ? "Selected · registration at checkout" : "Yours"}</span>
+              <button type="button" className="text-xs text-primary" onClick={() => setStep(stepIndex("domain"))}>
+                Change
+              </button>
+            </p>
+          ) : null}
           {body}
           {choices.length ? (
             <div className="flex flex-wrap gap-2">
@@ -646,7 +835,7 @@ export function CreateSiteWizard({
                   key={choice}
                   type="button"
                   className="min-h-11 rounded-full border border-primary px-4 text-sm font-medium text-primary"
-                  onClick={() => (step === 0 ? patch({ business_name: choice }) : patch({ domain: choice }))}
+                  onClick={() => (stepId === "domain" ? void searchDomain(choice) : patch({ business_name: choice }))}
                 >
                   {choice}
                 </button>
@@ -654,13 +843,13 @@ export function CreateSiteWizard({
             </div>
           ) : null}
           {aiNote ? <p className="text-sm text-muted">{aiNote}</p> : null}
-          {brief.files_note && step === 13 ? <p className="text-sm text-muted">{brief.files_note}</p> : null}
+          {brief.files_note && stepId === "files" ? <p className="text-sm text-muted">{brief.files_note}</p> : null}
           {suggestError ? <p className="text-sm text-danger">{suggestError}</p> : null}
           <div className="grid grid-cols-2 gap-2">
             <button type="button" className="h-12 rounded-md border border-border text-sm font-medium text-fg disabled:opacity-40" disabled={step === 0 || suggesting} onClick={() => setStep((current) => Math.max(0, current - 1))}>
               Back
             </button>
-            <button type="button" className="h-12 rounded-md bg-accent text-sm font-semibold text-ink disabled:opacity-40" disabled={suggesting} onClick={forward}>
+            <button type="button" className="h-12 rounded-md bg-accent text-sm font-semibold text-ink disabled:opacity-40" disabled={suggesting} onClick={onContinue}>
               Continue
             </button>
             <button type="button" className="h-12 rounded-md border border-border text-sm font-medium text-fg disabled:opacity-40" disabled={suggesting} onClick={skip}>
