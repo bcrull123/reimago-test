@@ -11,8 +11,11 @@ Visitor enters a URL (or finishes the Create a New Site wizard) and sees, step b
    - generates only the missing hero/feature photos. Generated images never contain text, logos or the business name;
    - composes its homepage from the section library.
 
-   The visitor gets **three picker cards**, each with a live thumbnail, name, mood, swatches and fonts, plus "Preview" and "Use this look" buttons.
-4. **Building pages…** and **Polishing the homepage…** (after "Use this look"): one request builds the remaining pages (and service photos if needed). In parallel it runs a **critique-and-revise pass**:
+   The visitor gets **three picker cards** under a large "Choose your favorite look" banner. Each card has a live thumbnail, name, mood, swatches and fonts.
+   - The main button on each card is a large, full-width **Choose this look**.
+   - **Preview** is a smaller secondary button.
+   - The full preview below the cards has a sticky **Choose this look** bar.
+4. **Building pages…** and **Polishing the homepage…** (after "Choose this look"): one request builds the remaining pages (and service photos if needed). In parallel it runs a **critique-and-revise pass**:
    - it screenshots the homepage with headless Chrome when available, and an art-director AI critiques the screenshot (or the section list) and revises once;
    - the revision is validated like any other output, and the original is kept if the revision is unusable.
 
@@ -77,17 +80,40 @@ Details:
 
 This applies to the header and footer of every look and page.
 
-The Formcarry lead still carries `preview_url` (the first look) and `preview_pages`, which lists all three look links.
+### When the form is sent
+
+**Nothing is sent when the looks appear.** The email, website and note are collected up front and held in memory.
+
+**When the visitor presses Choose this look**, the app does three things in order:
+1. Builds every page of the chosen look.
+2. Takes a picture of that look's homepage.
+3. Sends Formcarry **once**.
+
+The overlay reads "Building your site and preparing your picture…". It then switches to a green **"Sent! Check your email."** banner.
+
+**One submission per preview.**
+- The send is claimed before the first await, so double clicks are ignored.
+- Choosing a different look later builds it, but does not send again.
+- If Formcarry fails, the visitor can press Choose this look again to resend.
+- If the visitor leaves without choosing, nothing is sent. Bob accepted this.
+
+**What Formcarry receives:**
+- `preview_url`: the chosen look's full site.
+- `preview_pages`: that site's pages.
+- `chosen_look`: the name and style, for example `Front Page (Bold photo-led)`.
+- `picture`, `picture_url` or `picture_error`: see below.
+
+**The Create New Site wizard** follows the same rule when it shows looks. If no looks could be built, it sends the brief right away, as before, without a picture.
 
 ### The lead picture (Formcarry `picture`)
 
-The lead email also gets a PNG of the homepage, as the old flow did. The form is sent when the three looks appear, before the visitor picks one, so the picture shows the first look, the same one `preview_url` points at. The Create New Site wizard does the same when its preview was built.
+The lead email also gets a PNG of the **chosen** look's homepage, as the old flow did. It is taken after the look is built, so it shows the polished homepage.
 
 - **How it's made.** The browser does the capture; no server-side Chrome is used, so it works on Vercel.
   - The page is loaded in a hidden, same-origin, unsandboxed iframe at 1280px wide (`src/lib/preview-picture.ts`). The visible preview iframes are sandboxed, so their DOM can't be read.
   - It waits for images and fonts, and freezes animations so the finished state shows.
   - `modern-screenshot` then draws the top of the page to PNG at 1280×(page height, at most 2400). If that comes out at 9.5 MB or more, it draws 1280×720 instead.
-  - The visitor sees "Preparing your preview image…" while this runs, usually 1–3 seconds. It gives up after 30 seconds.
+  - The overlay shows "Preparing your picture…" while this runs, usually 1–3 seconds. It gives up after 30 seconds.
 - **No tainted canvas.** Preview photos are already same-origin (`/made/$id/img/…`). Anything the page still hotlinks, mainly SVG logos, is fetched through `/made/$id/img/remote?u=…` (`remote-image.server.ts`). Google Fonts are CORS-enabled and embedded by the library.
   - The proxy only fetches URLs that the stored homepage itself shows as `<img src>`. It is not an open proxy.
   - Fetches go through `fetchLogoFile`, which refuses private hosts and caps files at 2 MB.
@@ -211,6 +237,12 @@ XAI_API_KEY=fake AI_BASE_URL=http://localhost:9999/v1 IMAGE_BASE_URL=http://loca
 CHROME_PATH=/usr/bin/google-chrome node scripts/live-preview-e2e.mjs https://www.morganplumbingokc.com/ live-preview-shots/morgan-ai 1
 ```
 
-To simulate real-API failures with the fake server, set `FAKE_FAIL=slow|length|badjson|reject-reasoning` (add `FAKE_FAIL_ALL=1` to make the fallback model fail too). `scripts/live-preview-retry-e2e.mjs` records each card's error and can click "Retry with AI". `FAKE_SHAPE=alt` answers in drifted shapes (type under `section`/`component`, CamelCase names, nested `props`). `scripts/create-wizard-domain-e2e.mjs` screenshots the domain-first wizard steps. `scripts/preview-picture-e2e.mjs reimagine|wizard <url|-> <outDir>` submits the form, pulls `picture` out of the intercepted Formcarry body and saves it. Set `BREAK_CANVAS=1` to check the `picture_error` path.
+To simulate real-API failures with the fake server, set `FAKE_FAIL=slow|length|badjson|reject-reasoning` (add `FAKE_FAIL_ALL=1` to make the fallback model fail too). `scripts/live-preview-retry-e2e.mjs` records each card's error and can click "Retry with AI". `FAKE_SHAPE=alt` answers in drifted shapes (type under `section`/`component`, CamelCase names, nested `props`). `scripts/create-wizard-domain-e2e.mjs` screenshots the domain-first wizard steps. `scripts/preview-picture-e2e.mjs reimagine|wizard <url|-> <outDir> [lookIndex]` does the following:
+- submits the form and checks that nothing reaches Formcarry before a look is chosen;
+- double-clicks **Choose this look** on the given look (default 1, the second);
+- checks that exactly one request is sent;
+- saves the `picture` from the intercepted body.
+
+Set `BREAK_CANVAS=1` to check the `picture_error` path.
 
 The last argument picks which look to choose (0–2); `APP_URL` points the script at another port. The e2e scripts intercept Formcarry, so no real lead is sent. The fake AI server deliberately returns an invented phone, email, stats and review so you can see the validators remove them.
