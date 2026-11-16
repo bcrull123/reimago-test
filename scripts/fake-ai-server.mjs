@@ -181,6 +181,21 @@ function plan(facts) {
 }
 
 // ---------------------------------------------------------------- sections
+
+function altShape(out) {
+  const camel = (t) => t.replace(/(^|-)([a-z])/g, (_, __, c) => c.toUpperCase());
+  return {
+    page: {
+      sections: out.sections.map((s, i) => {
+        const { type, heading, text, cta, items, ...rest } = s;
+        const props = { ...rest, headline: heading, body: text, button: cta ? { text: cta.label, href: `/${cta.page}` } : undefined, cards: items };
+        if (i % 3 === 0) return { section: type, props };
+        if (i % 3 === 1) return { component: camel(type), content: props };
+        return { [type]: props };
+      }),
+    },
+  };
+}
 const BLURBS = [
   "Tell us what's going on and we'll walk you through the options before any work starts.",
   "Careful, tidy work with updates while we're on the job.",
@@ -408,6 +423,9 @@ http
           out = sectionsFor(system, u);
           if (isFood(u.facts ?? u)) out = foodCopy(out);
           log("page", u.page?.slug, out.sections.map((s) => s.type).join(","));
+          // FAKE_SHAPE=alt answers in shapes real models drift into (type under "section"/"component",
+          // CamelCase names, fields nested under "props", "headline"/"button" aliases) to exercise the tolerant reader.
+          if (process.env.FAKE_SHAPE === "alt") out = altShape(out);
         } else if (system.includes("senior art director reviewing")) {
           await sleep(3000);
           out = critique(user, hasImage(userContent));

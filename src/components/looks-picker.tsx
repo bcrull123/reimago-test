@@ -133,6 +133,10 @@ export function LooksPicker({
                       </button>
                     ) : null}
                   </div>
+                ) : look.aiWarning ? (
+                  <p className="text-xs leading-relaxed text-muted" data-ai-warning>
+                    {look.aiWarning}
+                  </p>
                 ) : null}
                 <div className="mt-auto flex gap-2 pt-1">
                   <button

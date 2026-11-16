@@ -106,7 +106,7 @@ export const previewLook = createServerFn({ method: "POST" })
       if (rawPlan && typeof rawPlan === "object" && rawPlan.mock) plan.mock = true;
       const direction = normalizeDirection(data.direction, data.index, data.facts);
       const id = newPageId();
-      const { site, ai, aiError, generated, photos } = await buildLook(id, data.facts, plan, direction, data.index);
+      const { site, ai, aiError, aiWarning, generated, photos } = await buildLook(id, data.facts, plan, direction, data.index);
       await saveSite(site);
       const look: LookInfo = {
         id,
@@ -120,6 +120,7 @@ export const previewLook = createServerFn({ method: "POST" })
         images: { generated, photos },
         mock: site.mock,
         aiError: ai || site.mock ? undefined : aiError ?? "AI is not configured on this server",
+        aiWarning,
       };
       return { ok: true, look, note: look.aiError ? aiFallbackNote(look.aiError) : undefined };
     } catch (error) {
