@@ -49,13 +49,27 @@ export function clampFacts(input: unknown): SiteFacts {
     notes: str(f.notes, 800),
     brief: str(f.brief, 4000) || undefined,
     note: str(f.note, 400) || undefined,
+    inspiration: Array.isArray(f.inspiration)
+      ? f.inspiration.slice(0, 3).map((raw) => {
+          const i = (raw ?? {}) as Record<string, unknown>;
+          return {
+            url: str(i.url, 300),
+            title: str(i.title, 120),
+            description: str(i.description, 240),
+            colors: strs(i.colors, 4, 7).filter((c) => /^#[0-9a-fA-F]{6}$/.test(c)),
+            fonts: strs(i.fonts, 4, 40),
+            headings: strs(i.headings, 6, 140),
+            likes: str(i.likes, 300),
+          };
+        })
+      : undefined,
   };
 }
 
 export function clampPlanInput(input: unknown): unknown {
   // The plan is fully re-normalized server-side (normalizePlan); just cap the size here.
   const json = JSON.stringify(input ?? null);
-  if (json.length > 40_000) throw new Error("The site plan is too large.");
+  if (json.length > 40_000) throw new Error("The request is too large.");
   return input;
 }
 

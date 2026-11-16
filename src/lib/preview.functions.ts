@@ -1,7 +1,26 @@
 import { createServerFn } from "@tanstack/react-start";
 import { clampFacts, clampPlanInput } from "@/lib/preview/clamp";
 import type { ReimagineOk } from "@/lib/reimagine-types";
-import type { PreviewStepResult, SiteFacts, SitePlan } from "@/lib/preview/types";
+import type { DesignDirection, LookInfo, PreviewStepResult, SiteFacts, SitePlan } from "@/lib/preview/types";
+
+/*
+ * The live preview runs as short browser-orchestrated steps instead of one long
+ * request, so each serverless call stays well under host time limits and the
+ * visitor sees real progress:
+ *   previewRead / previewFromBrief  → facts            ("Reading your site…")
+ *   previewDirections               → plan + 3 looks   ("Dreaming up looks…")
+ *   previewLook  x3 (parallel)      → homepage per look ("Painting images…")
+ *   previewFinish (chosen look)     → all pages + polished homepage ("Building pages… Polishing…")
+ * Facts, plan and design are stored with each look server-side, so the finish
+ * step only needs the look id and never trusts browser-edited data.
+ */
+
+const variationOf = (value: unknown) => (typeof value === "number" ? Math.max(0, Math.min(20, Math.floor(value))) : 0);
+
+async function limited(prefix: string, max: number): Promise<boolean> {
+  const { rateLimited, requestIp } = await import("./reimagine.server");
+  return rateLimited(`${prefix}:${requestIp()}`, max);
+}
 
 /** Step 1 — read the visitor's site (homepage + up to 8 linked pages). */
 export const previewRead = createServerFn({ method: "POST" })
@@ -28,7 +47,7 @@ export const previewRead = createServerFn({ method: "POST" })
     }
   });
 
-/** Step 1 for the Create a New Site wizard — facts come from the brief, nothing is scraped. */
+/** Step 1 for the Create a New Site wizard — facts come from the brief; "sites to emulate" are lightly scanned. */
 export const previewFromBrief = createServerFn({ method: "POST" })
   .validator((input: { brief?: Record<string, unknown> }) => {
     if (!input?.brief || typeof input.brief !== "object") throw new Error("The brief is missing.");
@@ -39,96 +58,102 @@ export const previewFromBrief = createServerFn({ method: "POST" })
     if (rateLimited(requestIp())) {
       return { ok: false, error: "Too many drafts from this network in the last hour. Try again shortly." };
     }
-    const { factsFromBrief } = await import("./preview/scrape.server");
-    return { ok: true, facts: factsFromBrief(data.brief) };
+    const { factsFromBrief, scanInspiration } = await import("./preview/scrape.server");
+    const facts = factsFromBrief(data.brief);
+    const s = (key: string) => (typeof data.brief[key] === "string" ? (data.brief[key] as string).trim() : "");
+    const likes = [Array.isArray(data.brief.emulate_likes) ? (data.brief.emulate_likes as unknown[]).map(String).join(", ") : "", s("emulate_note")]
+      .filter(Boolean)
+      .join(". ");
+    const urls = [s("emulate_url_1"), s("emulate_url_2"), s("emulate_url_3")].filter(Boolean);
+    if (urls.length) facts.inspiration = await scanInspiration(urls, likes);
+    else if (likes) facts.inspiration = [{ url: "", title: "", description: "", colors: [], fonts: [], headings: [], likes: likes.slice(0, 300) }];
+    return { ok: true, facts };
   });
 
-/** Step 2 — one AI call returns the site plan (pages, nav, palette, fonts). */
-export const previewPlan = createServerFn({ method: "POST" })
-  .validator((input: { facts?: unknown; variation?: number }) => ({
-    facts: clampFacts(input?.facts),
-    variation: typeof input?.variation === "number" ? Math.max(0, Math.min(20, Math.floor(input.variation))) : 0,
-  }))
-  .handler(async ({ data }): Promise<PreviewStepResult<{ plan: SitePlan; note?: string }>> => {
+/** Step 2 — plan the pages and dream up three design directions (two AI calls in parallel). */
+export const previewDirections = createServerFn({ method: "POST" })
+  .validator((input: { facts?: unknown; variation?: number }) => ({ facts: clampFacts(input?.facts), variation: variationOf(input?.variation) }))
+  .handler(async ({ data }): Promise<PreviewStepResult<{ plan: SitePlan; directions: DesignDirection[]; note?: string }>> => {
+    if (await limited("dir", 20)) return { ok: false, error: "Too many previews from this network in the last hour. Try again shortly." };
     try {
-      const { planSite } = await import("./preview/builder.server");
-      const { plan, note } = await planSite(data.facts, data.variation);
-      return { ok: true, plan, note };
+      const { planSite, directionsFor } = await import("./preview/builder.server");
+      const [planned, looks] = await Promise.all([planSite(data.facts, data.variation), directionsFor(data.facts, data.variation)]);
+      const note = [planned.note, looks.note].filter(Boolean).join(" ") || undefined;
+      return { ok: true, plan: planned.plan, directions: looks.directions, note };
     } catch (error) {
-      return { ok: false, error: error instanceof Error ? error.message : "The site could not be planned." };
+      return { ok: false, error: error instanceof Error ? error.message : "The looks could not be planned." };
     }
   });
 
-/** Step 3 — write every page in parallel, sanitize, save, and return the live preview links. */
-export const previewBuild = createServerFn({ method: "POST" })
-  .validator((input: { facts?: unknown; plan?: unknown; variation?: number }) => ({
+/** Step 3 — build one look: its images and its homepage. The browser runs the three looks in parallel. */
+export const previewLook = createServerFn({ method: "POST" })
+  .validator((input: { facts?: unknown; plan?: unknown; direction?: unknown; index?: number; variation?: number }) => ({
     facts: clampFacts(input?.facts),
     plan: clampPlanInput(input?.plan),
-    variation: typeof input?.variation === "number" ? Math.max(0, Math.min(20, Math.floor(input.variation))) : 0,
+    direction: clampPlanInput(input?.direction),
+    index: typeof input?.index === "number" ? Math.max(0, Math.min(2, Math.floor(input.index))) : 0,
+    variation: variationOf(input?.variation),
   }))
-  .handler(async ({ data }): Promise<PreviewStepResult<{ result: ReimagineOk }>> => {
+  .handler(async ({ data }): Promise<PreviewStepResult<{ look: LookInfo; note?: string }>> => {
+    if (await limited("look", 45)) return { ok: false, error: "Too many previews from this network in the last hour. Try again shortly." };
     try {
-      const { normalizePlan, buildSite } = await import("./preview/builder.server");
+      const { normalizePlan, buildLook } = await import("./preview/builder.server");
+      const { normalizeDirection } = await import("./preview/design");
       const { newPageId, saveSite } = await import("./pages.server");
       const { publicBase } = await import("./publish.server");
-      const { isMockMode } = await import("./ai-provider.server");
       const rawPlan = data.plan as SitePlan | null;
       const plan = normalizePlan(rawPlan, data.facts, data.variation);
       if (rawPlan && typeof rawPlan === "object" && rawPlan.mock) plan.mock = true;
+      const direction = normalizeDirection(data.direction, data.index, data.facts);
       const id = newPageId();
-      const { site, mock, note } = await buildSite(id, data.facts, plan, data.variation);
+      const { site, ai, generated, photos } = await buildLook(id, data.facts, plan, direction, data.index);
       await saveSite(site);
-      const base = `${publicBase()}/made/${id}`;
-      const facts = data.facts;
-      const result: ReimagineOk = {
-        ok: true,
-        source: mock ? "crawl" : "grok",
-        live: facts.mode === "reimagine" && !facts.note,
-        finalUrl: facts.sourceUrl,
-        host: facts.host,
-        foundTitle: facts.name,
-        foundDescription: facts.description,
-        diagnosis: plan.summary,
-        honored: plan.changes,
-        draft: {
-          name: facts.name,
-          kicker: plan.tagline,
-          headline: plan.tagline,
-          subhead: facts.description,
-          action: plan.cta.label,
-          nav: site.pages.map((p) => p.navLabel),
-          palette: "harbor",
-          points: facts.services.slice(0, 3).map((s) => ({ title: s, body: "" })),
-          bandTitle: "",
-          bandBody: "",
-          close: "",
-          logo: facts.logo || undefined,
-          template: "yours",
-          change: facts.notes || undefined,
-        },
-        layout: {
-          submitted: facts.sourceUrl,
-          url: facts.sourceUrl,
-          title: facts.name,
-          description: facts.description,
-          nav: facts.nav.map((n) => n.label).slice(0, 8),
-          headings: facts.pages.flatMap((p) => p.headings).slice(0, 16),
-          text: facts.pages.map((p) => p.text).join("\n").slice(0, 2500),
-        },
-        note: [facts.note, note, isMockMode() ? "Mock mode (PREVIEW_MOCK=1): this preview was assembled without AI." : ""]
-          .filter(Boolean)
-          .join(" ") || undefined,
-        pageUrl: base,
-        preview: {
-          id,
-          url: base,
-          mock: site.mock,
-          pages: site.pages.map((p) => ({ slug: p.slug, title: p.navLabel || p.title, url: p.slug === "home" ? base : `${base}/${p.slug}` })),
-        },
+      const look: LookInfo = {
+        id,
+        url: `${publicBase()}/made/${id}`,
+        index: data.index,
+        name: direction.name,
+        mood: direction.mood,
+        archetype: direction.archetype,
+        palette: direction.palette,
+        fonts: direction.fonts,
+        images: { generated, photos },
+        mock: site.mock,
       };
-      return { ok: true, result };
+      return { ok: true, look, note: ai || site.mock ? undefined : "The homepage was assembled from the section library because the AI did not answer." };
     } catch (error) {
-      console.error("[preview] build failed", error instanceof Error ? error.message : error);
+      console.error("[preview] look failed", error instanceof Error ? error.message : error);
+      return { ok: false, error: error instanceof Error ? error.message : "This look could not be built." };
+    }
+  });
+
+/** Step 4 — the visitor picked a look: build the remaining pages and polish the homepage. */
+export const previewFinish = createServerFn({ method: "POST" })
+  .validator((input: { id?: string }) => {
+    const id = typeof input?.id === "string" ? input.id.trim() : "";
+    if (!/^[a-f0-9]{16}$/.test(id)) throw new Error("That look was not found. Run the site again.");
+    return { id };
+  })
+  .handler(async ({ data }): Promise<PreviewStepResult<{ result: ReimagineOk }>> => {
+    try {
+      const { readSite, saveSite } = await import("./pages.server");
+      const { publicBase } = await import("./publish.server");
+      const stored = await readSite(data.id);
+      if (!stored || stored.version !== 3) return { ok: false, error: "That look was not found on this server. Run the site again." };
+      let site = stored;
+      let note: string | undefined;
+      if (!site.finished) {
+        if (await limited("finish", 20)) return { ok: false, error: "Too many previews from this network in the last hour. Try again shortly." };
+        const { finishSite } = await import("./preview/builder.server");
+        const finished = await finishSite(site);
+        site = finished.site;
+        note = finished.note;
+        await saveSite(site);
+      }
+      const { resultFor } = await import("./preview/result");
+      return { ok: true, result: resultFor(site, `${publicBase()}/made/${site.id}`, note) };
+    } catch (error) {
+      console.error("[preview] finish failed", error instanceof Error ? error.message : error);
       return { ok: false, error: error instanceof Error ? error.message : "The preview could not be built." };
     }
   });

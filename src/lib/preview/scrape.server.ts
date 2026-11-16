@@ -30,7 +30,7 @@ const PAGE_TIMEOUT_MS = 12_000;
 const BINARY_EXT =
   /\.(pdf|jpe?g|png|gif|webp|avif|svg|ico|bmp|tiff?|zip|rar|7z|gz|tar|mp4|mov|avi|webm|mp3|wav|m4a|docx?|xlsx?|pptx?|csv|ics|xml|json|txt|css|js|woff2?|ttf|eot|exe|dmg|apk)$/i;
 const SKIP_PATH =
-  /\/(wp-admin|wp-login|wp-json|feed|cart|checkout|my-account|account|login|signin|sign-in|register|logout|tag|category|author|search|privacy|terms|cookie|sitemap|cdn-cgi)(\/|$)|\/page\/\d+/i;
+  /\/(wp-admin|wp-login|wp-json|feed|cart|checkout|my-account|account|login|signin|sign-in|register|logout|tag|category|author|search|privacy[a-z-]*|terms[a-z-]*|cookies?[a-z-]*|legal|sitemap|cdn-cgi)(\/|$)|\/page\/\d+/i;
 const KEYWORDS: [RegExp, number][] = [
   [/about|our-story|who-we-are|history/i, 5],
   [/service|what-we-do|solutions|treatments|practice-areas/i, 5],
@@ -392,6 +392,17 @@ function servicesOf(doc: Doc): string[] {
   return out;
 }
 
+/** Service names are usually Title Case; sentence-case list items are often symptoms or steps. */
+function isTitleCase(text: string): boolean {
+  const words = text.split(/\s+/).filter((w) => /^[A-Za-z]{4,}$/.test(w) && !/^(with|from|into|over|your|that|this)$/i.test(w));
+  return words.length > 0 && words.every((w) => /^[A-Z]/.test(w));
+}
+
+function preferTitleCase(list: string[]): string[] {
+  const titled = list.filter(isTitleCase);
+  return titled.length >= 3 ? titled : list;
+}
+
 function clipList(list: string[], max: number, each = 200): string[] {
   return [...new Set(list.map((item) => item.replace(/\s+/g, " ").trim().slice(0, each)).filter(Boolean))].slice(0, max);
 }
@@ -497,19 +508,26 @@ export async function scrapeSite(rawUrl: string, notes: string): Promise<SiteFac
   const aboutDoc = pageOf(/about|our-story|who-we-are|history/i);
   const aboutText = (aboutDoc ? paragraphs(aboutDoc.html, 60) : paragraphs(home.html, 80)).slice(0, 4).join("\n\n").slice(0, 1400);
 
-  const serviceDocs = docs.filter((doc) => /service|what-we-do|menu|product|treatment|practice|solutions/i.test(new URL(doc.url).pathname));
+  const serviceDocs = docs.filter((doc) => {
+    const path = new URL(doc.url).pathname;
+    // "terms-of-service" and friends are legal pages, not service lists.
+    return /service|what-we-do|menu|product|treatment|practice|solutions/i.test(path) && !/terms|privacy|policy|legal|cookie|accessibility|disclaimer/i.test(path);
+  });
   const serviceCandidates = [
     ...ld.flatMap((f) => f.offers),
     ...serviceDocs.flatMap(servicesOf),
     ...(serviceDocs.length ? [] : headingsOf(home.html).filter((h) => h.length <= 50)),
   ];
   const navLabels = new Set(nav.map((n) => n.label.toLowerCase()));
-  const services = clipList(
+  const services = preferTitleCase(clipList(
     serviceCandidates.filter(
       (s) =>
         !navLabels.has(s.toLowerCase()) &&
         !MENU_NOISE.test(s) &&
-        !/^(read more|learn more|call|contact|view|book|menu|get|give|need|signs?|why|how|what|our|we|faq)\b/i.test(s) &&
+        !/^(read more|learn more|call|contact|view|book|menu|get|give|need|signs?|why|how|what|our|we|faq|other|more|all|a|an|the|if|when|your|you|shut|turn)\b/i.test(s) &&
+        s.split(/\s+/).length <= 7 &&
+        !/^(home|welcome\b.*|.*\bchapter \d+.*)$/i.test(s) &&
+        !/\b(if you|you can|for no reason|is off|jumps)\b/i.test(s) &&
         !/[?!]|license|#\d|copyright|©|reserved|hours|estimate|reviews?|testimonial|follow us|areas? (we )?serve/i.test(s) &&
         !ADDRESS.test(s) &&
         !PHONE.test(s) &&
@@ -517,9 +535,9 @@ export async function scrapeSite(rawUrl: string, notes: string): Promise<SiteFac
         !/\b\d{1,2}(:\d{2})?\s*(am|pm)\b|days a week|24\/7/i.test(s) &&
         s.toLowerCase() !== name.toLowerCase(),
     ),
-    12,
+    16,
     80,
-  );
+  )).slice(0, 12);
 
   const testimonials = [...ld.flatMap((f) => f.reviews), ...docs.flatMap((doc) => testimonialsOf(doc.html))]
     .filter((t, i, list) => list.findIndex((x) => x.quote === t.quote) === i)
@@ -669,4 +687,42 @@ export function factsFromBrief(brief: Record<string, unknown>): SiteFacts {
     notes: [s("style") && `Style: ${s("style")}`, s("anything_else")].filter(Boolean).join(". ").slice(0, 800),
     brief: brief_text.slice(0, 4000),
   };
+}
+
+/**
+ * Lightly scan "sites to emulate" from the wizard: title, description, colors,
+ * fonts and a few headings — just enough for the art director to borrow a vibe.
+ * Homepage only, short timeouts, failures are skipped.
+ */
+export async function scanInspiration(urls: string[], likes: string): Promise<SiteFacts["inspiration"]> {
+  const scans = await Promise.all(
+    urls.slice(0, 3).map(async (raw) => {
+      try {
+        const start = normalizeInput(raw);
+        const page = await fetchPage(start, 9000);
+        const html = page.html;
+        const fonts = new Set<string>();
+        for (const m of html.matchAll(/fonts\.googleapis\.com\/css2?\?([^"'\s>]+)/gi)) {
+          for (const fam of decode(m[1]!).matchAll(/family=([^:&]+)/g)) fonts.add(decodeURIComponent(fam[1]!.replace(/\+/g, " ")).trim());
+        }
+        for (const m of html.matchAll(/font-family\s*:\s*["']?([A-Za-z][A-Za-z0-9 -]{2,40})/gi)) {
+          const name = m[1]!.trim();
+          if (!/^(inherit|initial|sans-serif|serif|monospace|system-ui|-apple-system|arial|helvetica|times)/i.test(name)) fonts.add(name);
+        }
+        const inline = [...html.matchAll(/<style[^>]*>([\s\S]*?)<\/style>/gi)].map((m) => m[1] ?? "").join("\n").slice(0, 200_000);
+        return {
+          url: page.url,
+          title: cleanText(html.match(/<title[^>]*>([\s\S]*?)<\/title>/i)?.[1] ?? "").slice(0, 120),
+          description: cleanText(meta(html, "description") || meta(html, "og:description")).slice(0, 240),
+          colors: brandColors([inline], meta(html, "theme-color")),
+          fonts: [...fonts].slice(0, 4),
+          headings: headingsOf(html).slice(0, 6),
+          likes: likes.slice(0, 300),
+        };
+      } catch {
+        return { url: raw.slice(0, 200), title: "", description: "", colors: [], fonts: [], headings: [], likes: likes.slice(0, 300) };
+      }
+    }),
+  );
+  return scans;
 }

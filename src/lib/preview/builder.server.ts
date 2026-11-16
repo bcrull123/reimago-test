@@ -1,32 +1,33 @@
 /**
- * Steps 2 and 3 of the live preview: plan the site, then write every page.
+ * The live preview pipeline after the site has been read:
+ *   1. planSite         — pages + nav + CTA (one AI call)
+ *   2. directionsFor    — three bold design directions ("looks"), one AI call, in parallel with 1
+ *   3. buildLook        — per look: images (real photos first, generated for gaps) + homepage sections
+ *   4. finishSite       — for the chosen look: remaining pages + service images + critique/revise of the homepage
  *
  * AI calls go through src/lib/ai-provider.server.ts. When the AI is not
- * available (no key, PREVIEW_MOCK=1, or an error), a deterministic builder
- * assembles the same structure from the scraped facts so the preview always
- * renders — and it never invents contact details.
+ * available (no key, PREVIEW_MOCK=1, or an error), deterministic builders
+ * assemble the same structure from the scraped facts so the preview always
+ * renders — and they never invent contact details.
  */
-import { aiAvailable, chatJson, chatText, isMockMode } from "@/lib/ai-provider.server";
-import { escapeHtml, sanitizeHtml, type SanitizeContext } from "@/lib/preview/sanitize";
+import { aiAvailable, chatJson, isMockMode } from "@/lib/ai-provider.server";
 import { BODY_FONTS, HEADING_FONTS, defaultPalette, hashString, safeFont, safePalette } from "@/lib/preview/theme";
+import { ARCHETYPES, type DesignDirection, type PlanPage, type PlanSection, type Section, type SiteFacts, type SitePlan, type StoredImage } from "@/lib/preview/types";
+import { PRESETS, archetypesFor, mockDirections, normalizeDirection, HEADING_FONTS as DISPLAY_FONTS, BODY_FONTS as TEXT_FONTS } from "@/lib/preview/design";
+import { SECTION_GUIDE, composeImages, composeMockPage, corpusFor, normalizeSections, type NormalizeContext } from "@/lib/preview/sections";
 import type { StoredPage, StoredSite } from "@/lib/preview/render";
-import type { PlanPage, PlanSection, SiteFacts, SitePlan } from "@/lib/preview/types";
 
 const MAX_PAGES = 6;
 
-const CLASS_GUIDE = `Available CSS classes (a shared stylesheet already exists; do NOT write <style> or style="" attributes):
-- <section class="section"> (also "section alt" for tinted background, "section dark" for brand-color background), "hero" for the home hero, "page-hero" for the top of inner pages
-- <div class="container"> inside every section
-- layout: "hero-grid" (2 columns: copy + media), "split" / "split reverse" (text + media), "grid-2", "grid-3", "grid-4", "center"
-- text: "eyebrow" (small label above a heading), "lead" (intro paragraph), "muted"
-- buttons: <a class="btn primary">, <a class="btn accent">, <a class="btn ghost">, wrap buttons in <div class="actions">
-- "card" (boxes in grids; optional <span class="icon">1</span>), "quote" (<blockquote class="quote"><p>…</p><cite>…</cite></blockquote>)
-- "list-check" (<ul> with check marks), "stats" + "stat" (<div class="stat"><strong>…</strong>label</div>) — only with real numbers from the facts
-- "cta-band" (a call-to-action box inside a container), "info-list" (<dl> for hours/contact details), "faq" (<div class="faq"><details><summary>Q</summary><p>A</p></details></div>)
-- images: <div class="media"><img src="EXACT URL FROM THE IMAGES LIST" alt="…"></div>; when there is no suitable image use <div class="media"><div class="ph"></div></div> (also "ph ph-2", "ph ph-3")`;
-
 function clip(value: unknown, max: number): string {
   return typeof value === "string" ? value.replace(/\s+/g, " ").trim().slice(0, max) : "";
+}
+
+/** Nav labels: at most 22 chars, cut on a word boundary. */
+function shortLabel(label: string): string {
+  if (label.length <= 22) return label;
+  const cut = label.slice(0, 23).replace(/\s+\S*$/, "");
+  return cut || label.slice(0, 22);
 }
 
 export function slugify(value: string): string {
@@ -59,6 +60,7 @@ function factsForPrompt(facts: SiteFacts) {
     pages_read: facts.pages.map((p) => ({ title: p.title, url: p.url, headings: p.headings.slice(0, 10), text: p.text.slice(0, 1200) })),
     owner_brief: facts.brief ?? null,
     requested_changes: facts.notes || null,
+    sites_to_emulate: facts.inspiration?.length ? facts.inspiration : null,
   };
 }
 
@@ -85,7 +87,7 @@ function mockPlan(facts: SiteFacts, variation: number): SitePlan {
       continue;
     }
     const slug = slugify(path.split("/").filter(Boolean).pop() ?? "");
-    if (!slug || /about|service|menu|contact|home|index/.test(slug) || pages.some((p) => p.slug === slug)) continue;
+    if (!slug || slug === "img" || /about|service|menu|contact|home|index/.test(slug) || pages.some((p) => p.slug === slug)) continue;
     if (page.text.length < 120) continue;
     const label = slug
       .split("-")
@@ -130,6 +132,7 @@ export function normalizePlan(raw: unknown, facts: SiteFacts, variation: number)
     const p = item as Record<string, unknown>;
     let slug = slugify(clip(p.slug, 40) || clip(p.title, 40));
     if (!slug || slug === "index") slug = "home";
+    if (slug === "img") slug = "images";
     if (pages.some((existing) => existing.slug === slug)) continue;
     const sections: PlanSection[] = (Array.isArray(p.sections) ? p.sections : [])
       .map((s) => {
@@ -140,7 +143,7 @@ export function normalizePlan(raw: unknown, facts: SiteFacts, variation: number)
       .filter((s): s is PlanSection => Boolean(s))
       .slice(0, 7);
     const title = clip(p.title, 60) || slug;
-    pages.push({ slug, title, navLabel: clip(p.navLabel, 22) || title.slice(0, 22), purpose: clip(p.purpose, 200), sections });
+    pages.push({ slug, title, navLabel: shortLabel(clip(p.navLabel, 60) || title), purpose: clip(p.purpose, 200), sections });
   }
   if (!pages.length) return fallback;
   if (pages[0]!.slug !== "home") {
@@ -188,15 +191,13 @@ export async function planSite(facts: SiteFacts, variation = 0): Promise<{ plan:
           content: `You are a senior web designer planning a clean, modern small-business website that will be built as real HTML pages.
 Return ONLY one JSON object, no markdown:
 {"tagline": string, "summary": string (1-2 sentences: what the current site does poorly and what the new site fixes), "changes": [3 short strings],
- "palette": {"primary": "#hex", "accent": "#hex", "background": "#hex", "surface": "#hex", "text": "#hex", "muted": "#hex"},
- "fonts": {"heading": one of ${JSON.stringify(HEADING_FONTS)}, "body": one of ${JSON.stringify(BODY_FONTS)}},
  "cta": {"label": string (max 24 chars), "slug": page slug},
  "pages": [{"slug": "home"|lowercase-hyphenated, "title": string, "navLabel": string (max 18 chars), "purpose": string, "sections": [{"kind": "hero|services|about|testimonials|gallery|faq|hours|cta|text|team|pricing|contact-info", "heading": string, "brief": string}]}]}
 Rules:
 - 3 to ${MAX_PAGES} pages. The first page is "home". Always include "contact". Mirror the real pages the business already has (about, services, menu, etc.).
 - Use ONLY facts provided. Never invent phone numbers, emails, street addresses, prices, awards, years in business, staff names, statistics, or reviews.
-- Keep the business name exactly as given. Base the palette on the brand colors when provided; ensure strong text contrast.
-- Respect the requested changes when present.${variation ? `\n- Variation ${variation}: choose a clearly different visual direction (palette, fonts, section order) from a typical first attempt.` : ""}`,
+- Keep the business name exactly as given. (Visual design is decided separately — plan structure and content only.)
+- Respect the requested changes when present.${variation ? `\n- Variation ${variation}: choose a clearly different structure and emphasis from a typical first attempt.` : ""}`,
         },
         { role: "user", content: JSON.stringify(factsForPrompt(facts)) },
       ],
@@ -208,191 +209,263 @@ Rules:
   }
 }
 
-// ---------------------------------------------------------------- deterministic page bodies
 
-function paragraphsHtml(text: string, max = 4): string {
-  return text
-    .split(/\n+/)
-    .map((p) => p.trim())
-    .filter(Boolean)
-    .slice(0, max)
-    .map((p) => `<p>${escapeHtml(p)}</p>`)
-    .join("");
-}
+// ---------------------------------------------------------------- design directions ("looks")
 
-function media(facts: SiteFacts, index: number, alt: string): string {
-  const src = facts.images[index];
-  return src
-    ? `<div class="media"><img src="${escapeHtml(src)}" alt="${escapeHtml(alt)}"></div>`
-    : `<div class="media"><div class="ph ph-${(index % 3) + 1}"></div></div>`;
-}
+const ARCHETYPE_GUIDE = `Archetypes (each look must use a different one):
+- "editorial": magazine feel, big serif headlines, cream paper, thin rules, numbered lists
+- "dark-premium": dark background, warm metallic accent, cinematic photography, refined serif or light sans
+- "bold-photo": full-bleed photography, heavy condensed or black sans type, one loud accent color
+- "playful": rounded shapes, cheerful saturated colors, chunky offset shadows, friendly grotesque type
+- "minimal-luxury": lots of white space, fine serif, restrained neutral palette, hairline details
+- "warm-craft": earthy warm palette, tactile textures, stamp badges, approachable serif + clean sans`;
 
-function callButtons(facts: SiteFacts, plan: SitePlan): string {
-  const call = facts.phone ? `<a class="btn accent" href="tel:${facts.phone.replace(/\D/g, "")}">Call ${escapeHtml(facts.phone)}</a>` : "";
-  return `<div class="actions"><a class="btn primary" href="@page:${plan.cta.slug}">${escapeHtml(plan.cta.label)}</a>${call}</div>`;
-}
-
-function pageHero(title: string, lead: string, eyebrow: string): string {
-  return `<section class="page-hero"><div class="container"><span class="eyebrow">${escapeHtml(eyebrow)}</span><h1>${escapeHtml(title)}</h1>${
-    lead ? `<p class="lead">${escapeHtml(lead)}</p>` : ""
-  }</div></section>`;
-}
-
-function serviceCards(facts: SiteFacts, max: number): string {
-  return facts.services
-    .slice(0, max)
-    .map((s, i) => `<div class="card"><span class="icon">${i + 1}</span><h3>${escapeHtml(s)}</h3></div>`)
-    .join("");
-}
-
-function ctaBand(facts: SiteFacts, plan: SitePlan): string {
-  return `<section class="section"><div class="container"><div class="cta-band"><div><h2>Ready when you are</h2><p>${
-    facts.phone ? `Call ${escapeHtml(facts.phone)} or send a message.` : "Send a message and we will get back to you."
-  }</p></div><a class="btn accent" href="@page:${plan.cta.slug}">${escapeHtml(plan.cta.label)}</a></div></div></section>`;
-}
-
-export function mockPageBody(page: PlanPage, facts: SiteFacts, plan: SitePlan): string {
-  const servicesSlug = plan.pages.find((p) => /service|menu|product/.test(p.slug))?.slug;
-  const aboutSlug = plan.pages.find((p) => p.slug === "about")?.slug;
-  if (page.slug === "home") {
-    const services = facts.services.length
-      ? `<section class="section alt"><div class="container"><span class="eyebrow">What we do</span><h2>${
-          servicesSlug ? escapeHtml(plan.pages.find((p) => p.slug === servicesSlug)!.title) : "Services"
-        }</h2><div class="grid-3">${serviceCards(facts, 6)}</div>${
-          servicesSlug ? `<div class="actions"><a class="btn ghost" href="@page:${servicesSlug}">See everything we offer</a></div>` : ""
-        }</div></section>`
-      : "";
-    const about = facts.about
-      ? `<section class="section"><div class="container split"><div><span class="eyebrow">About us</span><h2>${escapeHtml(
-          `About ${facts.name}`,
-        )}</h2>${paragraphsHtml(facts.about, 2)}${
-          aboutSlug ? `<div class="actions"><a class="btn ghost" href="@page:${aboutSlug}">Our story</a></div>` : ""
-        }</div>${media(facts, 1, facts.name)}</div></section>`
-      : "";
-    const quotes = facts.testimonials.length
-      ? `<section class="section alt"><div class="container"><span class="eyebrow">Reviews</span><h2>What customers say</h2><div class="grid-2">${facts.testimonials
-          .slice(0, 4)
-          .map((t) => `<blockquote class="quote"><p>${escapeHtml(t.quote)}</p>${t.author ? `<cite>${escapeHtml(t.author)}</cite>` : ""}</blockquote>`)
-          .join("")}</div></div></section>`
-      : "";
-    const eyebrow = facts.industry;
-    return `<section class="hero"><div class="container hero-grid"><div>${eyebrow ? `<span class="eyebrow">${escapeHtml(eyebrow)}</span>` : ""}<h1>${escapeHtml(plan.tagline || facts.name)}</h1><p class="lead">${escapeHtml(
-      facts.description || facts.about.slice(0, 220),
-    )}</p>${callButtons(facts, plan)}</div>${media(facts, 0, facts.name)}</div></section>${services}${about}${quotes}${ctaBand(facts, plan)}`;
+export async function directionsFor(facts: SiteFacts, variation = 0): Promise<{ directions: DesignDirection[]; note?: string; mock: boolean }> {
+  if (isMockMode() || !aiAvailable()) {
+    return {
+      directions: mockDirections(facts, variation),
+      mock: true,
+      note: isMockMode() ? "Mock mode (PREVIEW_MOCK=1): looks were picked from presets." : "AI is not configured, so looks were picked from presets.",
+    };
   }
-  if (page.slug === "contact") {
-    const rows = [
-      facts.phone ? `<dt>Phone</dt><dd><a href="tel:${facts.phone.replace(/\D/g, "")}">${escapeHtml(facts.phone)}</a></dd>` : "",
-      facts.email ? `<dt>Email</dt><dd><a href="mailto:${escapeHtml(facts.email)}">${escapeHtml(facts.email)}</a></dd>` : "",
-      facts.address ? `<dt>Address</dt><dd>${escapeHtml(facts.address)}</dd>` : "",
-      facts.hours.length ? `<dt>Hours</dt>${facts.hours.map((h) => `<dd>${escapeHtml(h)}</dd>`).join("")}` : "",
-    ].join("");
-    return `${pageHero("Contact us", `We would love to hear from you. Reach ${facts.name} using the details below or the form.`, "Contact")}${
-      rows ? `<section class="section"><div class="container split"><dl class="info-list">${rows}</dl>${media(facts, 2, facts.name)}</div></section>` : ""
-    }`;
-  }
-  if (page.slug === "about") {
-    return `${pageHero(page.title, facts.tagline, "About")}<section class="section"><div class="container split"><div>${
-      paragraphsHtml(facts.about, 5) || `<p>${escapeHtml(facts.description)}</p>`
-    }</div>${media(facts, 1, facts.name)}</div></section>${ctaBand(facts, plan)}`;
-  }
-  if (/service|menu|product/.test(page.slug)) {
-    return `${pageHero(page.title, facts.description, page.navLabel)}<section class="section"><div class="container"><div class="grid-3">${serviceCards(
-      facts,
-      12,
-    )}</div></div></section>${ctaBand(facts, plan)}`;
-  }
-  const source = facts.pages.find((p) => {
-    try {
-      return slugify(new URL(p.url).pathname.split("/").filter(Boolean).pop() ?? "") === page.slug;
-    } catch {
-      return false;
+  const suggested = archetypesFor(facts, variation);
+  try {
+    const raw = await chatJson<{ looks?: unknown[] }>({
+      temperature: variation ? 0.95 : 0.85,
+      maxTokens: 3500,
+      timeoutMs: 45_000,
+      messages: [
+        {
+          role: "system",
+          content: `You are an award-winning creative director. Propose THREE bold, distinctive, clearly different design directions ("looks") for this business's new website. Avoid generic template looks: each must have a strong concept a client would remember.
+Return ONLY JSON: {"looks": [{
+ "name": evocative 1-3 word concept name,
+ "mood": 1-2 sentences on how the site should feel,
+ "rationale": 1 sentence on why it fits this business and its customers,
+ "archetype": one of ${JSON.stringify(ARCHETYPES)},
+ "palette": {"primary": "#hex", "accent": "#hex", "background": "#hex", "surface": "#hex", "text": "#hex", "muted": "#hex"},
+ "fonts": {"heading": one of ${JSON.stringify(DISPLAY_FONTS)}, "body": one of ${JSON.stringify(TEXT_FONTS)}},
+ "imagery": art direction for photography (light, lens, color grade, subjects) in one sentence,
+ "heroSubject": what the hero photograph shows, concretely (no text, signage, logos or brand names in the scene),
+ "motifs": 1-3 of ["grain","thin-rules","oversized-numbers","diagonal-cuts","soft-blobs","underline-marks","grid-lines","glow","outlined-type","stamp-badges"],
+ "radius": "sharp"|"soft"|"round", "buttons": "pill"|"square"|"outline",
+ "hero": "split"|"photo"|"type", "header": "light"|"dark"|"overlay" (overlay only with hero "photo"), "footer": "columns"|"minimal"|"statement",
+ "headline": a bold hero headline, max 9 words, may emphasize ONE word with *asterisks*
+}]}
+${ARCHETYPE_GUIDE}
+Rules:
+- Three different archetypes; good starting points for this business: ${suggested.join(", ")}. Palettes must be clearly different from each other and readable (strong text contrast).
+- Respect the brand: if brand colors are given, at least one look keeps them prominent, and every look should feel compatible with the logo.
+- If "sites_to_emulate" are given, let at least one look borrow their vibe (palette, type, mood) without copying them.
+- Headlines must not invent facts: no years, awards, prices, guarantees, statistics, or claims not in the facts.
+- Respect the owner's requested changes and style notes when present.${variation ? `\n- This is attempt ${variation + 1}: go somewhere new compared with an obvious first attempt.` : ""}`,
+        },
+        { role: "user", content: JSON.stringify(factsForPrompt(facts)) },
+      ],
+    });
+    const looks = Array.isArray(raw.looks) ? raw.looks.slice(0, 3) : [];
+    if (!looks.length) throw new Error("No looks in the answer.");
+    const directions = looks.map((look, i) => normalizeDirection(look, i, facts));
+    // Guarantee three different archetypes.
+    const used = new Set<string>();
+    for (let i = 0; i < directions.length; i += 1) {
+      if (used.has(directions[i]!.archetype)) {
+        const replacement = [...suggested, ...ARCHETYPES].find((a) => !used.has(a))!;
+        directions[i] = { ...directions[i]!, ...PRESETS[replacement], palette: { ...PRESETS[replacement].palette }, archetype: replacement };
+      }
+      used.add(directions[i]!.archetype);
     }
-  });
-  return `${pageHero(page.title, "", page.navLabel)}<section class="section"><div class="container split"><div>${
-    source ? paragraphsHtml(source.text, 6) : `<p>${escapeHtml(page.purpose)}</p>`
-  }</div>${media(facts, 3, page.title)}</div></section>${ctaBand(facts, plan)}`;
+    const fallback = mockDirections(facts, variation);
+    while (directions.length < 3) {
+      const next = fallback.find((d) => !used.has(d.archetype)) ?? fallback[directions.length]!;
+      used.add(next.archetype);
+      directions.push({ ...next, id: `look-${directions.length + 1}` });
+    }
+    return { directions, mock: false };
+  } catch (error) {
+    console.error("[preview] directions failed", error instanceof Error ? error.message : error);
+    return { directions: mockDirections(facts, variation), mock: true, note: "The AI art director did not answer, so looks were picked from presets." };
+  }
 }
 
-// ---------------------------------------------------------------- AI page bodies
+// ---------------------------------------------------------------- page sections
 
-async function aiPageBody(page: PlanPage, facts: SiteFacts, plan: SitePlan, variation: number): Promise<string> {
-  const slugs = plan.pages.map((p) => `"/${p.slug === "home" ? "" : p.slug}" (${p.navLabel})`).join(", ");
-  const text = await chatText({
-    temperature: variation ? 0.8 : 0.5,
-    maxTokens: 4000,
-    timeoutMs: 75_000,
+type ImageInfo = { name: string; describe: string };
+
+function imageList(images: Record<string, StoredImage>, pending: ImageInfo[] = []): ImageInfo[] {
+  const stored = Object.values(images).map((i) => ({
+    name: i.name,
+    describe: i.source === "photo" ? `real photo from their current site (${i.width ?? "?"}x${i.height ?? "?"})` : `generated photo: ${i.alt}`,
+  }));
+  return [...stored, ...pending.filter((p) => !images[p.name])];
+}
+
+function normalizeContext(facts: SiteFacts, plan: SitePlan, page: string, images: string[]): NormalizeContext {
+  return {
+    slugs: plan.pages.map((p) => p.slug),
+    phone: facts.phone,
+    email: facts.email,
+    images,
+    testimonials: facts.testimonials,
+    corpus: corpusFor(facts),
+    page,
+  };
+}
+
+const HERO_FOR: Record<DesignDirection["hero"], string> = { split: "hero-split", photo: "hero-photo", type: "hero-type" };
+
+async function aiSections(
+  page: PlanPage,
+  facts: SiteFacts,
+  plan: SitePlan,
+  design: DesignDirection,
+  images: ImageInfo[],
+  timeoutMs: number,
+): Promise<unknown> {
+  const slugs = plan.pages.map((p) => `"${p.slug}" (${p.navLabel})`).join(", ");
+  const home = page.slug === "home";
+  return chatJson({
+    temperature: 0.75,
+    maxTokens: 4500,
+    timeoutMs,
     messages: [
       {
         role: "system",
-        content: `You write the <main> content of ONE page of a real small-business website. Return ONLY HTML: a sequence of <section> elements. No markdown, no <html>, <head>, <body>, <header>, <nav>, <footer>, <form>, <script>, <style>, or style attributes — the site header, navigation, footer, and contact form are added automatically.
-${CLASS_GUIDE}
+        content: `You are a senior web designer and conversion copywriter at a top agency, composing ONE page of a small-business website from a library of beautifully pre-designed sections. You choose sections, order them for rhythm and persuasion, choose tones and variants that express the design direction, and write sharp, specific, warm copy.
+Return ONLY JSON: {"sections": [ ... ]}
+Design direction (follow it on every section — mood, boldness, headline voice): ${JSON.stringify({
+          name: design.name,
+          mood: design.mood,
+          archetype: design.archetype,
+          hero: design.hero,
+          motifs: design.motifs,
+          headline_idea: design.headline,
+        })}
+${SECTION_GUIDE.replace("{IMAGES}", images.length ? images.map((i) => `"${i.name}" (${i.describe})`).join("; ") : "(none — omit image fields; tasteful placeholders are used)")}
+Page links: use only these page slugs: ${slugs}.
 Content rules:
-- Use ONLY the facts provided. Rewrite and organize their real text so it is clear, warm, and persuasive.
-- NEVER invent phone numbers, email addresses, street addresses, prices, statistics, awards, years in business, staff names, or testimonials. If a fact is missing, leave it out.
-- Phone links must be href="tel:" with the exact phone provided; email links must be href="mailto:" with the exact email provided.
-- Testimonials: only quote the provided testimonials, word for word.
-- Images: only use exact URLs from the "images" list (logo excluded). Otherwise use the "ph" placeholder.
-- Link to other pages of this site with these paths only: ${slugs}. Buttons should lead somewhere useful (usually the "${plan.cta.slug}" page).
-- 3 to 6 sections. The first section of the home page is a "hero" section with an <h1>; inner pages start with a "page-hero" section with an <h1>.${
-          page.slug === "contact" ? "\n- This is the contact page: show the real contact details and hours in an info-list; a contact form is appended automatically after your sections, so do not write one." : ""
-        }`,
+- Use ONLY facts provided. Rewrite their real text so it is clear, confident and specific; cut filler.
+- NEVER invent phone numbers, email addresses, street addresses, prices, statistics, awards, years in business, staff names, guarantees, or testimonials. If a fact is missing, leave it out.
+- ${home ? `This is the HOME page: 5-8 sections. The first section MUST be "${HERO_FOR[design.hero]}". Include proof (reviews if testimonials exist), what they do, and a strong closing "cta-band".` : `This is an inner page: the first section MUST be "page-hero", then 2-5 sections that fully cover the page's purpose.`}${
+          page.slug === "contact" ? `\n- This is the contact page: include a "contact-block" (details fill in automatically). A contact form is appended automatically — do not describe one.` : ""
+        }
+- Prefer real photos of the business when available; vary images, do not repeat the same image twice on a page.`,
       },
       {
         role: "user",
         content: JSON.stringify({
           page,
           site_plan: { tagline: plan.tagline, cta: plan.cta, pages: plan.pages.map((p) => ({ slug: p.slug, title: p.title, purpose: p.purpose })) },
-          facts: factsForPrompt(facts),
+          facts: { ...factsForPrompt(facts), images: undefined, logo: undefined },
         }),
       },
     ],
   });
-  if (!/<section\b/i.test(text)) throw new Error("The AI page had no sections.");
-  return text;
 }
 
-// ---------------------------------------------------------------- assemble
+/** AI sections for a page, validated; falls back to the deterministic composer. */
+async function sectionsFor(
+  page: PlanPage,
+  facts: SiteFacts,
+  plan: SitePlan,
+  design: DesignDirection,
+  images: Record<string, StoredImage>,
+  pending: ImageInfo[],
+  useAi: boolean,
+  timeoutMs: number,
+): Promise<{ sections: Section[]; ai: boolean }> {
+  const list = imageList(images, pending);
+  const names = list.map((i) => i.name);
+  const ctx = normalizeContext(facts, plan, page.slug, names);
+  if (useAi) {
+    try {
+      const raw = await aiSections(page, facts, plan, design, list, timeoutMs);
+      const sections = normalizeSections(raw, ctx);
+      const heroOk = page.slug === "home" ? sections[0] && sections[0].type.startsWith("hero-") : sections[0]?.type === "page-hero";
+      if (sections.length >= (page.slug === "home" ? 3 : 2) && heroOk) {
+        if (page.slug === "contact" && !sections.some((s) => s.type === "contact-block")) sections.push({ type: "contact-block", tone: "light", heading: "Get in touch" });
+        return { sections, ai: true };
+      }
+      console.error(`[preview] page ${page.slug}: AI sections unusable (${sections.length})`);
+    } catch (error) {
+      console.error(`[preview] page ${page.slug} failed`, error instanceof Error ? error.message : error);
+    }
+  }
+  return { sections: composeMockPage(page, facts, plan, design, composeImages(names)), ai: false };
+}
 
-export async function buildSite(
+/** Point image references at images that really exist (generation can fail): real photos first, else placeholder. */
+function resolveImages(sections: Section[], available: string[]): Section[] {
+  const photos = available.filter((n) => n.startsWith("photo-"));
+  let next = 0;
+  const swap = (name: string | undefined) => {
+    if (!name || available.includes(name)) return name;
+    const photo = photos.length ? photos[next++ % photos.length] : undefined;
+    return photo;
+  };
+  return sections.map((s) => ({
+    ...s,
+    image: swap(s.image),
+    items: s.items?.map((it) => ({ ...it, image: swap(it.image) })),
+  }));
+}
+
+// ---------------------------------------------------------------- build a look (homepage) and finish the chosen one
+
+export function stepBudgetMs(): number {
+  const raw = Number(process.env.PREVIEW_STEP_BUDGET_MS);
+  return Number.isFinite(raw) && raw >= 20_000 ? raw : 85_000;
+}
+
+/** Homepage-only site for one direction. Images and homepage copy are produced in parallel. */
+export async function buildLook(
   id: string,
   facts: SiteFacts,
   plan: SitePlan,
-  variation = 0,
-): Promise<{ site: StoredSite; mock: boolean; note?: string }> {
-  const useAi = !plan.mock && !isMockMode() && aiAvailable();
-  const ctx: SanitizeContext = {
-    slugs: plan.pages.map((p) => p.slug),
-    phone: facts.phone,
-    email: facts.email,
-    images: facts.images,
-    sourceHost: facts.host,
-  };
-  let failed = 0;
-  const pages: StoredPage[] = await Promise.all(
-    plan.pages.map(async (page) => {
-      let raw = "";
-      if (useAi) {
-        try {
-          raw = await aiPageBody(page, facts, plan, variation);
-        } catch (error) {
-          failed += 1;
-          console.error(`[preview] page ${page.slug} failed`, error instanceof Error ? error.message : error);
-        }
-      }
-      if (!raw) raw = mockPageBody(page, facts, plan);
-      let body = sanitizeHtml(raw, ctx);
-      if (!body.trim()) body = sanitizeHtml(mockPageBody(page, facts, plan), ctx);
-      return { slug: page.slug, title: page.title, navLabel: page.navLabel, body };
-    }),
+  design: DesignDirection,
+  index: number,
+): Promise<{ site: StoredSite; ai: boolean; generated: number; photos: number }> {
+  const { goodPhotos, heroWorthy, storePhotos, imagesEnabled, imagePrompt, generateAndStore } = await import("@/lib/preview/images.server");
+  const budget = stepBudgetMs();
+  const useAi = !isMockMode() && aiAvailable();
+  const photos = await goodPhotos(facts);
+  const images: Record<string, StoredImage> = await storePhotos(id, photos, facts);
+  const pending: ImageInfo[] = [];
+  const jobs: Promise<void>[] = [];
+  if (imagesEnabled()) {
+    const wantHero = !heroWorthy(photos[0]);
+    const wantFeature = photos.length < 2;
+    const kind = facts.industry || "the business";
+    if (wantHero) {
+      pending.push({ name: "hero", describe: `generated hero photo: ${design.heroSubject || kind}` });
+      jobs.push(
+        generateAndStore(id, "hero", imagePrompt("hero", facts, design), design.hero === "split" ? "4:3" : "16:9", design.heroSubject || kind, Math.min(50_000, budget - 10_000)).then((img) => {
+          if (img) images.hero = img;
+        }),
+      );
+    }
+    if (wantFeature) {
+      pending.push({ name: "feature", describe: `generated photo of ${kind} work in progress` });
+      jobs.push(
+        generateAndStore(id, "feature", imagePrompt("feature", facts, design), "4:3", `${kind} at work`, Math.min(50_000, budget - 10_000)).then((img) => {
+          if (img) images.feature = img;
+        }),
+      );
+    }
+  }
+  const home = plan.pages[0]!;
+  const [result] = await Promise.all([sectionsFor(home, facts, plan, design, images, pending, useAi, Math.min(75_000, budget - 8_000)), ...jobs]);
+  const available = Object.keys(images);
+  const sections = resolveImages(result.sections, available);
+  const pages: StoredPage[] = plan.pages.map((p) =>
+    p.slug === "home" ? { slug: p.slug, title: p.title, navLabel: p.navLabel, body: "", sections } : { slug: p.slug, title: p.title, navLabel: p.navLabel, body: "", pending: true },
   );
-  const mock = !useAi || failed === plan.pages.length;
   const site: StoredSite = {
-    version: 2,
+    version: 3,
     id,
     createdAt: new Date().toISOString(),
     mode: facts.mode,
-    mock: mock && isMockMode(),
+    mock: isMockMode(),
     host: facts.host,
     sourceUrl: facts.sourceUrl,
     name: facts.name,
@@ -403,15 +476,70 @@ export async function buildSite(
     address: facts.address,
     hours: facts.hours,
     social: facts.social,
-    palette: plan.palette,
-    fonts: plan.fonts,
+    palette: design.palette,
+    fonts: design.fonts,
     cta: plan.cta,
     pages,
+    industry: facts.industry,
+    design,
+    images,
+    facts,
+    plan,
+    lookIndex: index,
+    finished: false,
   };
-  const note = !useAi
-    ? undefined
-    : failed
-      ? `${failed} of ${plan.pages.length} pages were assembled from the page text because the AI did not answer.`
-      : undefined;
-  return { site, mock, note };
+  const generated = Object.values(images).filter((i) => i.source === "generated").length;
+  return { site, ai: result.ai, generated, photos: photos.length };
 }
+
+/** Build every remaining page for the chosen look, add service images, and critique/revise the homepage. */
+export async function finishSite(site: StoredSite): Promise<{ site: StoredSite; failed: number; note?: string }> {
+  if (!site.facts || !site.plan || !site.design) throw new Error("This preview was made by an older version. Run the site again.");
+  const { imagesEnabled, imagePrompt, generateAndStore } = await import("@/lib/preview/images.server");
+  const { polishHome } = await import("@/lib/preview/critique.server");
+  const facts = site.facts;
+  const plan = site.plan;
+  const design = site.design;
+  const budget = stepBudgetMs();
+  const useAi = !isMockMode() && aiAvailable();
+  const images: Record<string, StoredImage> = { ...(site.images ?? {}) };
+  const pending: ImageInfo[] = [];
+  const jobs: Promise<void>[] = [];
+  const photoCount = Object.values(images).filter((i) => i.source === "photo").length;
+  if (imagesEnabled() && photoCount < 4) {
+    facts.services.slice(0, 3).forEach((service, i) => {
+      const name = `service-${i + 1}`;
+      if (images[name]) return;
+      pending.push({ name, describe: `generated photo for the service "${service}"` });
+      jobs.push(
+        generateAndStore(site.id, name, imagePrompt("service", facts, design, service), "4:3", service, Math.min(50_000, budget - 10_000)).then((img) => {
+          if (img) images[name] = img;
+        }),
+      );
+    });
+  }
+  let failed = 0;
+  const todo = site.pages.filter((p) => p.slug !== "home");
+  const pagesJob = Promise.all(
+    todo.map(async (page) => {
+      const planned = plan.pages.find((p) => p.slug === page.slug) ?? { slug: page.slug, title: page.title, navLabel: page.navLabel, purpose: "", sections: [] };
+      const result = await sectionsFor(planned, facts, plan, design, images, pending, useAi, Math.min(75_000, budget - 8_000));
+      if (useAi && !result.ai) failed += 1;
+      return { slug: page.slug, sections: result.sections };
+    }),
+  );
+  const homeCtx = normalizeContext(facts, plan, "home", Object.keys(images));
+  const polishJob = polishHome(site, homeCtx, budget - 5_000);
+  const [built, polished] = await Promise.all([pagesJob, polishJob, ...jobs]);
+  const available = Object.keys(images);
+  const pages = site.pages.map((page) => {
+    if (page.slug === "home") return { ...page, sections: resolveImages(polished.sections, available), pending: false };
+    const done = built.find((b) => b.slug === page.slug);
+    return { ...page, sections: resolveImages(done?.sections ?? [], available), pending: false };
+  });
+  const next: StoredSite = { ...site, images, pages, finished: true, polish: polished.polish };
+  const note = failed ? `${failed} of ${todo.length} pages were assembled from the section library because the AI did not answer.` : undefined;
+  return { site: next, failed, note };
+}
+
+export { hashString };
