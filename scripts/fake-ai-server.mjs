@@ -276,7 +276,7 @@ function sectionsFor(system, user) {
       ],
     };
   }
-  const source = (facts.pages_read ?? []).find((p) => p.url.includes(page.slug));
+  const source = (facts.pages_read ?? []).find((p) => (p.url ?? p.title ?? "").toLowerCase().includes(page.slug));
   return {
     sections: [
       hero(page.navLabel, page.title, source?.headings?.[1] ?? page.purpose, img("feature", 3)),
@@ -366,6 +366,31 @@ http
         }
         const system = textOf(json.messages?.[0]?.content);
         const userContent = json.messages?.[1]?.content;
+        log("chat", json.model, `reasoning_effort=${json.reasoning_effort ?? "-"}`, `response_format=${json.response_format?.type ?? "-"}`, `max_tokens=${json.max_tokens}`);
+        // FAKE_FAIL simulates real-API failure modes for page writing (the fallback model succeeds unless FAKE_FAIL_ALL=1).
+        const failing = system.includes("composing ONE page") && process.env.FAKE_FAIL && (process.env.FAKE_FAIL_ALL === "1" || !/non-reasoning/.test(json.model ?? ""));
+        if (process.env.FAKE_FAIL === "reject-reasoning" && json.reasoning_effort) {
+          res.writeHead(400, { "content-type": "application/json" });
+          res.end(JSON.stringify({ code: "Client specified an invalid argument", error: "Argument not supported on this model: reasoning_effort" }));
+          return;
+        }
+        if (failing && process.env.FAKE_FAIL === "slow") {
+          log("simulating a slow model (no answer)");
+          await sleep(180_000);
+          res.writeHead(504).end();
+          return;
+        }
+        if (failing && process.env.FAKE_FAIL === "length") {
+          log("simulating a token-limit cut-off");
+          res.writeHead(200, { "content-type": "application/json" });
+          res.end(JSON.stringify({ choices: [{ finish_reason: "length", message: { content: '{"sections": [{"type": "hero-split", "heading": "Start where' } }] }));
+          return;
+        }
+        if (failing && process.env.FAKE_FAIL === "badjson") {
+          res.writeHead(200, { "content-type": "application/json" });
+          res.end(JSON.stringify({ choices: [{ finish_reason: "stop", message: { content: "I'm sorry, I can't produce that layout." } }] }));
+          return;
+        }
         const user = textOf(userContent);
         let out;
         if (system.includes("website wizard")) out = { patch: { what: "Dog grooming salon", industry: "Other" }, choices: ["Prairie Paws", "Happy Tails OKC", "Bark & Bath"] };
@@ -389,7 +414,7 @@ http
           log("critique", hasImage(userContent) ? "with screenshot" : "html only");
         } else out = {};
         res.writeHead(200, { "content-type": "application/json" });
-        res.end(JSON.stringify({ choices: [{ message: { content: "Here you go:\n```json\n" + JSON.stringify(out) + "\n```" } }] }));
+        res.end(JSON.stringify({ choices: [{ finish_reason: "stop", message: { content: "Here you go:\n```json\n" + JSON.stringify(out) + "\n```" } }] }));
       } catch (error) {
         log("error", error.message);
         res.writeHead(500, { "content-type": "application/json" });
