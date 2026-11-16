@@ -1,9 +1,10 @@
 /** Turns a stored preview site into full HTML documents, one per page. */
 import { escapeHtml } from "./sanitize.ts";
-import { designClasses, fontsHref, siteCss } from "./theme.ts";
+import { darkSurface, designClasses, fontsHref, siteCss } from "./theme.ts";
+import { logoTreatment } from "./logo.ts";
 import { legacyCss } from "./legacy-theme.ts";
 import { renderSection, type RenderContext } from "./sections.ts";
-import type { DesignDirection, Section, SiteFacts, SitePalette, SitePlan, StoredImage } from "./types.ts";
+import type { DesignDirection, LogoMeta, Section, SiteFacts, SitePalette, SitePlan, StoredImage } from "./types.ts";
 
 export const FORMCARRY_ENDPOINT = "https://formcarry.com/s/NipZS0fF4w4";
 
@@ -50,6 +51,10 @@ export type StoredSite = {
   lookIndex?: number;
   finished?: boolean;
   polish?: PolishInfo;
+  /** Why the AI could not write a page (slug → reason), shown to the visitor with a "Retry with AI" button. */
+  aiErrors?: Record<string, string>;
+  /** How the scraped logo is shown on light and dark surfaces (see logo.server.ts). */
+  logoMeta?: LogoMeta;
 };
 
 export type RenderOptions = {
@@ -129,7 +134,18 @@ export function renderSitePage(site: StoredSite, slug: string, options?: RenderO
     .map((p) => `<a href="${link(p.slug)}"${p.slug === slug ? ' aria-current="page"' : ""}>${escapeHtml(p.navLabel || p.title)}</a>`)
     .join("");
   const ctaSlug = site.pages.some((p) => p.slug === site.cta.slug) ? site.cta.slug : site.pages.at(-1)!.slug;
-  const brand = site.logo ? `<img src="${escapeHtml(site.logo)}" alt="${escapeHtml(site.name)}">` : `<span>${escapeHtml(site.name)}</span>`;
+  const firstIsPhoto = v3 && !page.pending && page.sections?.[0]?.type === "hero-photo";
+  // The logo: our stored, trimmed copy when we have one, styled for the surface it sits on.
+  const stored = (name: string | undefined) => (name && site.images?.[name] ? options?.imageUrl?.(name) ?? imageHref(site.id, slug, name) : undefined);
+  const logoOn = (surface: string) => {
+    const t = logoTreatment(site.logoMeta, surface);
+    const src = stored(t.image) ?? stored(site.logoMeta?.image) ?? site.logo;
+    return `<span class="logo ${t.kind}"${t.plate ? ` style="--plate:${t.plate}"` : ""}><img src="${escapeHtml(src)}" alt="${escapeHtml(site.name)}"></span>`;
+  };
+  const headerKind = site.design ? (site.design.header === "overlay" && !firstIsPhoto ? "light" : site.design.header) : "light";
+  const headerSurface = headerKind === "dark" ? darkSurface(site.palette) : headerKind === "overlay" ? "#1c1c1c" : site.palette.background;
+  const brand = !site.logo ? `<span>${escapeHtml(site.name)}</span>` : v3 ? logoOn(headerSurface) : `<img src="${escapeHtml(site.logo)}" alt="${escapeHtml(site.name)}">`;
+  const footerBrand = v3 && site.logo ? `<div class="flogo">${logoOn(darkSurface(site.palette))}</div>` : "";
   const contactItems = [
     site.phone ? `<li><a href="${telHref(site.phone)}">${escapeHtml(site.phone)}</a></li>` : "",
     site.email ? `<li><a href="mailto:${escapeHtml(site.email)}">${escapeHtml(site.email)}</a></li>` : "",
@@ -165,7 +181,6 @@ export function renderSitePage(site: StoredSite, slug: string, options?: RenderO
   } else body = page.body;
   body = rewriteTokens(body, site.id, slug, options);
   const form = slug === "contact" && !page.pending ? contactFormHtml(site) : "";
-  const firstIsPhoto = v3 && !page.pending && page.sections?.[0]?.type === "hero-photo";
   const bodyClass = v3 ? designClasses(site.design, firstIsPhoto) : "";
   const css = v3 ? siteCss(site) : legacyCss(site);
   const ctaLabel = escapeHtml(site.cta.label || "Contact us");
@@ -204,13 +219,13 @@ export function renderSitePage(site: StoredSite, slug: string, options?: RenderO
   </div>
 </footer>`;
   } else if (site.design?.footer === "minimal") {
-    footer = `<footer class="site-footer"><div class="wrap"><div class="row"><span class="fbrand">${escapeHtml(site.name)}</span><ul>${pagesList}</ul><ul>${contactList}</ul></div><div class="legal"><span>© ${year} ${escapeHtml(
+    footer = `<footer class="site-footer"><div class="wrap"><div class="row">${footerBrand || `<span class="fbrand">${escapeHtml(site.name)}</span>`}<ul>${pagesList}</ul><ul>${contactList}</ul></div><div class="legal"><span>© ${year} ${escapeHtml(
       site.name,
     )}</span><span>Preview by Reimago</span></div></div></footer>`;
   } else {
     const statement = site.design?.footer === "statement" ? `<a class="say" href="${link(ctaSlug)}">${ctaLabel}</a>` : "";
     footer = `<footer class="site-footer"><div class="wrap">${statement}<div class="cols">
-      <div><div class="fbrand">${escapeHtml(site.name)}</div><p>${escapeHtml(site.tagline)}</p></div>
+      <div>${footerBrand}<div class="fbrand">${escapeHtml(site.name)}</div><p>${escapeHtml(site.tagline)}</p></div>
       <div><h4>Pages</h4><ul>${pagesList}</ul></div>
       <div><h4>Contact</h4><ul>${contactList}</ul>${social ? `<h4 style="margin-top:1.4rem">Follow</h4><ul>${social}</ul>` : ""}</div>
     </div><div class="legal"><span>© ${year} ${escapeHtml(site.name)}</span><span>Preview by Reimago</span></div></div></footer>`;

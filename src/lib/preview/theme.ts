@@ -48,6 +48,11 @@ function onColor(hex: string): string {
   return contrast(hex, "#ffffff") >= contrast(hex, "#111111") ? "#ffffff" : "#111111";
 }
 
+/** The "dark" surface color (dark header, footer, dark sections) for a palette. */
+export function darkSurface(p: SitePalette): string {
+  return luminance(p.background) < 0.2 ? mix(p.background, "#000000", 0.45) : mix(p.text, p.primary, 0.22);
+}
+
 /** Body classes that switch the design system for one direction. */
 export function designClasses(design: DesignDirection | undefined, overlayHeader: boolean): string {
   if (!design) return "a-classic r-soft b-pill h-light f-columns";
@@ -76,7 +81,7 @@ export function siteCss(site: { palette: SitePalette; fonts: { heading: string; 
   const ctaOnAccent = ["bold-photo", "playful", "dark-premium"].includes(archetype);
   const cta = ctaOnAccent ? p.accent : p.primary;
   const onCta = onColor(cta);
-  const darkBg = darkTheme ? mix(p.background, "#000000", 0.45) : mix(p.text, p.primary, 0.22);
+  const darkBg = darkSurface(p);
   const darkText = "#f6f4ef";
   const single = SINGLE_WEIGHT.has(site.fonts.heading);
   const condensed = /Anton|Oswald|Big Shoulders|Archivo Black/.test(site.fonts.heading);
@@ -124,9 +129,18 @@ p{margin:0 0 1em}
 .menu .menu-list a:hover{background:var(--surface)}
 .h-dark .site-header{background:var(--dark-bg);color:var(--dark-text);border-bottom-color:transparent}
 .h-dark .brand{color:var(--dark-text)}
-.h-dark .brand img,.h-overlay .brand img,.a-dark-premium .brand img{background:#fff;padding:5px 10px;border-radius:8px;height:50px}
-.h-overlay .site-header{position:absolute;left:0;right:0;background:linear-gradient(180deg,rgba(0,0,0,.55),transparent);border-bottom:0;color:#fff;backdrop-filter:none;-webkit-backdrop-filter:none}
-.h-overlay .brand{color:#fff}.h-overlay .brand img{filter:drop-shadow(0 2px 8px rgba(0,0,0,.35))}
+.logo{display:inline-flex;align-items:center;line-height:0}
+.logo img{height:46px;width:auto;max-width:200px;object-fit:contain}
+.logo.multiply img{mix-blend-mode:multiply}
+.logo.knockout-white img{filter:brightness(0) invert(1)}
+.logo.knockout-black img{filter:brightness(0)}
+.logo.plate{background:var(--plate);padding:7px 14px;border-radius:min(var(--radius),14px);box-shadow:0 1px 2px rgba(0,0,0,.18),0 6px 18px -8px rgba(0,0,0,.35)}
+.logo.plate img{height:36px;max-width:180px}
+.site-footer .flogo{margin-bottom:1rem}
+.site-footer .logo img{height:40px}
+.site-footer .logo.plate img{height:32px}
+.h-overlay .site-header{position:absolute;top:auto;left:0;right:0;background:linear-gradient(180deg,rgba(0,0,0,.55),transparent);border-bottom:0;color:#fff;backdrop-filter:none;-webkit-backdrop-filter:none}
+.h-overlay .brand{color:#fff}.h-overlay .logo.plain img{filter:drop-shadow(0 2px 8px rgba(0,0,0,.35))}
 @media (max-width:900px){.site-nav{display:none}.menu{display:block}.site-header .header-cta{display:none}}
 /* ---------- buttons */
 .btn{display:inline-flex;align-items:center;justify-content:center;gap:.55rem;min-height:52px;padding:.85rem 1.6rem;border-radius:var(--btn-radius);font:700 1rem/1 var(--bf);letter-spacing:.01em;text-decoration:none;border:2px solid transparent;transition:transform .2s ease,box-shadow .2s ease,background .2s ease,color .2s ease;cursor:pointer}

@@ -164,6 +164,31 @@ export type LookInfo = {
   fonts: { heading: string; body: string };
   images: { generated: number; photos: number };
   mock: boolean;
+  /** Why the AI homepage could not be used (the look then uses the section library). */
+  aiError?: string;
+  /** Bumped after "Retry with AI" so thumbnails reload. */
+  rev?: number;
+};
+
+/**
+ * What we learned about the scraped logo, so it can be placed cleanly on light and dark surfaces.
+ * - transparent: the file already has a transparent background
+ * - cleared: it had a plain background box that we made transparent (stored as image "logo")
+ * - solid: a plain background box we could not clear
+ * - complex / unknown: a photo-like background, or a format we cannot read (SVG, WebP)
+ */
+export type LogoMeta = {
+  image?: string;
+  bg: "transparent" | "cleared" | "solid" | "complex" | "unknown";
+  /** The logo's own background color (for "cleared"/"solid"). */
+  bgColor?: string;
+  /** Average color of the mark itself. */
+  fg?: string;
+  /** True when the mark is a single neutral color (it can be recolored white/black). */
+  mono?: boolean;
+  /** Stored reversed copies for dark / light surfaces (multi-color transparent logos). */
+  darkImage?: string;
+  lightImage?: string;
 };
 
 export type PlanSection = { kind: string; heading: string; brief: string };
@@ -211,6 +236,10 @@ export type PreviewInfo = {
   look?: string;
   /** Designer critique notes from the polish pass. */
   polish?: { method: "vision" | "html" | "skipped"; notes: string[] };
+  /** Pages the AI could not write (slug → reason); the UI offers "Retry with AI". */
+  aiErrors?: Record<string, string>;
+  /** Bumped after a retry so iframes reload. */
+  rev?: number;
 };
 
 export type PreviewStepResult<T> = ({ ok: true } & T) | { ok: false; error: string };
