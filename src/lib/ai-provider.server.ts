@@ -5,6 +5,8 @@
  *   AI_PROVIDER = xai (default) | openai | mock
  *   AI_MODEL    = optional model override (default grok-4.5 for xai, gpt-4.1-mini for openai)
  *   AI_BASE_URL = optional OpenAI-compatible base URL override (e.g. https://api.together.xyz/v1)
+ *   AI_REASONING_EFFORT = low (default) | medium | high | none — sent to reasoning models (Grok 4.5+), which otherwise think at "high" and are slow
+ *   AI_FALLBACK_MODEL = faster model for one retry after a timeout/failure (default grok-4.20-0309-non-reasoning for xai; "none" disables)
  *   XAI_API_KEY / OPENAI_API_KEY = the key for the chosen provider
  *   PREVIEW_MOCK=1 forces mock mode (no network AI calls; deterministic output for testing)
  *
@@ -18,6 +20,9 @@
  *   CRITIQUE_MODEL = optional model for the critique call (default: AI_MODEL / provider default)
  */
 import { env } from "@/lib/env.server";
+import { AiError, parseJsonObject, redact } from "@/lib/ai-json";
+
+export { AiError, parseJsonObject };
 
 export type AiProvider = "xai" | "openai" | "mock";
 
@@ -29,15 +34,20 @@ export type ChatOptions = {
   messages: ChatMessage[];
   maxTokens?: number;
   temperature?: number;
+  /** Per-attempt timeout. */
   timeoutMs?: number;
-  /** Retry once on 429 / 5xx / network failures. Default true. */
+  /** Absolute time (Date.now() ms) after which no attempt may run. */
+  deadline?: number;
+  /** Retry once on 429 / 5xx / network failures (not on timeouts). Default true. */
   retry?: boolean;
   /** Model override for this call (e.g. a vision model). */
   model?: string;
+  /** Ask the API for a JSON object (response_format json_object); dropped automatically if the API rejects it. */
+  json?: boolean;
 };
 
-const ENDPOINTS: Record<Exclude<AiProvider, "mock">, { url: string; key: string; model: string }> = {
-  xai: { url: "https://api.x.ai/v1/chat/completions", key: "XAI_API_KEY", model: "grok-4.5" },
+const ENDPOINTS: Record<Exclude<AiProvider, "mock">, { url: string; key: string; model: string; fallback?: string }> = {
+  xai: { url: "https://api.x.ai/v1/chat/completions", key: "XAI_API_KEY", model: "grok-4.5", fallback: "grok-4.20-0309-non-reasoning" },
   openai: { url: "https://api.openai.com/v1/chat/completions", key: "OPENAI_API_KEY", model: "gpt-4.1-mini" },
 };
 
@@ -60,71 +70,122 @@ export function aiAvailable(): boolean {
   return Boolean(env(ENDPOINTS[provider].key));
 }
 
-export class AiError extends Error {
-  status: number;
-  constructor(message: string, status = 0) {
-    super(message);
-    this.status = status;
-  }
+/** The text model used by default (AI_MODEL or the provider default). */
+export function aiModel(): string {
+  const provider = aiProvider();
+  return env("AI_MODEL") ?? (provider === "mock" ? "mock" : ENDPOINTS[provider].model);
 }
 
-/** Plain chat completion. Returns the assistant text. Throws AiError on failure. */
+/** A faster model for one retry when the main model times out or fails (AI_FALLBACK_MODEL; "none" disables). */
+export function aiFallbackModel(): string | undefined {
+  const raw = env("AI_FALLBACK_MODEL");
+  if (raw && /^(none|off|0)$/i.test(raw)) return undefined;
+  const provider = aiProvider();
+  const model = raw ?? (provider === "mock" ? undefined : ENDPOINTS[provider].fallback);
+  return model && model !== aiModel() ? model : undefined;
+}
+
+/** Grok 4.5+ always reason; reasoning_effort "low" keeps page writing fast (AI_REASONING_EFFORT overrides). */
+function reasoningEffort(provider: AiProvider, model: string): string | undefined {
+  const raw = (env("AI_REASONING_EFFORT") ?? "low").toLowerCase();
+  if (raw === "none" || raw === "off" || raw === "default") return undefined;
+  if (provider === "xai" && /^grok-(4\.(5|6|7|8|9)|[5-9])/i.test(model) && !/non-reasoning/i.test(model)) return raw;
+  if (provider === "openai" && /^(o\d|gpt-5)/i.test(model)) return raw;
+  return undefined;
+}
+
+function apiErrorText(detail: string): string {
+  try {
+    const parsed = JSON.parse(detail) as { error?: string | { message?: string }; message?: string; code?: string };
+    const message = typeof parsed.error === "string" ? parsed.error : parsed.error?.message ?? parsed.message ?? parsed.code;
+    if (message) return redact(String(message)).slice(0, 220);
+  } catch {
+    // not JSON
+  }
+  return redact(detail.replace(/\s+/g, " ")).slice(0, 220);
+}
+
+/** Plain chat completion. Returns the assistant text. Throws AiError with a readable reason on failure. */
 export async function chatText(options: ChatOptions): Promise<string> {
   const provider = aiProvider();
   if (provider === "mock") throw new AiError("AI is in mock mode (PREVIEW_MOCK=1).");
   const config = ENDPOINTS[provider];
   const apiKey = env(config.key);
-  if (!apiKey) throw new AiError("AI is not available.");
+  if (!apiKey) throw new AiError(`AI is not available (${config.key} is not set).`);
   const model = options.model ?? env("AI_MODEL") ?? config.model;
   const baseUrl = env("AI_BASE_URL");
   const endpoint = baseUrl ? `${baseUrl.replace(/\/+$/, "")}/chat/completions` : config.url;
-  const body = JSON.stringify({
-    model,
-    temperature: options.temperature ?? 0.4,
-    max_tokens: options.maxTokens ?? 2000,
-    messages: options.messages,
-  });
+  let effort = reasoningEffort(provider, model);
+  let json = options.json === true;
+
   const call = async (): Promise<string> => {
-    const response = await fetch(endpoint, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
-      body,
-      signal: AbortSignal.timeout(options.timeoutMs ?? 30_000),
-    });
+    const left = options.deadline ? options.deadline - Date.now() : Infinity;
+    const timeoutMs = Math.min(options.timeoutMs ?? 30_000, left);
+    if (timeoutMs < 3000) throw new AiError(`no time left to call ${model}`);
+    const body: Record<string, unknown> = {
+      model,
+      temperature: options.temperature ?? 0.4,
+      max_tokens: options.maxTokens ?? 2000,
+      messages: options.messages,
+    };
+    if (effort) body.reasoning_effort = effort;
+    if (json) body.response_format = { type: "json_object" };
+    const started = Date.now();
+    let response: Response;
+    try {
+      response = await fetch(endpoint, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
+        body: JSON.stringify(body),
+        signal: AbortSignal.timeout(timeoutMs),
+      });
+    } catch (error) {
+      const name = error instanceof Error ? error.name : "";
+      if (name === "TimeoutError" || name === "AbortError") throw new AiError(`${model} timed out after ${Math.round((Date.now() - started) / 1000)}s`, 408);
+      throw new AiError(`${model} could not be reached (${redact(error instanceof Error ? error.message : String(error)).slice(0, 120)})`);
+    }
     if (!response.ok) {
       const detail = await response.text().catch(() => "");
-      console.error(`[ai:${provider}]`, response.status, detail.slice(0, 300));
-      throw new AiError(`${provider} API error ${response.status}`, response.status);
+      const reason = apiErrorText(detail);
+      console.error(`[ai:${provider}] ${model}`, response.status, reason);
+      // Some models/endpoints reject optional parameters: drop them and try again once.
+      if (response.status === 400 && (effort || json) && /reasoning|response_format|json_object|unsupported|not supported|unknown (field|parameter)|invalid/i.test(reason)) {
+        if (/response_format|json/i.test(reason) && json) json = false;
+        else if (effort) effort = undefined;
+        else json = false;
+        return call();
+      }
+      throw new AiError(`${provider} API error ${response.status} from ${model}: ${reason || response.statusText}`, response.status);
     }
-    const json = (await response.json()) as { choices?: { message?: { content?: string } }[] };
-    return json.choices?.[0]?.message?.content ?? "";
+    let parsed: { choices?: { message?: { content?: string | null }; finish_reason?: string }[] };
+    try {
+      parsed = await response.json();
+    } catch {
+      throw new AiError(`${model} sent an unreadable response`);
+    }
+    const choice = parsed.choices?.[0];
+    const content = choice?.message?.content ?? "";
+    if (choice?.finish_reason === "length" && !/\}\s*$/.test(content.trim())) {
+      throw new AiError(`${model} ran out of tokens before finishing (max_tokens ${body.max_tokens})`, 413);
+    }
+    if (!content.trim()) throw new AiError(`${model} returned an empty answer${choice?.finish_reason ? ` (finish_reason ${choice.finish_reason})` : ""}`);
+    return content;
   };
   try {
     return await call();
   } catch (error) {
     if (options.retry === false) throw error;
     const status = error instanceof AiError ? error.status : 0;
-    if (status && status !== 429 && status < 500) throw error;
+    // Timeouts and token-limit cut-offs are not retried with the same model (no time / same result).
+    if (status === 408 || status === 413 || (status && status !== 429 && status < 500)) throw error;
     return call();
   }
 }
 
 /** Chat completion that must return one JSON object. */
 export async function chatJson<T = unknown>(options: ChatOptions): Promise<T> {
-  const text = await chatText(options);
+  const text = await chatText({ json: true, ...options });
   return parseJsonObject<T>(text);
-}
-
-export function parseJsonObject<T = unknown>(text: string): T {
-  const start = text.indexOf("{");
-  const end = text.lastIndexOf("}");
-  if (start < 0 || end <= start) throw new AiError("The AI answer was not JSON.");
-  try {
-    return JSON.parse(text.slice(start, end + 1)) as T;
-  } catch {
-    // Common model slip: trailing commas.
-    return JSON.parse(text.slice(start, end + 1).replace(/,\s*([}\]])/g, "$1")) as T;
-  }
 }
 
 // ---------------------------------------------------------------- images

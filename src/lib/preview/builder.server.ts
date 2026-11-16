@@ -10,7 +10,7 @@
  * assemble the same structure from the scraped facts so the preview always
  * renders — and they never invent contact details.
  */
-import { aiAvailable, chatJson, isMockMode } from "@/lib/ai-provider.server";
+import { aiAvailable, aiFallbackModel, aiModel, chatJson, isMockMode } from "@/lib/ai-provider.server";
 import { BODY_FONTS, HEADING_FONTS, defaultPalette, hashString, safeFont, safePalette } from "@/lib/preview/theme";
 import { ARCHETYPES, type DesignDirection, type PlanPage, type PlanSection, type Section, type SiteFacts, type SitePlan, type StoredImage } from "@/lib/preview/types";
 import { PRESETS, archetypesFor, mockDirections, normalizeDirection, HEADING_FONTS as DISPLAY_FONTS, BODY_FONTS as TEXT_FONTS } from "@/lib/preview/design";
@@ -183,7 +183,7 @@ export async function planSite(facts: SiteFacts, variation = 0): Promise<{ plan:
   try {
     const raw = await chatJson({
       temperature: variation ? 0.8 : 0.5,
-      maxTokens: 2500,
+      maxTokens: 8000,
       timeoutMs: 45_000,
       messages: [
         {
@@ -205,7 +205,7 @@ Rules:
     return { plan: normalizePlan(raw, facts, variation) };
   } catch (error) {
     console.error("[preview] plan failed", error instanceof Error ? error.message : error);
-    return { plan: mockPlan(facts, variation), note: "The AI planner did not answer, so the plan was assembled from the page text." };
+    return { plan: mockPlan(facts, variation), note: `The AI planner failed (${reasonOf(error)}), so the plan was assembled from the page text.` };
   }
 }
 
@@ -232,7 +232,7 @@ export async function directionsFor(facts: SiteFacts, variation = 0): Promise<{ 
   try {
     const raw = await chatJson<{ looks?: unknown[] }>({
       temperature: variation ? 0.95 : 0.85,
-      maxTokens: 3500,
+      maxTokens: 10_000,
       timeoutMs: 45_000,
       messages: [
         {
@@ -284,7 +284,7 @@ Rules:
     return { directions, mock: false };
   } catch (error) {
     console.error("[preview] directions failed", error instanceof Error ? error.message : error);
-    return { directions: mockDirections(facts, variation), mock: true, note: "The AI art director did not answer, so looks were picked from presets." };
+    return { directions: mockDirections(facts, variation), mock: true, note: `The AI art director failed (${reasonOf(error)}), so looks were picked from presets.` };
   }
 }
 
@@ -293,7 +293,8 @@ Rules:
 type ImageInfo = { name: string; describe: string };
 
 function imageList(images: Record<string, StoredImage>, pending: ImageInfo[] = []): ImageInfo[] {
-  const stored = Object.values(images).map((i) => ({
+  // The logo is shown by the header/footer only; never offered as a section photo.
+  const stored = Object.values(images).filter((i) => !i.name.startsWith("logo")).map((i) => ({
     name: i.name,
     describe: i.source === "photo" ? `real photo from their current site (${i.width ?? "?"}x${i.height ?? "?"})` : `generated photo: ${i.alt}`,
   }));
@@ -312,6 +313,21 @@ function normalizeContext(facts: SiteFacts, plan: SitePlan, page: string, images
   };
 }
 
+function reasonOf(error: unknown): string {
+  return (error instanceof Error ? error.message : String(error)).slice(0, 240);
+}
+
+/** Smaller facts payload for page writing (the full crawl text makes the call slow). */
+function leanFacts(facts: SiteFacts) {
+  return {
+    ...factsForPrompt(facts),
+    images: undefined,
+    logo: undefined,
+    current_navigation: undefined,
+    pages_read: facts.pages.slice(0, 6).map((p) => ({ title: p.title, url: p.url, headings: p.headings.slice(0, 8), text: p.text.slice(0, 600) })),
+  };
+}
+
 const HERO_FOR: Record<DesignDirection["hero"], string> = { split: "hero-split", photo: "hero-photo", type: "hero-type" };
 
 async function aiSections(
@@ -321,13 +337,17 @@ async function aiSections(
   design: DesignDirection,
   images: ImageInfo[],
   timeoutMs: number,
+  model?: string,
 ): Promise<unknown> {
   const slugs = plan.pages.map((p) => `"${p.slug}" (${p.navLabel})`).join(", ");
   const home = page.slug === "home";
   return chatJson({
     temperature: 0.75,
-    maxTokens: 4500,
+    // Reasoning models count thinking tokens against max_tokens; leave plenty of room for the JSON.
+    maxTokens: 16_000,
     timeoutMs,
+    model,
+    retry: false,
     messages: [
       {
         role: "system",
@@ -356,15 +376,21 @@ Content rules:
         content: JSON.stringify({
           page,
           site_plan: { tagline: plan.tagline, cta: plan.cta, pages: plan.pages.map((p) => ({ slug: p.slug, title: p.title, purpose: p.purpose })) },
-          facts: { ...factsForPrompt(facts), images: undefined, logo: undefined },
+          facts: leanFacts(facts),
         }),
       },
     ],
   });
 }
 
-/** AI sections for a page, validated; falls back to the deterministic composer. */
-async function sectionsFor(
+export type SectionsResult = { sections: Section[]; ai: boolean; error?: string; model?: string; seconds?: number };
+
+/**
+ * AI sections for a page, validated; falls back to the deterministic composer.
+ * Tries the main model first, then (if time is left) one retry with a faster model.
+ * Returns the reason when the AI could not be used, so the UI can show it.
+ */
+export async function sectionsFor(
   page: PlanPage,
   facts: SiteFacts,
   plan: SitePlan,
@@ -372,26 +398,50 @@ async function sectionsFor(
   images: Record<string, StoredImage>,
   pending: ImageInfo[],
   useAi: boolean,
-  timeoutMs: number,
-): Promise<{ sections: Section[]; ai: boolean }> {
+  budgetMs: number,
+): Promise<SectionsResult> {
   const list = imageList(images, pending);
   const names = list.map((i) => i.name);
   const ctx = normalizeContext(facts, plan, page.slug, names);
-  if (useAi) {
+  const fallback = () => composeMockPage(page, facts, plan, design, composeImages(names));
+  if (!useAi) return { sections: fallback(), ai: false };
+  const started = Date.now();
+  const deadline = started + budgetMs;
+  const home = page.slug === "home";
+  const errors: string[] = [];
+  const main = aiModel();
+  const fast = aiFallbackModel();
+  const attempts: { model: string; timeoutMs: number }[] = [
+    // Leave the fast model ~25s when there is one.
+    { model: main, timeoutMs: fast ? Math.max(20_000, budgetMs - 25_000) : budgetMs },
+    ...(fast ? [{ model: fast, timeoutMs: budgetMs }] : []),
+  ];
+  for (const attempt of attempts) {
+    const left = deadline - Date.now();
+    if (left < 8000) break;
+    const t0 = Date.now();
     try {
-      const raw = await aiSections(page, facts, plan, design, list, timeoutMs);
+      const raw = await aiSections(page, facts, plan, design, list, Math.min(attempt.timeoutMs, left), attempt.model);
       const sections = normalizeSections(raw, ctx);
-      const heroOk = page.slug === "home" ? sections[0] && sections[0].type.startsWith("hero-") : sections[0]?.type === "page-hero";
-      if (sections.length >= (page.slug === "home" ? 3 : 2) && heroOk) {
+      // A homepage hero of the wrong kind is fixed, not rejected.
+      if (home && sections[0]?.type === "page-hero") sections[0].type = HERO_FOR[design.hero] as Section["type"];
+      if (home && sections[0] && !sections[0].type.startsWith("hero-")) sections.unshift({ ...fallback()[0]! });
+      if (!home && sections[0]?.type !== "page-hero") sections.unshift({ type: "page-hero", tone: "tint", heading: page.title });
+      const min = home ? 3 : 2;
+      if (sections.length >= min) {
         if (page.slug === "contact" && !sections.some((s) => s.type === "contact-block")) sections.push({ type: "contact-block", tone: "light", heading: "Get in touch" });
-        return { sections, ai: true };
+        return { sections, ai: true, model: attempt.model, seconds: Math.round((Date.now() - started) / 1000) };
       }
-      console.error(`[preview] page ${page.slug}: AI sections unusable (${sections.length})`);
+      const rawCount = Array.isArray((raw as { sections?: unknown[] })?.sections) ? (raw as { sections: unknown[] }).sections.length : 0;
+      errors.push(`${attempt.model} answered in ${Math.round((Date.now() - t0) / 1000)}s but only ${sections.length} of ${rawCount} sections were usable`);
     } catch (error) {
-      console.error(`[preview] page ${page.slug} failed`, error instanceof Error ? error.message : error);
+      const message = error instanceof Error ? error.message : String(error);
+      errors.push(message.includes(attempt.model) ? message : `${attempt.model}: ${message}`);
     }
+    console.error(`[preview] page ${page.slug}: ${errors.at(-1)}`);
   }
-  return { sections: composeMockPage(page, facts, plan, design, composeImages(names)), ai: false };
+  if (!errors.length) errors.push(`no time left in the ${Math.round(budgetMs / 1000)}s step budget`);
+  return { sections: fallback(), ai: false, error: errors.join("; then ") };
 }
 
 /** Point image references at images that really exist (generation can fail): real photos first, else placeholder. */
@@ -424,9 +474,10 @@ export async function buildLook(
   plan: SitePlan,
   design: DesignDirection,
   index: number,
-): Promise<{ site: StoredSite; ai: boolean; generated: number; photos: number }> {
+): Promise<{ site: StoredSite; ai: boolean; aiError?: string; generated: number; photos: number }> {
   const { goodPhotos, heroWorthy, storePhotos, imagesEnabled, imagePrompt, generateAndStore } = await import("@/lib/preview/images.server");
   const budget = stepBudgetMs();
+  const stepStart = Date.now();
   const useAi = !isMockMode() && aiAvailable();
   const photos = await goodPhotos(facts);
   const images: Record<string, StoredImage> = await storePhotos(id, photos, facts);
@@ -453,8 +504,20 @@ export async function buildLook(
       );
     }
   }
+  let logoMeta: StoredSite["logoMeta"];
+  if (facts.logo) {
+    const { prepareLogo } = await import("@/lib/preview/logo.server");
+    jobs.push(
+      prepareLogo(id, facts.logo, facts.name).then((logo) => {
+        logoMeta = logo.meta;
+        for (const image of logo.images ?? []) images[image.name] = image;
+      }),
+    );
+  }
   const home = plan.pages[0]!;
-  const [result] = await Promise.all([sectionsFor(home, facts, plan, design, images, pending, useAi, Math.min(75_000, budget - 8_000)), ...jobs]);
+  // The homepage AI call gets everything left in this request's budget (images run alongside it).
+  const aiBudget = budget - (Date.now() - stepStart) - 5_000;
+  const [result] = await Promise.all([sectionsFor(home, facts, plan, design, images, pending, useAi, aiBudget), ...jobs]);
   const available = Object.keys(images);
   const sections = resolveImages(result.sections, available);
   const pages: StoredPage[] = plan.pages.map((p) =>
@@ -487,9 +550,11 @@ export async function buildLook(
     plan,
     lookIndex: index,
     finished: false,
+    aiErrors: result.error ? { home: result.error } : undefined,
+    logoMeta,
   };
   const generated = Object.values(images).filter((i) => i.source === "generated").length;
-  return { site, ai: result.ai, generated, photos: photos.length };
+  return { site, ai: result.ai, aiError: result.error, generated, photos: photos.length };
 }
 
 /** Build every remaining page for the chosen look, add service images, and critique/revise the homepage. */
@@ -505,7 +570,7 @@ export async function finishSite(site: StoredSite): Promise<{ site: StoredSite; 
   const images: Record<string, StoredImage> = { ...(site.images ?? {}) };
   const pending: ImageInfo[] = [];
   const jobs: Promise<void>[] = [];
-  const photoCount = Object.values(images).filter((i) => i.source === "photo").length;
+  const photoCount = Object.values(images).filter((i) => i.name.startsWith("photo-")).length;
   if (imagesEnabled() && photoCount < 4) {
     facts.services.slice(0, 3).forEach((service, i) => {
       const name = `service-${i + 1}`;
@@ -519,16 +584,21 @@ export async function finishSite(site: StoredSite): Promise<{ site: StoredSite; 
     });
   }
   let failed = 0;
+  const aiErrors: Record<string, string> = {};
+  const stepStart = Date.now();
   const todo = site.pages.filter((p) => p.slug !== "home");
   const pagesJob = Promise.all(
     todo.map(async (page) => {
       const planned = plan.pages.find((p) => p.slug === page.slug) ?? { slug: page.slug, title: page.title, navLabel: page.navLabel, purpose: "", sections: [] };
-      const result = await sectionsFor(planned, facts, plan, design, images, pending, useAi, Math.min(75_000, budget - 8_000));
-      if (useAi && !result.ai) failed += 1;
+      const result = await sectionsFor(planned, facts, plan, design, images, pending, useAi, budget - (Date.now() - stepStart) - 6_000);
+      if (useAi && !result.ai) {
+        failed += 1;
+        if (result.error) aiErrors[page.slug] = result.error;
+      }
       return { slug: page.slug, sections: result.sections };
     }),
   );
-  const homeCtx = normalizeContext(facts, plan, "home", Object.keys(images));
+  const homeCtx = normalizeContext(facts, plan, "home", Object.keys(images).filter((n) => !n.startsWith("logo")));
   const polishJob = polishHome(site, homeCtx, budget - 5_000);
   const [built, polished] = await Promise.all([pagesJob, polishJob, ...jobs]);
   const available = Object.keys(images);
@@ -537,9 +607,48 @@ export async function finishSite(site: StoredSite): Promise<{ site: StoredSite; 
     const done = built.find((b) => b.slug === page.slug);
     return { ...page, sections: resolveImages(done?.sections ?? [], available), pending: false };
   });
-  const next: StoredSite = { ...site, images, pages, finished: true, polish: polished.polish };
-  const note = failed ? `${failed} of ${todo.length} pages were assembled from the section library because the AI did not answer.` : undefined;
+  const mergedErrors = { ...(site.aiErrors?.home ? { home: site.aiErrors.home } : {}), ...aiErrors };
+  const next: StoredSite = { ...site, images, pages, finished: true, polish: polished.polish, aiErrors: Object.keys(mergedErrors).length ? mergedErrors : undefined };
+  const first = Object.values(aiErrors)[0];
+  const note = failed ? `${failed} of ${todo.length} pages were assembled from the section library because the AI failed${first ? `: ${first}` : ""}. Use "Retry with AI" to try again.` : undefined;
   return { site: next, failed, note };
 }
 
 export { hashString };
+
+/**
+ * "Retry with AI": re-run the AI for the homepage (and, for a finished site, any page that fell back).
+ * No images or critique — the whole step budget goes to the AI calls, run in parallel.
+ */
+export async function retryAiPages(site: StoredSite): Promise<{ site: StoredSite; fixed: string[]; errors: Record<string, string> }> {
+  if (!site.facts || !site.plan || !site.design) throw new Error("This preview was made by an older version. Run the site again.");
+  if (isMockMode() || !aiAvailable()) throw new Error(isMockMode() ? "AI is off (PREVIEW_MOCK=1)." : "AI is not configured on this server (XAI_API_KEY is missing).");
+  const facts = site.facts;
+  const plan = site.plan;
+  const design = site.design;
+  const budget = stepBudgetMs() - 6_000;
+  const images = site.images ?? {};
+  const slugs = Object.keys(site.aiErrors ?? {});
+  const targets = (slugs.length ? slugs : ["home"]).filter((slug) => site.pages.some((p) => p.slug === slug && !p.pending));
+  const results = await Promise.all(
+    targets.map(async (slug) => {
+      const planned = plan.pages.find((p) => p.slug === slug) ?? { slug, title: slug, navLabel: slug, purpose: "", sections: [] };
+      return { slug, result: await sectionsFor(planned, facts, plan, design, images, [], true, budget) };
+    }),
+  );
+  const available = Object.keys(images);
+  const errors: Record<string, string> = {};
+  const fixed: string[] = [];
+  const pages = site.pages.map((page) => {
+    const hit = results.find((r) => r.slug === page.slug);
+    if (!hit) return page;
+    if (!hit.result.ai) {
+      errors[page.slug] = hit.result.error ?? "the AI answer could not be used";
+      return page;
+    }
+    fixed.push(page.slug);
+    return { ...page, sections: resolveImages(hit.result.sections, available) };
+  });
+  const next: StoredSite = { ...site, pages, aiErrors: Object.keys(errors).length ? errors : undefined };
+  return { site: next, fixed, errors };
+}

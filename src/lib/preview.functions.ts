@@ -106,7 +106,7 @@ export const previewLook = createServerFn({ method: "POST" })
       if (rawPlan && typeof rawPlan === "object" && rawPlan.mock) plan.mock = true;
       const direction = normalizeDirection(data.direction, data.index, data.facts);
       const id = newPageId();
-      const { site, ai, generated, photos } = await buildLook(id, data.facts, plan, direction, data.index);
+      const { site, ai, aiError, generated, photos } = await buildLook(id, data.facts, plan, direction, data.index);
       await saveSite(site);
       const look: LookInfo = {
         id,
@@ -119,11 +119,43 @@ export const previewLook = createServerFn({ method: "POST" })
         fonts: direction.fonts,
         images: { generated, photos },
         mock: site.mock,
+        aiError: ai || site.mock ? undefined : aiError ?? "AI is not configured on this server",
       };
-      return { ok: true, look, note: ai || site.mock ? undefined : "The homepage was assembled from the section library because the AI did not answer." };
+      return { ok: true, look, note: look.aiError ? aiFallbackNote(look.aiError) : undefined };
     } catch (error) {
       console.error("[preview] look failed", error instanceof Error ? error.message : error);
       return { ok: false, error: error instanceof Error ? error.message : "This look could not be built." };
+    }
+  });
+
+function aiFallbackNote(reason: string): string {
+  return `The AI homepage could not be used (${reason}), so this look was assembled from the section library. Use "Retry with AI" to run the AI again.`;
+}
+
+/** "Retry with AI" — re-run the AI for a look's homepage (and any fallback pages of a finished site). */
+export const previewRetryAi = createServerFn({ method: "POST" })
+  .validator((input: { id?: string }) => {
+    const id = typeof input?.id === "string" ? input.id.trim() : "";
+    if (!/^[a-f0-9]{16}$/.test(id)) throw new Error("That look was not found. Run the site again.");
+    return { id };
+  })
+  .handler(async ({ data }): Promise<PreviewStepResult<{ fixed: string[]; errors: Record<string, string>; note?: string; result?: ReimagineOk }>> => {
+    if (await limited("retry", 20)) return { ok: false, error: "Too many retries from this network in the last hour. Try again shortly." };
+    try {
+      const { readSite, saveSite } = await import("./pages.server");
+      const { publicBase } = await import("./publish.server");
+      const { retryAiPages } = await import("./preview/builder.server");
+      const stored = await readSite(data.id);
+      if (!stored || stored.version !== 3) return { ok: false, error: "That look was not found on this server. Run the site again." };
+      const { site, fixed, errors } = await retryAiPages(stored);
+      await saveSite(site);
+      const first = Object.entries(errors)[0];
+      const note = first ? `The AI still failed for ${first[0] === "home" ? "the homepage" : `the "${first[0]}" page`}: ${first[1]}` : undefined;
+      const { resultFor } = await import("./preview/result");
+      return { ok: true, fixed, errors, note, result: site.finished ? resultFor(site, `${publicBase()}/made/${site.id}`, note) : undefined };
+    } catch (error) {
+      console.error("[preview] retry failed", error instanceof Error ? error.message : error);
+      return { ok: false, error: error instanceof Error ? error.message : "The AI retry failed." };
     }
   });
 
