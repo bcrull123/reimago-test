@@ -81,6 +81,47 @@ export async function fetchPhoto(url: string): Promise<Photo | null> {
   return photo;
 }
 
+export type LogoFile = { bytes: Buffer; type: string; url: string };
+
+/**
+ * Fetch a logo for analysis. Image CDNs (Squarespace, Shopify, Cloudinary…) negotiate the format, so this
+ * asks for PNG/JPEG first — WebP/AVIF can't be read by the pure-JS analyser. SVG is returned as text bytes.
+ * Returns null when the logo can't be loaded (then the business name is shown instead).
+ */
+export async function fetchLogoFile(url: string): Promise<LogoFile | null> {
+  try {
+    const { assertPublic, readCapped } = await import("@/lib/reimagine.server");
+    let current = new URL(url);
+    for (let hop = 0; hop < 4; hop += 1) {
+      if (current.protocol !== "https:" && current.protocol !== "http:") return null;
+      await assertPublic(current);
+      const response = await fetch(current, {
+        redirect: "manual",
+        signal: AbortSignal.timeout(8000),
+        headers: { Accept: "image/png,image/jpeg;q=0.9,image/svg+xml;q=0.8,image/*;q=0.3", "User-Agent": "ReimagoReimagine/1.0 (+https://reimago.ai)" },
+      });
+      if (response.status >= 300 && response.status < 400 && response.headers.get("location")) {
+        current = new URL(response.headers.get("location")!, current);
+        continue;
+      }
+      if (!response.ok) return null;
+      const bytes = await readCapped(response, 2_000_000);
+      const head = bytes.subarray(0, 512).toString("utf8").trimStart();
+      const type = /^(<\?xml[^>]*>\s*)?(<!--[\s\S]*?-->\s*)*(<!doctype svg[^>]*>\s*)?<svg[\s>]/i.test(head) || /image\/svg/i.test(response.headers.get("content-type") ?? "") ? "image/svg+xml" : sniffImageType(bytes);
+      if (!/^image\//.test(type) || bytes.length < 40) return null;
+      if (type !== "image/svg+xml") {
+        const size = imageSize(bytes);
+        // Tracking pixels and placeholders are not logos.
+        if (size && (size.width <= 2 || size.height <= 2)) return null;
+      }
+      return { bytes, type, url: current.toString() };
+    }
+  } catch {
+    return null;
+  }
+  return null;
+}
+
 /** Fetch and measure the scraped photos; keep the ones big enough for a modern site, best first. */
 export async function goodPhotos(facts: SiteFacts, max = 5): Promise<Photo[]> {
   const candidates = facts.images.filter((u) => /^https?:\/\//.test(u) && u !== facts.logo).slice(0, 8);

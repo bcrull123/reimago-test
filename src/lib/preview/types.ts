@@ -191,6 +191,15 @@ export type LogoMeta = {
   /** Stored reversed copies for dark / light surfaces (multi-color transparent logos). */
   darkImage?: string;
   lightImage?: string;
+  /** Share of the mark's pixels (or SVG colors) that would be hard to see on a dark / a light surface. */
+  poorOnDark?: number;
+  poorOnLight?: number;
+  /** One tone only (no dark-and-light mix), so a white/black knockout keeps it recognizable. */
+  flat?: boolean;
+  /** The logo is an SVG shown from its own URL (analysed from its colors, not pixels). */
+  svg?: boolean;
+  /** No usable logo image (it failed to load or can't be read safely): show the business name instead. */
+  wordmark?: boolean;
 };
 
 export type PlanSection = { kind: string; heading: string; brief: string };

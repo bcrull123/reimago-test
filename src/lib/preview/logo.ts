@@ -65,6 +65,16 @@ function reversedCopy(img: Raster, surface: [number, number, number], to: [numbe
     if (ratio(lum(d[i]!, d[i + 1]!, d[i + 2]!), sl) < 2.6) poor += 1;
   }
   if (!visible || poor / visible < 0.12) return undefined;
+  // Would the recolored parts swallow details that are already that color (white lettering inside a
+  // dark badge turning into a blank white disc)? Then don't recolor; a contrasting plate is used instead.
+  const tl = lum(...to);
+  let merge = 0;
+  for (let i = 0; i < d.length; i += 4) {
+    if (d[i + 3]! < 60) continue;
+    const l = lum(d[i]!, d[i + 1]!, d[i + 2]!);
+    if (ratio(l, sl) >= 2.6 && ratio(l, tl) < 1.6) merge += 1;
+  }
+  if (merge / visible >= 0.04) return undefined;
   const out = Buffer.from(d);
   for (let i = 0; i < out.length; i += 4) {
     if (out[i + 3]! === 0) continue;
@@ -118,6 +128,12 @@ export function analyzeLogo(bytes: Buffer, type: string): LogoAnalysis {
   // The mark: pixels that are visible and clearly different from the background.
   let fgCount = 0;
   let neutral = 0;
+  let darkTone = 0;
+  let lightTone = 0;
+  let poorDark = 0;
+  let poorLight = 0;
+  const darkL = lum(...DARK_REF);
+  const lightL = lum(...LIGHT_REF);
   const fgSum = [0, 0, 0];
   let minX = w;
   let minY = h;
@@ -135,6 +151,11 @@ export function analyzeLogo(bytes: Buffer, type: string): LogoAnalysis {
       fgSum[2] += data[i + 2]!;
       const sat = (Math.max(data[i]!, data[i + 1]!, data[i + 2]!) - Math.min(data[i]!, data[i + 1]!, data[i + 2]!)) / 255;
       if (sat < 0.18) neutral += 1;
+      const l = lum(data[i]!, data[i + 1]!, data[i + 2]!);
+      if (l < 0.18) darkTone += 1;
+      else if (l > 0.6) lightTone += 1;
+      if (ratio(l, darkL) < 2.6) poorDark += 1;
+      if (ratio(l, lightL) < 2.6) poorLight += 1;
       if (x < minX) minX = x;
       if (x > maxX) maxX = x;
       if (y < minY) minY = y;
@@ -146,6 +167,9 @@ export function analyzeLogo(bytes: Buffer, type: string): LogoAnalysis {
   if (fgCount) {
     meta.fg = hex(fgSum[0]! / fgCount, fgSum[1]! / fgCount, fgSum[2]! / fgCount);
     meta.mono = neutral / fgCount >= 0.9;
+    meta.flat = !(darkTone / fgCount >= 0.08 && lightTone / fgCount >= 0.08);
+    meta.poorOnDark = Math.round((poorDark / fgCount) * 100) / 100;
+    meta.poorOnLight = Math.round((poorLight / fgCount) * 100) / 100;
   }
   if (kind === "complex" || !fgCount) return { meta, png: encode(img, 0, 0, w, h) };
 
@@ -208,7 +232,7 @@ function encode(img: Raster, x: number, y: number, w: number, h: number): Buffer
 }
 
 export type LogoTreatment = {
-  kind: "plain" | "multiply" | "knockout-white" | "knockout-black" | "plate";
+  kind: "plain" | "multiply" | "knockout-white" | "knockout-black" | "plate" | "wordmark";
   plate?: string;
   /** Stored image to use instead of the main logo (a reversed copy). */
   image?: string;
@@ -223,12 +247,22 @@ export function logoTreatment(meta: LogoMeta | undefined, surface: string): Logo
   const fgOk = fg ? contrast(fg, surface) >= 2.6 : false;
   const plate = (color?: string): LogoTreatment => ({ kind: "plate", plate: color ?? (dark ? "#ffffff" : "#111111") });
 
+  if (m.wordmark) return { kind: "wordmark" };
   if (m.bg === "transparent" || m.bg === "cleared") {
-    if (fgOk) return { kind: "plain" };
-    if (m.mono) return { kind: dark ? "knockout-white" : "knockout-black" };
+    const poor = dark ? m.poorOnDark : m.poorOnLight;
+    // Newer records know how much of the mark would vanish; older ones fall back to the average color.
+    if (poor !== undefined ? poor < 0.12 : fgOk) return { kind: "plain" };
     if (dark && m.darkImage) return { kind: "plain", image: m.darkImage };
     if (!dark && m.lightImage) return { kind: "plain", image: m.lightImage };
-    return plate(m.bg === "cleared" ? bgColor : undefined);
+    // A one-tone mark can be knocked out to white/black and stays recognizable; a two-tone one would go blank.
+    if (m.mono && m.flat !== false) return { kind: dark ? "knockout-white" : "knockout-black" };
+    if (m.bg === "cleared" && bgColor) return plate(bgColor);
+    // Pick a plate the mark reads on: white if it reads on light, near-black if it reads on dark, else mid grey.
+    const onLight = m.poorOnLight ?? (fg ? (contrast(fg, "#ffffff") >= 2.6 ? 0 : 1) : 0);
+    const onDark = m.poorOnDark ?? (fg ? (contrast(fg, "#141416") >= 2.6 ? 0 : 1) : 0);
+    if (onLight < 0.12) return plate("#ffffff");
+    if (onDark < 0.12) return plate("#141416");
+    return plate("#8a8f98");
   }
   if (m.bg === "solid" && bgColor) {
     const boxLight = luminance(bgColor) > 0.6;
@@ -240,4 +274,77 @@ export function logoTreatment(meta: LogoMeta | undefined, surface: string): Logo
   // Complex (photo-like background): keep it as is on light surfaces.
   if (dark) return plate("#ffffff");
   return m.bg === "unknown" ? { kind: "multiply" } : { kind: "plain" };
+}
+
+const NAMED: Record<string, [number, number, number]> = {
+  white: [255, 255, 255],
+  black: [0, 0, 0],
+  red: [255, 0, 0],
+  blue: [0, 0, 255],
+  navy: [0, 0, 128],
+  green: [0, 128, 0],
+  gray: [128, 128, 128],
+  grey: [128, 128, 128],
+  silver: [192, 192, 192],
+  gold: [255, 215, 0],
+  orange: [255, 165, 0],
+};
+
+function parseColor(value: string): [number, number, number] | undefined {
+  const v = value.trim().toLowerCase();
+  let m = v.match(/^#([0-9a-f]{3})$/);
+  if (m) return [0, 1, 2].map((i) => parseInt(m![1]![i]! + m![1]![i]!, 16)) as [number, number, number];
+  m = v.match(/^#([0-9a-f]{6})([0-9a-f]{2})?$/);
+  if (m) return [0, 2, 4].map((i) => parseInt(m![1]!.slice(i, i + 2), 16)) as [number, number, number];
+  m = v.match(/^rgba?\(\s*(\d+)[\s,]+(\d+)[\s,]+(\d+)/);
+  if (m) return [Number(m[1]), Number(m[2]), Number(m[3])];
+  return NAMED[v];
+}
+
+/**
+ * Analyse an SVG logo from its colors (fill/stroke/stop-color, inline styles and <style> rules).
+ * Shapes with no fill are black by default. The SVG itself is never inlined — it is shown as an <img>.
+ */
+export function analyzeSvg(text: string): LogoMeta {
+  if (!/<svg[\s>]/i.test(text)) return { bg: "unknown", wordmark: true };
+  const colors: [number, number, number][] = [];
+  let unfilled = false;
+  for (const m of text.matchAll(/(?:fill|stroke|stop-color|color)\s*[:=]\s*["']?\s*(#[0-9a-f]{3,8}|rgba?\([^)]*\)|[a-z]+)/gi)) {
+    const c = parseColor(m[1]!);
+    if (c) colors.push(c);
+  }
+  // Drawing elements without any fill attribute/style render black.
+  for (const m of text.matchAll(/<(path|rect|circle|ellipse|polygon|text|g)\b([^>]*)>/gi)) {
+    if (!/fill|class=|style=/i.test(m[2] ?? "")) unfilled = true;
+  }
+  if (unfilled || !colors.length) colors.push([0, 0, 0]);
+  const darkL = lum(...DARK_REF);
+  const lightL = lum(...LIGHT_REF);
+  let poorDark = 0;
+  let poorLight = 0;
+  let neutral = 0;
+  let darkTone = 0;
+  let lightTone = 0;
+  const sum = [0, 0, 0];
+  for (const [r, g, b] of colors) {
+    const l = lum(r, g, b);
+    if (ratio(l, darkL) < 2.6) poorDark += 1;
+    if (ratio(l, lightL) < 2.6) poorLight += 1;
+    if ((Math.max(r, g, b) - Math.min(r, g, b)) / 255 < 0.18) neutral += 1;
+    if (l < 0.18) darkTone += 1;
+    else if (l > 0.6) lightTone += 1;
+    sum[0] += r;
+    sum[1] += g;
+    sum[2] += b;
+  }
+  const n = colors.length;
+  return {
+    bg: "transparent",
+    svg: true,
+    fg: hex(sum[0]! / n, sum[1]! / n, sum[2]! / n),
+    mono: neutral / n >= 0.9,
+    flat: !(darkTone > 0 && lightTone > 0),
+    poorOnDark: Math.round((poorDark / n) * 100) / 100,
+    poorOnLight: Math.round((poorLight / n) * 100) / 100,
+  };
 }
