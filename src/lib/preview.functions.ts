@@ -196,3 +196,34 @@ export const cursorStatus = createServerFn({ method: "GET" }).handler(async () =
   const { cursorConfigured } = await import("./reimagine.server");
   return { api: cursorConfigured() };
 });
+
+/**
+ * Keep the browser-made screenshot of a look's homepage next to the preview, so the lead email can link it
+ * (`picture_url`) as well as attach it. Optional: the form is sent with the attachment even if this fails.
+ */
+export const savePreviewPicture = createServerFn({ method: "POST" })
+  .validator((input: { id?: string; png?: string }) => {
+    const id = typeof input?.id === "string" ? input.id.trim() : "";
+    if (!/^[a-f0-9]{16}$/.test(id)) throw new Error("That look was not found.");
+    const png = typeof input?.png === "string" ? input.png.replace(/^data:image\/png;base64,/, "") : "";
+    // Serverless request bodies are capped around 4.5 MB, so larger pictures are only attached, not stored.
+    if (!png || png.length > 4_200_000 || !/^[A-Za-z0-9+/]+=*$/.test(png)) throw new Error("The picture is missing or too large to store.");
+    return { id, png };
+  })
+  .handler(async ({ data }): Promise<PreviewStepResult<{ url: string }>> => {
+    try {
+      if (await limited("picture", 30)) return { ok: false, error: "Too many pictures from this network in the last hour." };
+      const { readSite, saveImage } = await import("./pages.server");
+      const { imageSize } = await import("./preview/images.server");
+      const { publicBase } = await import("./publish.server");
+      const site = await readSite(data.id);
+      if (!site) return { ok: false, error: "That look was not found on this server." };
+      const bytes = Buffer.from(data.png, "base64");
+      const size = bytes.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])) ? imageSize(bytes) : undefined;
+      if (!size || size.width < 200 || size.width > 2600 || size.height < 100 || size.height > 5000) return { ok: false, error: "That is not a preview picture." };
+      await saveImage(data.id, "capture", "image/png", bytes);
+      return { ok: true, url: `${publicBase()}/made/${data.id}/img/capture` };
+    } catch (error) {
+      return { ok: false, error: error instanceof Error ? error.message : "The picture could not be stored." };
+    }
+  });
