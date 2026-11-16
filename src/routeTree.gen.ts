@@ -17,6 +17,7 @@ import { Route as TermsRouteImport } from './routes/terms'
 import { Route as ThanksRouteImport } from './routes/thanks'
 import { Route as MadeIdRouteImport } from './routes/made.$id'
 import { Route as MadeIdSlugRouteImport } from './routes/made.$id.$slug'
+import { Route as MadeIdImgNameRouteImport } from './routes/made.$id.img.$name'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
@@ -58,6 +59,11 @@ const MadeIdSlugRoute = MadeIdSlugRouteImport.update({
   path: '/$slug',
   getParentRoute: () => MadeIdRoute,
 } as any)
+const MadeIdImgNameRoute = MadeIdImgNameRouteImport.update({
+  id: '/img/$name',
+  path: '/img/$name',
+  getParentRoute: () => MadeIdRoute,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
@@ -68,6 +74,7 @@ export interface FileRoutesByFullPath {
   '/thanks': typeof ThanksRoute
   '/made/$id': typeof MadeIdRouteWithChildren
   '/made/$id/$slug': typeof MadeIdSlugRoute
+  '/made/$id/img/$name': typeof MadeIdImgNameRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
@@ -78,6 +85,7 @@ export interface FileRoutesByTo {
   '/thanks': typeof ThanksRoute
   '/made/$id': typeof MadeIdRouteWithChildren
   '/made/$id/$slug': typeof MadeIdSlugRoute
+  '/made/$id/img/$name': typeof MadeIdImgNameRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -89,6 +97,7 @@ export interface FileRoutesById {
   '/thanks': typeof ThanksRoute
   '/made/$id': typeof MadeIdRouteWithChildren
   '/made/$id/$slug': typeof MadeIdSlugRoute
+  '/made/$id/img/$name': typeof MadeIdImgNameRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -101,6 +110,7 @@ export interface FileRouteTypes {
     | '/thanks'
     | '/made/$id'
     | '/made/$id/$slug'
+    | '/made/$id/img/$name'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
@@ -111,6 +121,7 @@ export interface FileRouteTypes {
     | '/thanks'
     | '/made/$id'
     | '/made/$id/$slug'
+    | '/made/$id/img/$name'
   id:
     | '__root__'
     | '/'
@@ -121,6 +132,7 @@ export interface FileRouteTypes {
     | '/thanks'
     | '/made/$id'
     | '/made/$id/$slug'
+    | '/made/$id/img/$name'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -191,15 +203,24 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof MadeIdSlugRouteImport
       parentRoute: typeof MadeIdRoute
     }
+    '/made/$id/img/$name': {
+      id: '/made/$id/img/$name'
+      path: '/img/$name'
+      fullPath: '/made/$id/img/$name'
+      preLoaderRoute: typeof MadeIdImgNameRouteImport
+      parentRoute: typeof MadeIdRoute
+    }
   }
 }
 
 interface MadeIdRouteChildren {
   MadeIdSlugRoute: typeof MadeIdSlugRoute
+  MadeIdImgNameRoute: typeof MadeIdImgNameRoute
 }
 
 const MadeIdRouteChildren: MadeIdRouteChildren = {
   MadeIdSlugRoute: MadeIdSlugRoute,
+  MadeIdImgNameRoute: MadeIdImgNameRoute,
 }
 
 const MadeIdRouteWithChildren =

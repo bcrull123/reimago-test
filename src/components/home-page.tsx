@@ -4,13 +4,14 @@ import { ArrowRight } from "lucide-react";
 import { SiteShell, Wordmark } from "@/components/site-shell";
 import { CreateSiteWizard, type CreateBrief, type CreateFiles } from "@/components/create-site-wizard";
 import { checkDomainName, handOffToCursor } from "@/lib/reimagine.functions";
-import { cursorStatus, previewBuild, previewFromBrief, previewPlan, previewRead } from "@/lib/preview.functions";
+import { cursorStatus, previewDirections, previewFinish, previewFromBrief, previewLook, previewRead } from "@/lib/preview.functions";
 import { LivePreview } from "@/components/live-preview";
-import type { SiteFacts } from "@/lib/preview/types";
+import { LooksPicker } from "@/components/looks-picker";
+import type { LookInfo, PreviewInfo, SiteFacts } from "@/lib/preview/types";
 import type { DomainOffer } from "@/lib/logicboxes-types";
 import type { ReimagineOk } from "@/lib/reimagine-types";
 
-const STORAGE_KEY = "reimago-reimagine-v3";
+const STORAGE_KEY = "reimago-reimagine-v4";
 
 const REBUILDS = [
   ["Website", "A new first impression. Structure, copy, and conversion — rebuilt from what you already have."],
@@ -23,19 +24,30 @@ type Saved = {
   url: string;
   email: string;
   notes: string;
-  result: ReimagineOk;
+  result?: ReimagineOk | null;
+  looks?: LookInfo[];
   facts?: SiteFacts;
   variation?: number;
 };
 
-type Stage = "" | "read" | "plan" | "build" | "send";
+type Stage = "" | "read" | "dream" | "paint" | "send" | "finish";
 
-const STAGES: { key: Exclude<Stage, "">; label: string }[] = [
+/** Progress shown while looks are made (phase 1) and while the chosen look is finished (phase 2). */
+const LOOK_STAGES: { key: Stage; label: string }[] = [
   { key: "read", label: "Reading your site…" },
-  { key: "plan", label: "Planning pages…" },
-  { key: "build", label: "Building pages…" },
+  { key: "dream", label: "Dreaming up looks…" },
+  { key: "paint", label: "Painting images and homepages…" },
   { key: "send", label: "Sending your preview link…" },
 ];
+const FINISH_STAGES: { key: Stage; label: string }[] = [
+  { key: "finish", label: "Building pages…" },
+  { key: "finish", label: "Polishing the homepage…" },
+];
+
+/** A homepage-only look shown in the viewer before the visitor picks one. */
+function lookPreview(look: LookInfo): PreviewInfo {
+  return { id: look.id, url: look.url, mock: look.mock, look: look.name, pages: [{ slug: "home", title: `${look.name} · Home`, url: look.url }] };
+}
 
 function isEmail(value: string): boolean {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
@@ -176,6 +188,10 @@ export function HomePage() {
   const [cursorApi, setCursorApi] = useState(false);
   const [error, setError] = useState("");
   const [result, setResult] = useState<ReimagineOk | null>(null);
+  const [looks, setLooks] = useState<LookInfo[] | null>(null);
+  const [focusedLook, setFocusedLook] = useState("");
+  const [chosenLook, setChosenLook] = useState("");
+  const [looksNote, setLooksNote] = useState("");
   const [facts, setFacts] = useState<SiteFacts | null>(null);
   const [variation, setVariation] = useState(0);
   const [mailed, setMailed] = useState<string>("");
@@ -190,12 +206,18 @@ export function HomePage() {
       const raw = localStorage.getItem(STORAGE_KEY);
       if (!raw) return;
       const saved = JSON.parse(raw) as Saved;
-      if (!saved?.result?.ok) return;
+      if (!saved?.result?.ok && !saved?.looks?.length) return;
       setUrl(saved.url || "");
       setEmail(saved.email || "");
       setNotes(saved.notes || "");
       setAgreed(true);
-      setResult(saved.result);
+      setResult(saved.result?.ok ? saved.result : null);
+      if (saved.looks?.length) {
+        setLooks(saved.looks);
+        const chosen = saved.result?.preview?.id ?? "";
+        setChosenLook(chosen);
+        setFocusedLook(chosen || saved.looks[0]!.id);
+      }
       setFacts(saved.facts ?? null);
       setVariation(saved.variation ?? 0);
     } catch {
@@ -210,13 +232,21 @@ export function HomePage() {
   }, []);
 
   useEffect(() => {
-    if (!scrollOnResult.current || !result) return;
+    if (!scrollOnResult.current || (!result && !looks)) return;
     scrollOnResult.current = false;
     draftRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
-  }, [result]);
+  }, [result, looks]);
 
-  function remember(next: ReimagineOk, nextFacts: SiteFacts | null, nextVariation: number, site = url) {
-    const saved: Saved = { url: site, email: email.trim(), notes: notes.trim(), result: next, facts: nextFacts ?? undefined, variation: nextVariation };
+  function remember(next: ReimagineOk | null, nextLooks: LookInfo[] | null, nextFacts: SiteFacts | null, nextVariation: number, site = url) {
+    const saved: Saved = {
+      url: site,
+      email: email.trim(),
+      notes: notes.trim(),
+      result: next,
+      looks: nextLooks ?? undefined,
+      facts: nextFacts ?? undefined,
+      variation: nextVariation,
+    };
     try {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(saved));
     } catch {
@@ -228,16 +258,64 @@ export function HomePage() {
     }
   }
 
-  /** Plan + build a live preview from facts. Returns the result or throws with a readable message. */
-  async function planAndBuild(nextFacts: SiteFacts, nextVariation: number): Promise<ReimagineOk> {
-    setStage("plan");
-    const planned = await previewPlan({ data: { facts: nextFacts, variation: nextVariation } });
+  /**
+   * Phase 1: plan the pages + three design directions, then build each look's images and
+   * homepage in parallel (three separate requests, so none of them runs into host time limits).
+   */
+  async function makeLooks(nextFacts: SiteFacts, nextVariation: number): Promise<{ looks: LookInfo[]; note: string }> {
+    setStage("dream");
+    const planned = await previewDirections({ data: { facts: nextFacts, variation: nextVariation } });
     if (!planned.ok) throw new Error(planned.error);
-    setStage("build");
-    const built = await previewBuild({ data: { facts: nextFacts, plan: planned.plan, variation: nextVariation } });
-    if (!built.ok) throw new Error(built.error);
-    const note = [built.result.note, planned.note].filter(Boolean).filter((v, i, list) => list.indexOf(v) === i).join(" ");
-    return { ...built.result, note: note || undefined };
+    setStage("paint");
+    const settled = await Promise.allSettled(
+      planned.directions.map((direction, index) =>
+        previewLook({ data: { facts: nextFacts, plan: planned.plan, direction, index, variation: nextVariation } }),
+      ),
+    );
+    const made: LookInfo[] = [];
+    const notes = [planned.note ?? ""];
+    let firstError = "";
+    for (const item of settled) {
+      if (item.status === "fulfilled" && item.value.ok) {
+        made.push(item.value.look);
+        if (item.value.note) notes.push(item.value.note);
+      } else if (!firstError) {
+        firstError = item.status === "fulfilled" ? (item.value.ok ? "" : item.value.error) : item.reason instanceof Error ? item.reason.message : "";
+      }
+    }
+    if (!made.length) throw new Error(firstError || "The looks could not be built. Try again.");
+    if (made.length < planned.directions.length) notes.push(`${planned.directions.length - made.length} look could not be built this time.`);
+    made.sort((a, b) => a.index - b.index);
+    const note = notes.filter(Boolean).filter((v, i, list) => list.indexOf(v) === i).join(" ");
+    return { looks: made, note };
+  }
+
+  function showLooks(nextLooks: LookInfo[], note: string) {
+    setLooks(nextLooks);
+    setFocusedLook(nextLooks[0]!.id);
+    setChosenLook("");
+    setLooksNote(note);
+    setResult(null);
+  }
+
+  /** Phase 2: the visitor picked a look — build every page in that style and polish the homepage. */
+  async function chooseLook(look: LookInfo) {
+    setError("");
+    setRetrying(true);
+    setStage("finish");
+    try {
+      const finished = await previewFinish({ data: { id: look.id } });
+      if (!finished.ok) throw new Error(finished.error);
+      setChosenLook(look.id);
+      setFocusedLook(look.id);
+      setResult(finished.result);
+      remember(finished.result, looks, facts, variation);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "That look could not be finished. Try again.");
+    } finally {
+      setRetrying(false);
+      setStage("");
+    }
   }
 
   async function lookupDomain(nameInput?: string) {
@@ -299,12 +377,12 @@ export function HomePage() {
         setError(read.error);
         return;
       }
-      const next = await planAndBuild(read.facts, 0);
+      const made = await makeLooks(read.facts, 0);
       setFacts(read.facts);
       setVariation(0);
-      remember(next, read.facts, 0, site);
+      remember(null, made.looks, read.facts, 0, site);
       scrollOnResult.current = true;
-      setResult(next);
+      showLooks(made.looks, [read.facts.note, made.note].filter(Boolean).join(" "));
       setStage("send");
       try {
         await submitFormcarry({
@@ -312,8 +390,8 @@ export function HomePage() {
           website: site,
           note: notes.trim(),
           gotcha: typeof gotcha === "string" ? gotcha : "",
-          previewUrl: next.preview?.url ?? next.pageUrl,
-          previewPages: next.preview?.pages.map((page) => page.url),
+          previewUrl: made.looks[0]!.url,
+          previewPages: made.looks.map((look) => `${look.name}: ${look.url}`),
         });
         setMailed(THANKS);
       } catch (err) {
@@ -340,33 +418,33 @@ export function HomePage() {
     setWorking(true);
     setMailed("");
     setHandoff("");
-    let next: ReimagineOk | null = null;
+    let made: { looks: LookInfo[]; note: string } | null = null;
     let buildError = "";
     try {
       const gotcha = document.querySelector<HTMLInputElement>('input[name="_gotcha"]')?.value ?? "";
       try {
-        setStage("plan");
+        setStage("read");
         const start = await previewFromBrief({ data: { brief: brief as unknown as Record<string, unknown> } });
         if (!start.ok) throw new Error(start.error);
-        next = await planAndBuild(start.facts, 0);
+        made = await makeLooks(start.facts, 0);
         setFacts(start.facts);
         setVariation(0);
-        remember(next, start.facts, 0, brief.existing_site || brief.domain || "");
+        remember(null, made.looks, start.facts, 0, brief.existing_site || brief.domain || "");
       } catch (err) {
         buildError = err instanceof Error ? err.message : "The preview could not be built.";
       }
       setStage("send");
-      await submitCreateBrief(email.trim(), gotcha, brief, files, next?.preview?.url);
+      await submitCreateBrief(email.trim(), gotcha, brief, files, made?.looks[0]?.url);
       setMailed(THANKS);
-      if (!next) {
+      if (!made) {
         setError(buildError);
         return;
       }
       scrollOnResult.current = true;
-      setResult(next);
+      showLooks(made.looks, made.note);
     } catch (err) {
       setError(err instanceof Error ? err.message : "The form could not be sent. Try again.");
-      if (next) setResult(next);
+      if (made) showLooks(made.looks, made.note);
     } finally {
       setWorking(false);
       setStage("");
@@ -374,7 +452,7 @@ export function HomePage() {
   }
 
   async function tryAgain() {
-    if (!result) return;
+    if (!result && !looks) return;
     if (!facts) {
       setError("Run the site again to build a new version.");
       return;
@@ -383,10 +461,10 @@ export function HomePage() {
     setError("");
     try {
       const nextVariation = variation + 1;
-      const next = await planAndBuild(facts, nextVariation);
+      const made = await makeLooks(facts, nextVariation);
       setVariation(nextVariation);
-      setResult(next);
-      remember(next, facts, nextVariation);
+      showLooks(made.looks, made.note);
+      remember(null, made.looks, facts, nextVariation);
     } catch (err) {
       setError(err instanceof Error ? err.message : "A new version could not be built.");
     } finally {
@@ -497,17 +575,18 @@ export function HomePage() {
               <span className="absolute left-1/2 top-1/2 size-2 -translate-x-1/2 -translate-y-1/2 rounded-full bg-fg" />
             </div>
             <p className="mt-6 text-sm font-medium text-fg">
-              {STAGES.find((item) => item.key === stage)?.label ?? "Building your site"}
+              {stage === "finish" ? "Building your site in this look" : (LOOK_STAGES.find((item) => item.key === stage)?.label ?? "Building your site")}
             </p>
             <ol className="mt-4 space-y-1.5 text-sm">
-              {STAGES.filter((item) => item.key !== "send" || stage === "send").map((item) => {
-                const order = STAGES.findIndex((entry) => entry.key === item.key);
-                const current = STAGES.findIndex((entry) => entry.key === stage);
+              {(stage === "finish" ? FINISH_STAGES : LOOK_STAGES.filter((item) => item.key !== "send" || stage === "send")).map((item) => {
+                const list = stage === "finish" ? FINISH_STAGES : LOOK_STAGES;
+                const order = list.findIndex((entry) => entry.key === item.key);
+                const current = list.findIndex((entry) => entry.key === stage);
                 const done = current > order;
                 const active = current === order;
                 return (
                   <li
-                    key={item.key}
+                    key={item.label}
                     className={`flex items-center gap-2 ${active ? "text-fg" : done ? "text-muted" : "text-faint"}`}
                   >
                     <span aria-hidden className="inline-block w-4 text-center">
@@ -518,7 +597,9 @@ export function HomePage() {
                 );
               })}
             </ol>
-            <p className="mt-4 max-w-xs text-center text-xs text-muted">This usually takes about a minute.</p>
+            <p className="mt-4 max-w-xs text-center text-xs text-muted">
+              {stage === "finish" ? "This usually takes about a minute." : "Three looks take a minute or two — worth the wait."}
+            </p>
           </div>
         </div>
       ) : null}
@@ -722,17 +803,51 @@ export function HomePage() {
           </div>
         </section>
 
-        {result ? (
+        {result || looks ? (
           <section ref={draftRef} className="scroll-mt-16 border-t border-border">
             <div className="mx-auto max-w-6xl px-4 pt-8 sm:px-6">
-              {result.preview ? (
-                <LivePreview preview={result.preview} host={result.host} />
-              ) : (
-                <p className="rounded-2xl border border-border bg-surface p-6 text-sm text-muted">
-                  This saved draft was made with the old picture preview. Run the site again to build a live, clickable
-                  preview.
+              {looks ? (
+                <LooksPicker
+                  looks={looks}
+                  focused={focusedLook}
+                  chosen={chosenLook || undefined}
+                  busy={retrying || working}
+                  onFocus={setFocusedLook}
+                  onChoose={(look) => void chooseLook(look)}
+                />
+              ) : null}
+              {looksNote && !result ? <p className="mt-3 text-sm text-faint">{looksNote}</p> : null}
+              <div className="mt-6">
+                {(() => {
+                  const focused = looks?.find((look) => look.id === focusedLook);
+                  if (result?.preview && (!focused || focused.id === chosenLook)) {
+                    return <LivePreview key={`full-${result.preview.id}`} preview={result.preview} host={result.host} />;
+                  }
+                  if (focused) return <LivePreview key={`look-${focused.id}`} preview={lookPreview(focused)} host={facts?.host || bareDomain(url) || focused.name} />;
+                  return (
+                    <p className="rounded-2xl border border-border bg-surface p-6 text-sm text-muted">
+                      This saved draft was made with an older preview. Run the site again to build new looks.
+                    </p>
+                  );
+                })()}
+              </div>
+              {looks && !result ? (
+                <p className="mt-3 text-sm text-muted">
+                  Homepages only for now — choose <strong>Use this look</strong> to build every page in that style.
                 </p>
-              )}
+              ) : null}
+              {result?.preview?.polish && result.preview.polish.notes.length ? (
+                <div className="mt-4 rounded-2xl border border-border bg-surface p-4 text-sm">
+                  <p className="font-medium text-fg">
+                    Designer polish{result.preview.polish.method === "vision" ? " (reviewed from a screenshot)" : ""}
+                  </p>
+                  <ul className="mt-2 list-disc space-y-1 pl-5 text-muted">
+                    {result.preview.polish.notes.map((note) => (
+                      <li key={note}>{note}</li>
+                    ))}
+                  </ul>
+                </div>
+              ) : null}
               <div className="mt-4 flex flex-col gap-3 sm:flex-row">
                 <button
                   type="button"
@@ -740,19 +855,22 @@ export function HomePage() {
                   disabled={retrying || !facts}
                   className="inline-flex h-12 items-center justify-center rounded-md border border-border bg-surface px-6 text-sm font-medium disabled:opacity-40"
                 >
-                  {retrying ? "Building another version…" : "Try Again"}
+                  {retrying && stage !== "finish" ? "Dreaming up new looks…" : "Try Again: new looks"}
                 </button>
-                <button
-                  type="button"
-                  onClick={() => void handOff()}
-                  disabled={handing || !result.preview}
-                  className="inline-flex h-12 items-center justify-center rounded-md bg-ink px-6 text-sm font-medium text-white disabled:opacity-40"
-                >
-                  {handing ? "Handing off…" : cursorApi ? "Send to Cursor" : "Hand off to Cursor"}
-                </button>
+                {result ? (
+                  <button
+                    type="button"
+                    onClick={() => void handOff()}
+                    disabled={handing || !result.preview}
+                    className="inline-flex h-12 items-center justify-center rounded-md bg-ink px-6 text-sm font-medium text-white disabled:opacity-40"
+                  >
+                    {handing ? "Handing off…" : cursorApi ? "Send to Cursor" : "Hand off to Cursor"}
+                  </button>
+                ) : null}
               </div>
               {handoff ? <p className="mt-3 text-sm text-muted">{handoff}</p> : null}
             </div>
+            {result ? (
             <div className="mx-auto grid max-w-6xl gap-8 px-4 py-16 sm:px-6 lg:grid-cols-[16rem_1fr]">
               <aside>
                 <p className="text-xs font-medium uppercase tracking-eyebrow text-faint">What we read</p>
@@ -792,6 +910,11 @@ export function HomePage() {
                 </p>
               </div>
             </div>
+            ) : (
+              <div className="mx-auto max-w-6xl px-4 pb-16 pt-6 sm:px-6">
+                <p className="text-sm text-muted">{mailed || "The look links are emailed to marketing@reimago.ai."}</p>
+              </div>
+            )}
           </section>
         ) : null}
 

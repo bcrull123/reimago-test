@@ -331,10 +331,10 @@ export async function readCapped(response: Response, max: number): Promise<Buffe
   return Buffer.concat(chunks).subarray(0, max);
 }
 
-export function rateLimited(key: string): boolean {
+export function rateLimited(key: string, max = 6): boolean {
   const now = Date.now();
   const recent = (hits.get(key) ?? []).filter((stamp) => now - stamp < 60 * 60 * 1000);
-  if (recent.length >= 6) {
+  if (recent.length >= max) {
     hits.set(key, recent);
     return true;
   }
