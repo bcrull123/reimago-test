@@ -13,7 +13,8 @@ export const Route = createFileRoute("/made/$id/$slug")({
         return new Response(html, {
           headers: {
             "content-type": "text/html; charset=utf-8",
-            "cache-control": "public, max-age=300",
+            // Unfinished looks change when the visitor picks one, so they are never cached.
+            "cache-control": site?.version === 3 && !site.finished ? "no-cache" : "public, max-age=300",
             "content-security-policy": PREVIEW_CSP,
             "x-robots-tag": "noindex",
           },
