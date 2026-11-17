@@ -122,7 +122,8 @@ export function scoreWebPhoto(candidate: WebPhotoCandidate, scene: string, place
   if (!hits(keywords.filter((k) => !WEAK.has(k)), candidate.text)) return -1;
   // Most of the scene must match ("brick streets": a brick house is not enough). A photo titled as the town's
   // downtown / historic district counts double for a downtown scene: that is the place the owner means.
-  const placeLevel = keywords.includes("downtown") && hits(["downtown"], candidate.title) ? 1 : 0;
+  // (Its title, or a category such as "Pauls Valley Historic District" on a photo of a downtown building.)
+  const placeLevel = keywords.includes("downtown") && hits(["downtown"], candidate.text) ? 1 : 0;
   if (sceneHits + placeLevel < Math.min(2, keywords.length)) return -1;
   // A match in the photo's own title counts more than one in its categories ("…Historic District" category on a train station).
   const titleHits = hits(keywords, candidate.title);

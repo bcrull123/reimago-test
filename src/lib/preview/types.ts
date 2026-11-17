@@ -101,7 +101,12 @@ export type DesignDirection = {
   radius: "sharp" | "soft" | "round";
   buttons: "pill" | "square" | "outline";
   hero: "split" | "photo" | "type";
-  header: "light" | "dark" | "overlay";
+  /** "center" = centered logo with the menu under it. */
+  header: "light" | "dark" | "overlay" | "center";
+  /** How the hero shows its photo; no two looks share one (see look-variety.ts). */
+  heroStyle?: "caption" | "cinematic" | "collage";
+  /** Below-the-fold section recipe; no two looks share one. */
+  layout?: "editorial" | "showcase" | "bold";
   footer: "columns" | "minimal" | "statement";
   /** A bold headline idea for the hero. */
   headline: string;
@@ -181,6 +186,8 @@ export type PreviewTrace = {
   request: { note: string; feedback: string[]; scene?: string };
   steps: { step: string; ai: boolean; ownerRequest: boolean }[];
   images: ImageTrace[];
+  /** What makes this look different from the other two (hero treatment, header, buttons, footer, section order, photo). */
+  layout?: { hero: string; header: string; buttons: string; footer: string; sections: string; photo: string };
 };
 
 /** What the browser gets back for each homepage look. */
@@ -201,6 +208,8 @@ export type LookInfo = {
   applied?: string[];
   /** One line about the photos, e.g. 'Photos: generated for “brick streets”'. */
   photos?: string;
+  /** e.g. "Layout: full-bleed cinematic hero · transparent header · outline buttons". */
+  layout?: string;
   /** What this look's build recorded (see PreviewTrace): which AI steps got the owner's request, image prompts. */
   trace?: PreviewTrace;
   /** Why the AI homepage could not be used (the look then uses the section library). */

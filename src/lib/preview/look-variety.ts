@@ -1,0 +1,175 @@
+/**
+ * Keeping the three looks visibly different (Bob: "these are all the same other than the wording").
+ *
+ * Each look gets its own hero treatment, header, button shape, footer and section order:
+ * - caption   (editorial / minimal): split hero, text on a light panel, photo right with a caption; solid header bar;
+ * - cinematic (dark premium):        full-bleed photo, strong side overlay, low focal point; transparent header;
+ * - collage   (playful / bold):      color-block hero, photo in a tilted rounded frame (duotone), big stamp, a second
+ *                                     photo tile; centered-logo header.
+ * Below the fold each look has its own recipe (section order and section variants). `lookSignature` +
+ * `similarities` check two looks; `diversifyDirections` re-rolls the options until no two looks share them.
+ */
+import type { Archetype, DesignDirection, Section, SectionType } from "./types.ts";
+
+export const HERO_STYLES = ["caption", "cinematic", "collage"] as const;
+export type HeroStyle = (typeof HERO_STYLES)[number];
+export type LayoutRecipe = "editorial" | "showcase" | "bold";
+
+/** Each archetype's hero treatments, best first. Archetypes earlier in PRIORITY choose first. */
+const PREFERRED: Record<Archetype, HeroStyle[]> = {
+  editorial: ["caption", "collage", "cinematic"],
+  "dark-premium": ["cinematic", "caption", "collage"],
+  playful: ["collage", "caption", "cinematic"],
+  "warm-craft": ["collage", "caption", "cinematic"],
+  "bold-photo": ["cinematic", "collage", "caption"],
+  "minimal-luxury": ["caption", "cinematic", "collage"],
+};
+const PRIORITY: Archetype[] = ["editorial", "dark-premium", "playful", "warm-craft", "bold-photo", "minimal-luxury"];
+
+/** What each hero treatment means for the rest of the look. */
+export const STYLE_PLAN: Record<HeroStyle, { hero: DesignDirection["hero"]; header: DesignDirection["header"]; layout: LayoutRecipe; buttons: DesignDirection["buttons"]; footer: DesignDirection["footer"] }> = {
+  caption: { hero: "split", header: "light", layout: "editorial", buttons: "square", footer: "columns" },
+  cinematic: { hero: "photo", header: "overlay", layout: "showcase", buttons: "outline", footer: "minimal" },
+  collage: { hero: "split", header: "center", layout: "bold", buttons: "pill", footer: "statement" },
+};
+
+function pickFree<T>(preferred: T, options: readonly T[], used: Set<T>): T {
+  if (!used.has(preferred)) return preferred;
+  return options.find((o) => !used.has(o)) ?? preferred;
+}
+
+/** Give every look a different hero treatment, header, button shape, footer and section recipe. */
+export function diversifyDirections(directions: DesignDirection[]): DesignDirection[] {
+  const styles = new Set<HeroStyle>();
+  const chosen: HeroStyle[] = [];
+  // A style the AI art director asked for counts first; then archetypes in priority order take their best free
+  // treatment (so the dark look keeps "cinematic" and the editorial look keeps the captioned split).
+  const order = directions
+    .map((d, i) => i)
+    .sort((x, y) => Number(!directions[y]!.heroStyle) - Number(!directions[x]!.heroStyle) || PRIORITY.indexOf(directions[x]!.archetype) - PRIORITY.indexOf(directions[y]!.archetype));
+  for (const i of order) {
+    const d = directions[i]!;
+    const wants = [...(d.heroStyle ? [d.heroStyle] : []), ...(PREFERRED[d.archetype] ?? HERO_STYLES)];
+    const style = wants.find((w) => !styles.has(w)) ?? HERO_STYLES.find((w) => !styles.has(w)) ?? "caption";
+    styles.add(style);
+    chosen[i] = style;
+  }
+  const buttons = new Set<DesignDirection["buttons"]>();
+  const headers = new Set<DesignDirection["header"]>();
+  const footers = new Set<DesignDirection["footer"]>();
+  return directions.map((d, i) => {
+    const style = chosen[i]!;
+    const plan = STYLE_PLAN[style];
+    const b = pickFree(plan.buttons, ["square", "outline", "pill"] as const, buttons);
+    const h = pickFree(plan.header, ["light", "overlay", "center", "dark"] as const, headers);
+    const f = pickFree(plan.footer, ["columns", "minimal", "statement"] as const, footers);
+    buttons.add(b);
+    headers.add(h);
+    footers.add(f);
+    const motifs = style === "collage" && !d.motifs.includes("stamp-badges") ? [...d.motifs.slice(0, 2), "stamp-badges" as const] : style === "caption" ? d.motifs.filter((m) => m !== "stamp-badges") : d.motifs;
+    return { ...d, heroStyle: style, layout: plan.layout, hero: plan.hero, header: h, buttons: b, footer: f, motifs };
+  });
+}
+
+// ---------------------------------------------------------------- sections
+
+/** Below-the-fold order per recipe (types not listed keep their relative order at the end). */
+const ORDER: Record<LayoutRecipe, SectionType[]> = {
+  editorial: ["statement", "services-grid", "feature-split", "process", "reviews", "faq", "gallery", "stat-bar", "marquee", "before-after"],
+  showcase: ["stat-bar", "gallery", "feature-split", "services-grid", "reviews", "statement", "process", "faq", "marquee", "before-after"],
+  bold: ["marquee", "services-grid", "process", "gallery", "feature-split", "reviews", "stat-bar", "statement", "faq", "before-after"],
+};
+/** Service card style per recipe: editorial list, showcase photo cards (or a bento of up to 5), bold icon tiles. */
+const GRID: Record<LayoutRecipe, string> = { editorial: "list", showcase: "images", bold: "icons" };
+
+/** Which of the found photos of the requested scene a look shows: the best one goes full-bleed (cinematic). */
+export function photoRank(design: DesignDirection, index: number): number {
+  return design.heroStyle ? { cinematic: 0, caption: 1, collage: 2 }[design.heroStyle] : index;
+}
+
+/** Hero treatment + section order + section variants for one look. Uses only what is already on the page (no new copy or facts). */
+export function arrangeSections(sections: Section[], design: DesignDirection, available: string[], services: string[] = []): Section[] {
+  const style = design.heroStyle;
+  const recipe = design.layout;
+  if (!style || !recipe || !sections.length) return sections;
+  const out = sections.map((s) => ({ ...s }));
+  const first = out[0]!;
+  const photos = available.filter((n) => n.startsWith("photo-") || n === "feature");
+  if (first.type.startsWith("hero-")) {
+    const image = first.image && available.includes(first.image) ? first.image : undefined;
+    if (!image) {
+      // No photo for the hero: the typographic hero, still shaped per look.
+      out[0] = { ...first, type: "hero-type", variant: style, tone: style === "cinematic" ? "dark" : style === "collage" ? "brand" : "tint" };
+    } else if (style === "cinematic") {
+      out[0] = { ...first, type: "hero-photo", variant: "cinematic", tone: "dark" };
+    } else if (style === "caption") {
+      out[0] = { ...first, type: "hero-split", variant: "caption", tone: "light", reverse: false };
+    } else {
+      const second = photos.find((p) => p !== image);
+      out[0] = { ...first, type: "hero-split", variant: "collage", tone: "brand", items: second ? [{ title: "", text: "", image: second }] : first.items };
+    }
+  }
+  const last = out.length > 1 && out.at(-1)!.type === "cta-band" ? out.pop()! : undefined;
+  const head = out.shift()!;
+  const rank = (t: SectionType) => {
+    const i = ORDER[recipe].indexOf(t);
+    return i < 0 ? 99 : i;
+  };
+  let middle = out.map((s, i) => ({ s, i })).sort((a, b) => rank(a.s.type) - rank(b.s.type) || a.i - b.i).map((x) => x.s);
+  middle = middle.map((s) => {
+    if (s.type === "services-grid") {
+      const withImages = (s.items ?? []).filter((it) => it.image && available.includes(it.image)).length;
+      const variant = GRID[recipe];
+      // Without photos for most cards, the showcase look uses a bento grid (homepage shows 5; the services page has all).
+      if (variant === "images" && withImages * 2 < (s.items?.length ?? 0)) return { ...s, variant: "bento", items: s.items?.slice(0, 5) };
+      return { ...s, variant };
+    }
+    if (s.type === "feature-split") return { ...s, reverse: recipe === "bold" ? true : recipe === "showcase" ? false : s.reverse };
+    return s;
+  });
+  // Section types that make the difference visible, from facts already on the page.
+  if (recipe === "showcase" && !middle.some((s) => s.type === "gallery") && photos.length >= 3) {
+    middle.splice(1, 0, { type: "gallery", tone: "dark", items: photos.slice(0, 5).map((image) => ({ title: "", text: "", image })) });
+  }
+  if (recipe === "bold" && !middle.some((s) => s.type === "marquee") && services.length >= 3) {
+    middle.unshift({ type: "marquee", tone: "brand", items: services.slice(0, 8).map((title) => ({ title, text: "" })) });
+  }
+  return [head, ...middle, ...(last ? [last] : [])];
+}
+
+// ---------------------------------------------------------------- distinctness check
+
+export type LookSignature = { hero: string; header: string; buttons: string; footer: string; sections: string; photo: string };
+
+export function lookSignature(design: DesignDirection, sections: Section[], heroImage?: string): LookSignature {
+  const hero = sections[0] ? `${sections[0].type}/${sections[0].variant ?? ""}` : "none";
+  return {
+    hero,
+    header: design.header,
+    buttons: design.buttons,
+    footer: design.footer,
+    sections: sections
+      .slice(1)
+      .map((s) => `${s.type}${s.variant ? `/${s.variant}` : ""}`)
+      .join(">"),
+    photo: `${design.heroStyle ?? "plain"}:${heroImage ?? ""}`,
+  };
+}
+
+/** Which parts two looks share (empty = clearly different). */
+export function similarities(a: LookSignature, b: LookSignature): string[] {
+  const shared: string[] = (["hero", "header", "buttons", "sections"] as const).filter((k) => a[k] === b[k]);
+  if (a.photo === b.photo) shared.push("photo treatment");
+  return shared;
+}
+
+/** "Layout: full-bleed cinematic hero · transparent header · outline buttons" for the look card (from what was built). */
+export function layoutLine(design: DesignDirection, builtHero?: string): string | undefined {
+  if (!design.heroStyle) return undefined;
+  const noPhoto = builtHero?.startsWith("hero-type");
+  const hero = noPhoto
+    ? { caption: "type-only hero on a light panel (no photo)", cinematic: "dark type-only hero (no photo)", collage: "color-block type hero (no photo)" }[design.heroStyle]
+    : { caption: "split hero with a captioned photo", cinematic: "full-bleed cinematic hero", collage: "collage hero with a tilted duotone photo" }[design.heroStyle];
+  const header = noPhoto && design.header === "overlay" ? "dark header" : { light: "solid header", overlay: "transparent header", center: "centered-logo header", dark: "dark header" }[design.header];
+  return `Layout: ${hero} · ${header} · ${design.buttons} buttons`;
+}
