@@ -55,15 +55,35 @@ BRICKS.push(
   img("Red brick alley in downtown Athens, Ohio", `${W}/thumb/7/7c/Red_brick_alley_in_downtown_Athens%2C_Ohio%2C_connecting_North_Congress_Street_and_North_Court_Street%2C_south_of_West_State_Street_%C2%B7_2021-07-03-4786.jpg/1920px-Red_brick_alley_in_downtown_Athens%2C_Ohio%2C_connecting_North_Congress_Street_and_North_Court_Street%2C_south_of_West_State_Street_%C2%B7_2021-07-03-4786.jpg`, 1920, 1280, "https://commons.wikimedia.org/wiki/File:Red_brick_alley_in_downtown_Athens,_Ohio.jpg", "commons.wikimedia.org", "Wikimedia Commons"),
 );
 const BRICK_MAIN = { ...BRICKS[3], title: "Brick main street, downtown Pauls Valley" };
+const C = (path, w, h, title) => img(title, `${W}/thumb/${path}/1920px-${path.split("/").pop()}`, 1920, Math.round((1920 * h) / w), `https://commons.wikimedia.org/wiki/File:${decodeURIComponent(path.split("/").pop())}`, "commons.wikimedia.org", "Wikimedia Commons");
+// Bob's round-1 decoy: a murky gravel lot / RV park ranked high by Google (must fail the quality gate).
+const GRAVEL = C("7/7f/Chukar_Park_Recreation_Site_%2827677955933%29.jpg", 3120, 2064, "RV park gravel lot near Pauls Valley");
+// A plumber (or any home-services trade): finished work is attractive; vans, diagrams and pipes are not.
+const PLUMB = [
+  C("8/89/Plumbing_van_parked_along_Quander_Road.jpg", 8160, 6120, "Plumbing van parked along the road"),
+  C("7/76/Instructions_for_installing_modern_plumbing_systems_%281922%29_%2814597600010%29.jpg", 3856, 2856, "Pipes under the sink diagram, plumbing instructions"),
+  C("7/7d/Bathroom_of_Khan_Pool_Suite_in_Amantaka_luxury_Resort_%26_Hotel_in_Luang_Prabang_Laos.jpg", 5768, 3845, "Finished modern bathroom remodel"),
+  C("5/54/Sustainable_Kitchen_-_Flickr_-_Jeremy_Levine_Design.jpg", 3892, 2586, "Renovated modern kitchen with new sink and fixtures"),
+];
+// A restaurant: the dining room and plated dishes are attractive; menu boards are not.
+const FOOD = [
+  C("7/79/Drive_thru_menu_board_at_Del_Taco_in_Albany%2C_Oregon.jpg", 4592, 3448, "Restaurant menu board"),
+  C("c/c4/Interior_dining_room_of_a_LongHorn_Steakhouse_restaurant_in_Blairsville%2C_Georgia_02.jpg", 4032, 3024, "Restaurant dining room interior"),
+  C("0/0f/DFC_5021_A_savory_plate_of_spaghetti_topped_with_crispy_bacon_grated_cheese_and_a_sprig_of_fresh_parsley.jpg", 5568, 3712, "Plated spaghetti dish"),
+  C("c/c5/DFC_1093_Two_grilled_sausages_served_with_creamy_potato_salad_and_a_side_of_coleslaw_on_a_white_plate.jpg", 5568, 3712, "Plated grilled sausages with potato salad"),
+  C("5/5c/Menu_board_and_service_preparer_at_Red_White_and_Que_restaurant_in_New_Jersey.jpg", 1927, 1536, "Menu board at the counter"),
+];
 const ROUND1 = {
-  "downtown pauls valley oklahoma": [SIGN1(1920, 1440, "Welcome to Pauls Valley sign"), NIGHT, HIST, SIGN2],
+  "downtown pauls valley oklahoma": [GRAVEL, SIGN1(1920, 1440, "Welcome to Pauls Valley sign"), NIGHT, HIST, SIGN2],
   "pauls valley historic district": [HIST, SIGN1(1280, 960, "Pauls Valley, Oklahoma - gateway"), TOWN[0], PARK],
   "pauls valley oklahoma main street": [SIGN3, BRICK_MAIN, TOWN[1], PARK],
 };
 
 function results(q) {
   const s = q.toLowerCase().trim();
-  const list = ROUND1[s] ?? (/brick/.test(s) ? BRICKS : /pauls valley/.test(s) ? TOWN : []);
+  const list =
+    ROUND1[s] ??
+    (/brick/.test(s) ? BRICKS : /pauls valley/.test(s) ? [GRAVEL, ...TOWN] : /plumb|bathroom|technician|drain|water heater|home/.test(s) ? PLUMB : /restaurant|dining|dish|patio|cafe|food|bistro|grill|kitchen/.test(s) ? FOOD : []);
   return list.map((x, i) => ({ ...x, thumbnailUrl: "https://encrypted-tbn0.gstatic.com/images?q=tbn:mock", googleUrl: "https://www.google.com/imgres", position: i + 1 }));
 }
 

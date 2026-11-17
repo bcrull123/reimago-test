@@ -465,6 +465,21 @@ http
           if (/too busy|less busy/.test(text)) adjustments.push({ type: "less-busy", amount });
           out = { targetLook, adjustments, copy: null, photo: null };
           log("edit plan", JSON.stringify(out));
+        } else if (system.includes("Rate EVERY photo as a homepage hero")) {
+          // The hero quality gate. Like a model looking at each photo, rate it from what it shows (the caption):
+          // unappealing / off-topic subjects low, attractive on-topic scenes high. FAKE_RATING=none: no answer.
+          const captions = (json.messages[0].content ?? []).filter((p) => p?.type === "text" && /^Photo \d+/.test(p.text)).map((p) => p.text.match(/"(.*)"/)?.[1] ?? "");
+          const BAD = /\b(airport|runway|antenna|library|reading|sitting|taking notes|desks?|meeting|gravel|parking|lot|rv park|utility|pole|wires|clutter|dirty|clog|leak|pipes under|drain cleaning|storage|dumpster|sign|logo|menu|plaque|seal|truck wrap|van)\b/i;
+          const GOOD = /\b(downtown|historic|main street|courthouse|landmark|aerial|skyline|depot|station|brick|park|festival|night|dusk|dining|plated|dish|patio|pasta|burger|steak|bathroom|kitchen remodel|finished|technician|modern|renovated|interior|team)\b/i;
+          out = process.env.FAKE_RATING === "none" ? {} : {
+            photos: captions.map((c, i) => {
+              const bad = BAD.test(c);
+              const good = GOOD.test(c);
+              const rating = bad ? 3 : good ? (/\b(night|dusk|aerial|plated|finished|renovated)\b/i.test(c) ? 9 : 8) : 5;
+              return { n: i + 1, rating, subject: c.replace(/,?\s*Pauls Valley,?( Oklahoma)?/gi, "").trim().toLowerCase().slice(0, 40) || "photo", note: bad ? "unappealing / off-topic hero" : good ? "attractive on-topic scene" : "ordinary", sign: /\b(sign|logo|plaque)\b/i.test(c) };
+            }),
+          };
+          log("vision rate", captions.map((c, i) => `${i + 1}:${out.photos?.[i]?.rating}`).join(" "));
         } else if (system.includes("We need a website hero photo of")) {
           // Vision ranking of Google Images candidates: all good, best first in the order given, or reversed with
           // FAKE_GOOGLE_VISION=reverse (to prove the vision order is used), or none with FAKE_GOOGLE_VISION=none.
