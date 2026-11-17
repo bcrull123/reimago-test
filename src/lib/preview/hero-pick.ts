@@ -190,7 +190,9 @@ export const HERO_BAR = 7;
 /** Good enough to be a homepage hero: rated ≥ HERO_BAR by vision, or (no rating) a clean on-topic scene. */
 export function passesBar(c: Scored): boolean {
   if (c.sign) return false;
-  if (c.appeal !== undefined) return c.appeal >= HERO_BAR;
+  if (c.appeal !== undefined) return c.appeal >= HERO_BAR && !c.offTopic;
+  // A free-license photo matched by title words alone can't prove it fits the business: vision must rate it.
+  if (c.source === "web") return false;
   return !c.offTopic && !LOW_QUALITY.test(`${c.visionSubject ?? ""} ${c.text}`) && c.score >= 3;
 }
 

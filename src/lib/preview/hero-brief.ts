@@ -7,7 +7,7 @@
  * model rates every candidate photo against that brief (1-10). The generic rules (low quality, dim, cluttered,
  * signs/logos, stock-looking, off-topic) apply to every business.
  */
-import { businessKind, isCivic } from "./image-prompts.ts";
+import { businessKind, isCivic, nameWords, realServices } from "./image-prompts.ts";
 import { placeOf } from "./web-photo.ts";
 import type { SiteFacts } from "./types.ts";
 
@@ -22,6 +22,7 @@ export type HeroCategory =
   | "real-estate"
   | "nonprofit"
   | "tech"
+  | "startup-community"
   | "fitness"
   | "auto"
   | "hospitality"
@@ -45,7 +46,18 @@ export type HeroBrief = {
 export const LOW_QUALITY =
   /\b(?:clutter(?:ed)?|mess(?:y)?|debris|trash|garbage|dumpster|junk|screenshots?|diagram|chart|infographic|clip\s*art|clipart|icon|watermark(?:ed)?|blurry|blurred|out\s+of\s+focus|pixelated|low[\s-]res(?:olution)?|placeholder|stock\s+photo|power\s+lines?|utility\s+poles?|telephone\s+poles?|wires|gravel\s+lot|parking\s+lots?|parking\s+garage|rv\s+park|empty\s+lot|vacant\s+lot|chain[\s-]link\s+fence|portable\s+toilet|porta[\s-]potty|storage\s+room|boiler\s+room|document|pdf|agenda|map)\b/i;
 
+/** For EVERY business: a photo that is old/archival or a portrait of some unrelated person is never on-brand. */
+const UNRELATED = /\b(?:1[89]\d\d|vintage|archival|historical\s+photo|portrait\s+of|cowboy)\b/i;
+
 const BRIEFS: { category: HeroCategory; match: RegExp; good: string; avoid: string; offTopic: RegExp; scenes: string[] }[] = [
+  {
+    category: "startup-community",
+    match: /start(?:ing)?\s+(?:a|your)\s+(?:own\s+)?business|startups?\b|start-ups?\b|founders?\b|entrepreneur|incubator|accelerator|coworking|co-working|business\s+community|small[\s-]business\s+(?:help|resources|owners)/i,
+    good: "founders and small-business owners building something together: a bright modern coworking space, an energetic meetup or workshop, a team around a laptop or whiteboard, or a launch/rocket metaphor; optimistic, modern, colorful",
+    avoid: "unrelated people or portraits, vintage or archival photos, anything that only matches a word in the brand name, empty offices, generic clip-art, signage",
+    offTopic: /\b(?:portrait|vintage|archival|1[89]\d\d|cowboy|old\s+man|elderly|golf\s+hat|hat)\b/i,
+    scenes: ["startup founders working together", "entrepreneurs community meetup", "modern coworking space"],
+  },
   {
     category: "restaurant",
     match: /restaurant|bistro|kitchen|grill|pizza|taco|sushi|diner|eatery|bbq|barbecue|steak|cafe|caf[eé]|coffee|bakery|brew|winery|bar\b|pub\b|food/i,
@@ -166,15 +178,22 @@ export function heroBrief(facts: SiteFacts): HeroBrief {
   const where = place ? ` in ${place.city}${place.state ? `, ${place.state}` : ""}` : "";
   if (isCivic(facts)) return { ...TOWN, kind: `the town's own website${where}` };
   const kind = businessKind(facts);
-  const text = [facts.industry, kind, facts.name, facts.tagline, facts.description, ...facts.services.slice(0, 6)].filter(Boolean).join(" ");
+  const text = [facts.industry, kind, facts.tagline, facts.description, ...realServices(facts).slice(0, 6)].filter(Boolean).join(" ");
   const hit = BRIEFS.find((b) => b.match.test(kind)) ?? BRIEFS.find((b) => b.match.test(text));
-  return { ...(hit ?? GENERAL), kind: `${kind}${where}` };
+  const brief = hit ?? GENERAL;
+  // Old/archival photos and portraits of unrelated people are off-topic for every business.
+  const offTopic = new RegExp(`${brief.offTopic.source}|${UNRELATED.source}`, "i");
+  return { ...brief, offTopic, kind: `${kind}${where}` };
 }
 
 /** Search queries for the brief's scenes, filled with the site's town and its main service. */
 export function briefQueries(facts: SiteFacts, brief: HeroBrief): string[] {
   const place = placeOf(facts);
-  const service = (facts.services[0] || businessKind(facts) || "").replace(/\s+/g, " ").trim().slice(0, 40);
+  const service = (realServices(facts)[0] || businessKind(facts) || "").replace(/\s+/g, " ").trim().slice(0, 40);
+  // Never search the brand name: "Bob.me" finds people called Bob (Bob's round 5: "Wolf River Bob 10-1974").
+  const own = `${place?.city ?? ""} ${service} ${businessKind(facts)} ${facts.tagline}`.toLowerCase();
+  const brand = nameWords(facts).filter((w) => !new RegExp(`\\b${w}\\b`).test(own));
+  const unbrand = (q: string) => q.split(" ").filter((w) => !brand.includes(w.toLowerCase().replace(/[^a-z0-9]/g, ""))).join(" ");
   return [
     ...new Set(
       brief.scenes
@@ -186,7 +205,29 @@ export function briefQueries(facts: SiteFacts, brief: HeroBrief): string[] {
             .replace(/\s+/g, " ")
             .trim(),
         )
+        .map(unbrand)
         .filter((q) => q.split(" ").length >= 2),
     ),
   ];
+}
+
+const FILLER = /^(?:the|a|an|of|and|in|on|at|for|to|with|by|from|photo|image|picture|jpg|jpeg|png|file)$/;
+
+/**
+ * True when a photo's title shares only BRAND-name words with what we searched ("Wolf River Bob 10-1974" for
+ * "Bob.me"): a name match is not evidence the photo is about the business, so it counts as off-topic.
+ */
+export function brandOnlyMatch(title: string, facts: Pick<SiteFacts, "name" | "host">, queries: string[]): boolean {
+  const brand = new Set(nameWords(facts));
+  const words = (t: string) => t.toLowerCase().split(/[^a-z0-9]+/).filter((w) => w.length >= 2 && !FILLER.test(w));
+  const titleWords = words(title);
+  if (!titleWords.some((w) => brand.has(w))) return false;
+  const searched = new Set(queries.flatMap(words).filter((w) => !brand.has(w)));
+  return !titleWords.some((w) => !brand.has(w) && (searched.has(w) || searched.has(w.replace(/s$/, "")) || searched.has(`${w}s`)));
+}
+
+/** One line about what the business actually does, for the vision rating (never just a product or the name). */
+export function businessAbout(facts: SiteFacts, brief: HeroBrief): string {
+  const services = realServices(facts).slice(0, 5);
+  return [brief.kind, facts.tagline, (facts.description || "").slice(0, 200), services.length ? `services: ${services.join(", ")}` : ""].filter(Boolean).join(" · ").slice(0, 420);
 }

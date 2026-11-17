@@ -19,7 +19,7 @@ import { placeOf } from "./web-photo.ts";
 import { businessKind, isCivic } from "./image-prompts.ts";
 import type { Archetype, SiteFacts } from "./types.ts";
 import { assignHeroes, hamming, heroScore, passesBar, withDuplicateSigns, HERO_BAR, type HeroCandidate, type HeroPick } from "./hero-pick.ts";
-import { heroBrief, type HeroBrief } from "./hero-brief.ts";
+import { brandOnlyMatch, businessAbout, heroBrief, type HeroBrief } from "./hero-brief.ts";
 import type { PhotoCredit } from "./web-photo.ts";
 
 type Fetcher = (url: string) => Promise<Photo | null | undefined>;
@@ -150,14 +150,15 @@ export type HeroRating = { rating: number; note?: string; sign?: boolean; subjec
  * "would a designer use this as the hero of a beautiful homepage for THIS business?", judged against the
  * business type's brief (hero-brief.ts). Undefined when vision is unavailable (the keyword fallback applies).
  */
-export async function rateHeroes(brief: HeroBrief, name: string, items: { bytes: Buffer; type: string; title: string; source: string }[], deadline: number): Promise<(HeroRating | undefined)[] | undefined> {
+export async function rateHeroes(brief: HeroBrief, name: string, about: string, items: { bytes: Buffer; type: string; title: string; source: string }[], deadline: number): Promise<(HeroRating | undefined)[] | undefined> {
   if (!items.length) return [];
   const { aiModel, chatJson } = await import("@/lib/ai-provider.server");
   const content: unknown[] = [
     {
       type: "text",
       text:
-        `Rate EVERY photo as a homepage hero. The site: ${name ? `"${name}", ` : ""}${brief.kind}. ` +
+        `Rate EVERY photo as a homepage hero. The site: ${name ? `"${name}", ` : ""}${about || brief.kind}. ` +
+        `Judge BUSINESS FIT first: would this photo make a visitor understand what THIS business does? A photo that only shares a word with the business NAME (a person, pet or place that happens to be called the same), a vintage/archival photo, or a portrait of an unrelated person is off-topic: rate it 1-3 however good it looks. ` +
         `A great hero for this kind of business shows ${brief.good}. Rate low: ${brief.avoid}; also anything dim, murky, flat or low-saturation, blurry or low-resolution, cluttered, mostly sky/grass/pavement, a sign, logo or text, a stock-looking scene unrelated to this business, or an off-topic subject for it. ` +
         `For each photo give "rating" 1-10 = would a top designer use this as the hero of a beautiful homepage for THIS business (${HERO_BAR}+ = yes, gladly), a 2-5 word "subject", a 2-6 word "note" on why, and "sign" (true when it is mainly a sign, plaque, logo or text). ` +
         `Answer only JSON: {"photos": [{"n": 1, "rating": 8, "subject": "...", "note": "...", "sign": false}, ...]}.`,
@@ -399,6 +400,8 @@ export async function prefetchPlannedPhotos(
   // The quality gate, judged for THIS kind of business (hero-brief.ts): off-topic titles (no-AI fallback) and
   // the vision rating of every candidate.
   for (const c of [...photos.map((p) => p.candidate!), ...site]) if (brief.offTopic.test(`${c.visionSubject ?? ""} ${c.text}`)) c.offTopic = true;
+  // A Google result whose title matches only the brand name ("Bob" for Bob.me) is not about the business.
+  for (const c of photos.map((p) => p.candidate!)) if (brandOnlyMatch(c.text, facts, queries)) c.offTopic = true;
   const rateItems = [
     ...found.photos.map((p, i) => ({ c: photos[i]!.candidate!, bytes: p.photo.bytes, type: p.photo.type, title: p.temp.title, source: `Google Images, ${p.temp.domain}` })),
     ...sitePhotos.map((p) => ({ c: p.candidate, bytes: p.bytes, type: p.type, title: p.candidate.text, source: "the business's own site" })),
@@ -406,7 +409,7 @@ export async function prefetchPlannedPhotos(
   let rated = false;
   const applyRatings = async (items: typeof rateItems) => {
     if (!useVision || !items.length || Date.now() > deadline - 4000) return;
-    const ratings = await rateHeroes(brief, facts.name, items, deadline);
+    const ratings = await rateHeroes(brief, facts.name, businessAbout(facts, brief), items, deadline);
     if (!ratings) return;
     rated = true;
     items.forEach((it, i) => {
@@ -432,7 +435,7 @@ export async function prefetchPlannedPhotos(
         .map((w) => {
           const m = measurePhoto(w.photo.bytes, w.photo.type);
           const candidate: HeroCandidate = { id: w.photo.url ?? "", source: "web", text: w.credit.title, width: w.photo.width, height: w.photo.height, stats: m?.stats, hash: m?.hash, relevance: 1.5 };
-          if (brief.offTopic.test(candidate.text)) candidate.offTopic = true;
+          if (brief.offTopic.test(candidate.text) || brandOnlyMatch(candidate.text, facts, [scene])) candidate.offTopic = true;
           if (shownBefore(opts.avoid, [candidate.id, w.credit.sourceUrl], m?.hash)) candidate.shownBefore = true;
           return { w, entry: { url: w.photo.url ?? "", credit: w.credit, width: w.photo.width, height: w.photo.height, candidate } };
         })
