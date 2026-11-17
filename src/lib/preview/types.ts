@@ -1,4 +1,5 @@
 /** Shared (client + server) shapes for the live multi-page preview. */
+import type { PhotoCredit } from "./web-photo.ts";
 
 export type SiteNavLink = { label: string; url: string };
 
@@ -30,6 +31,8 @@ export type SiteFacts = {
   about: string;
   testimonials: Testimonial[];
   images: string[];
+  /** Alt/title text of scraped images, by URL (used to find a photo the owner asked for). */
+  imageText?: Record<string, string>;
   nav: SiteNavLink[];
   pages: ScrapedPage[];
   social: string[];
@@ -90,6 +93,10 @@ export type DesignDirection = {
   imagery: string;
   /** What the hero image should show (no text, no logos). */
   heroSubject: string;
+  /** What the feature (secondary) photo should show; follows the owner's request when it names a scene. */
+  featureScene?: string;
+  /** Set when the AI art director made this direction (presets leave it unset); for the preview trace. */
+  ai?: boolean;
   motifs: Motif[];
   radius: "sharp" | "soft" | "round";
   buttons: "pill" | "square" | "outline";
@@ -148,10 +155,32 @@ export type Section = {
 export type StoredImage = {
   name: string;
   type: string;
-  source: "generated" | "photo";
+  source: "generated" | "photo" | "web";
   alt: string;
+  /** Who made a web photo and its license (shown as a credit line on the page). */
+  credit?: PhotoCredit;
   width?: number;
   height?: number;
+};
+
+/** One image the build asked for: its prompt and what happened (no secrets; prompts never contain keys). */
+export type ImageTrace = {
+  name: string;
+  slot: "hero" | "feature" | "service";
+  scene: string;
+  prompt: string;
+  status: "generated" | "failed" | "not generated (mock mode / images off)" | "your site's photo" | "web photo" | "skipped";
+  /** How the hero photo was found: the site's own matching photo, a web search, or AI. */
+  source?: "your site" | "web search" | "AI";
+  /** Web search words and what came back (no secrets). */
+  search?: string;
+  credit?: PhotoCredit;
+};
+/** Which AI steps ran with the OWNER'S REQUEST block, and the image prompts used. Stored with the preview. */
+export type PreviewTrace = {
+  request: { note: string; feedback: string[]; scene?: string };
+  steps: { step: string; ai: boolean; ownerRequest: boolean }[];
+  images: ImageTrace[];
 };
 
 /** What the browser gets back for each homepage look. */
@@ -170,6 +199,10 @@ export type LookInfo = {
   request?: string;
   /** Mock mode: what was read from the request and applied (colors, backgrounds, tone, sections). */
   applied?: string[];
+  /** One line about the photos, e.g. 'Photos: generated for “brick streets”'. */
+  photos?: string;
+  /** What this look's build recorded (see PreviewTrace): which AI steps got the owner's request, image prompts. */
+  trace?: PreviewTrace;
   /** Why the AI homepage could not be used (the look then uses the section library). */
   aiError?: string;
   /** The AI homepage was used, but some of its sections were dropped (first reasons). */

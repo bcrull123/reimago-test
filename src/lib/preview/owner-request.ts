@@ -149,3 +149,72 @@ export function requestHints(facts: RequestFacts): RequestHints {
   if (hints.sections.length) hints.applied.push(SECTIONS.filter(([, s]) => hints.sections.includes(s)).map(([, , label]) => label).join(", "));
   return hints;
 }
+
+// ---------------------------------------------------------------- photos: the scene the owner asked for
+
+/** Words that make a phrase about design, not a photo subject ("use navy and gold", "use bigger fonts"). */
+const NOT_A_SCENE =
+  /\b(colou?rs?|navy|gold|red|blue|green|orange|yellow|purple|pink|black|white|gr[ae]y|brown|teal|font|fonts|type|typography|style|layout|section|sections|button|buttons|text|copy|wording|headline|headlines|logo|menu|darker|lighter|dark|light|bold|bolder|playful|modern|minimal|premium|warm|cozy|clean|simple|bigger|smaller|larger|spacing|white space|reviews?|testimonials?|faq|gallery|steps|phone|number|email|address|hours|contact|form)\b/;
+
+/** Phrases that introduce what a photo should show. */
+const SCENE_PATTERNS: RegExp[] = [
+  /\b(?:photos?|pictures?|images?|shots?|backgrounds?|hero)\s+(?:image\s+|photo\s+)?(?:of|showing|with|featuring)\s+([^.;!?\n]{3,90})/,
+  /\b(?:show|showing|feature|featuring|depict|depicting|picture|include)\s+(?:me\s+)?([^.;!?\n]{3,90})/,
+  /\b(?:use|using)\s+([^.;!?\n]{3,90})/,
+  /\b(?:in|on)\s+(?:the\s+)?background\s*[:,-]?\s*([^.;!?\n]{3,90})/,
+];
+
+function trimScene(raw: string): string {
+  return raw
+    .split(/\b(?:and (?:make|use|add|change|give|put)|but|instead of|rather than|so that|because)\b|,\s*(?:make|use|add|and)\b/)[0]!
+    .replace(/\b(?:in|for|as|on) (?:the )?(?:hero|header|top|background|banner|homepage|home page|main) (?:image|photo|picture|section)?\b.*$/, "")
+    .replace(/\b(?:as|for) (?:the )?(?:photos?|pictures?|images?|hero|background)\b.*$/, "")
+    .replace(/\s+(?:instead|please|too|as well|also|here|there)$/, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .replace(/^(?:a|an|some|more|our|my)\s+/, "")
+    .slice(0, 90);
+}
+
+/**
+ * The scene/subject/place the owner wants in the photos, if their words name one
+ * ("use the brick streets" → "the brick streets"). The newest feedback wins over the note.
+ */
+export function requestedScene(facts: RequestFacts): string | undefined {
+  const { note, feedback } = ownerRequests(facts);
+  for (const text of [...feedback].reverse().concat(note ? [note] : [])) {
+    const lower = text.toLowerCase();
+    for (const pattern of SCENE_PATTERNS) {
+      for (const match of lower.matchAll(new RegExp(pattern.source, "g"))) {
+        if (negated(lower, match.index ?? 0)) continue;
+        const scene = trimScene(match[1] ?? "");
+        const words = scene.split(" ").filter((w) => w.length > 2 && !/^(the|and|with|our|their|more|some)$/.test(w));
+        if (!words.length || NOT_A_SCENE.test(scene)) continue;
+        return scene;
+      }
+    }
+  }
+  return undefined;
+}
+
+/** The owner wants the photo as the hero *background* ("…as background", "in the background", "behind the headline"). */
+export function wantsBackground(facts: RequestFacts): boolean {
+  const { note, feedback } = ownerRequests(facts);
+  return /\b(backgrounds?|behind the (?:headline|title|text)|full[- ]?(?:width|screen|bleed))\b/i.test([note, ...feedback].join(" "));
+}
+
+/** The newest feedback asks for different photos/scenes, so new images are generated even without a named scene. */
+export function wantsNewPhotos(facts: RequestFacts): boolean {
+  const last = ownerRequests(facts).feedback.at(-1)?.toLowerCase() ?? "";
+  return /\b(photos?|pictures?|images?|imagery|scenes?|backgrounds?|hero (?:image|photo)|pipes?)\b/.test(last) || Boolean(requestedScene({ notes: "", feedback: last ? [last] : [] }));
+}
+
+/** The owner's words for an image prompt, without the business name (image models paint names as fake logos). */
+export function imageWishes(facts: RequestFacts & { name?: string }): string {
+  const { note, feedback } = ownerRequests(facts);
+  const parts = [note, ...feedback].filter(Boolean);
+  if (!parts.length) return "";
+  let text = parts.join(" / ");
+  if (facts.name && facts.name.length > 2) text = text.split(facts.name).join("the business");
+  return text.slice(0, 700);
+}
