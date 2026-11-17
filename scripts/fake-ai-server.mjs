@@ -71,7 +71,8 @@ const LOOKS = {
     headline: "Family hands. *Honest* work.",
   }),
   "dark-premium": (_f) => ({
-    name: "Midnight Pressure",
+    // FAKE_DARK_NAME stands in for a real model's name for this look (Bob's run: "Night Brick").
+    name: process.env.FAKE_DARK_NAME || "Midnight Pressure",
     mood: "Cinematic and calm under pressure — deep graphite, brass highlights, and photography that glows like a flashlight in the crawlspace.",
     rationale: "Positions emergency work as premium expertise, not a commodity.",
     palette: { primary: "#c9a227", accent: "#e8d39a", background: "#0e1013", surface: "#171a1f", text: "#f3efe6", muted: "#a9a49a" },
@@ -150,6 +151,8 @@ function foodCopy(out) {
 
 function directions(system, facts) {
   const suggested = (system.match(/good starting points for this business: ([a-z\-, ]+)\./)?.[1] ?? "bold-photo, warm-craft, dark-premium").split(/,\s*/);
+  // FAKE_DARK_NAME: like Bob's real runs, every round has a dark look under that name.
+  if (process.env.FAKE_DARK_NAME && !suggested.slice(0, 3).includes("dark-premium")) suggested.splice(2, 1, "dark-premium");
   const brand = (facts.brand_colors ?? [])[0];
   const food = isFood(facts);
   return {
@@ -182,7 +185,18 @@ function plan(facts) {
     photoSubject: process.env.FAKE_PHOTO_SUBJECT ?? "",
     // FAKE_PHOTO_INTENT=keep|find|none: the planner's reading of whether the subject is the owner's own picture.
     photoIntent: process.env.FAKE_PHOTO_INTENT ?? (process.env.FAKE_PHOTO_SUBJECT ? "find" : "none"),
+    // Like the real planner: proactive Google Images searches for this business/place (used even with no note).
+    imageQueries: imageQueriesFor(facts),
   };
+}
+
+function imageQueriesFor(facts) {
+  const name = facts.business_name ?? "";
+  const town = name.match(/^(?:City of )?([A-Z][A-Za-z ]+),\s*(Oklahoma|OK)$/);
+  if (town) return [`downtown ${town[1]} Oklahoma brick streets`, `${town[1]} Oklahoma landmark`];
+  const where = city(facts);
+  const kind = kindOf(facts).toLowerCase();
+  return [`${kind} ${where}`.trim(), `${kind} at work`];
 }
 
 // ---------------------------------------------------------------- sections
@@ -436,6 +450,19 @@ http
           const pictures = (Array.isArray(json.messages?.[0]?.content) ? json.messages[0].content : []).filter((p) => p?.type === "image_url").length;
           out = { index: Number(process.env.FAKE_VISION_INDEX ?? 0) };
           log("vision keep", `${pictures} pictures`, "->", out.index);
+        } else if (system.includes("You are editing ONE existing website look")) {
+          // The targeted-refinement planner: which look the owner named, and the tweaks with amounts.
+          const names = [...system.matchAll(/^\d+\. "([^"]+)"/gm)].map((m) => m[1]);
+          const text = user.toLowerCase();
+          const targetLook = names.find((n) => text.includes(n.toLowerCase())) ?? null;
+          const amount = /\b(a little|a bit|slightly|a touch|just a)\b/.test(text) ? "slight" : /\b(much|way|a lot|very)\b/.test(text) ? "strong" : "medium";
+          const adjustments = [];
+          if (/too dark|lighter|brighter/.test(text)) adjustments.push({ type: "lighten", amount });
+          if (/too bright|darker/.test(text)) adjustments.push({ type: "darken", amount });
+          if (/bigger text|larger text/.test(text)) adjustments.push({ type: "bigger-text", amount });
+          if (/too busy|less busy/.test(text)) adjustments.push({ type: "less-busy", amount });
+          out = { targetLook, adjustments, copy: null, photo: null };
+          log("edit plan", JSON.stringify(out));
         } else if (system.includes("We need a website hero photo of")) {
           // Vision ranking of Google Images candidates: all good, best first in the order given, or reversed with
           // FAKE_GOOGLE_VISION=reverse (to prove the vision order is used), or none with FAKE_GOOGLE_VISION=none.
