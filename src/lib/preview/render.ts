@@ -278,10 +278,18 @@ const httpLink = (url: string) => (/^https?:\/\//i.test(url) ? escapeHtml(url) :
 
 /** "Photo: “Pauls Valley Historic District” by X, CC BY-SA 3.0, via Wikimedia Commons" for a web photo in the site. */
 export function photoCredit(site: Pick<StoredSite, "images">): string {
-  const credits = Object.values(site.images ?? {})
-    .filter((i) => i.source === "web" && i.credit)
-    .map((i) => i.credit!);
-  return credits
+  const web = Object.values(site.images ?? {}).filter((i) => i.source === "web" && i.credit);
+  // Google Images photos are placeholders for the preview only: a tiny note naming the page they came from.
+  const temporary = web
+    .filter((i) => i.temporary)
+    .map((i) => {
+      const t = i.temporary!;
+      const page = httpLink(t.sourcePage);
+      const domain = escapeHtml(t.domain.slice(0, 60) || "the web");
+      return `<span class="photo-credit photo-temporary" data-temporary-photo="${escapeHtml(i.name)}">Preview photo from ${page ? `<a href="${page}" target="_blank" rel="noopener nofollow">${domain}</a>` : domain} via Google Images, temporary: replaced when your site is built</span>`;
+    });
+  const credits = web.filter((i) => !i.temporary).map((i) => i.credit!);
+  return temporary.join("") + credits
     .map((c) => {
       const source = httpLink(c.sourceUrl);
       const license = httpLink(c.licenseUrl);

@@ -18,6 +18,8 @@ import { SECTION_GUIDE, checkSections, composeImages, composeMockPage, corpusFor
 import { redact } from "@/lib/ai-json";
 import { cleanSubject, hasOwnerRequest, ownerRequestRule, ownerRequests, requestedPhoto, requestedScene, wantsBackground, wantsNewPhotos } from "@/lib/preview/owner-request";
 import { heroSuitability, matchScraped, placeOf, webQueries, type PhotoCredit } from "@/lib/preview/web-photo";
+import { findGooglePhotos, photoSearchEnabled } from "@/lib/preview/google-photo.server";
+import type { TemporaryPhoto } from "@/lib/preview/google-photo";
 import { arrangeSections, diversifyDirections, lookSignature, photoRank } from "@/lib/preview/look-variety";
 import { findWebPhotos, webPhotosEnabled } from "@/lib/preview/web-photo.server";
 import type { Photo } from "@/lib/preview/images.server";
@@ -517,6 +519,16 @@ function resolveImages(sections: Section[], available: string[]): Section[] {
   }));
 }
 
+/** The credit shape for a temporary Google Images photo (shown as "preview only" on the card and footer). */
+function googleCredit(t: TemporaryPhoto): PhotoCredit {
+  return { title: t.title, author: t.domain, license: "preview only", licenseUrl: "", sourceUrl: t.sourcePage || t.imageUrl, provider: "Google Images" };
+}
+
+function googleSearchNote(g: { photos: unknown[]; queries: string[]; seen: number; rejected: Record<string, number> }): string {
+  const skipped = Object.entries(g.rejected).map(([why, n]) => `${n} ${why}`).join(", ");
+  return `Google Images ${g.queries.map((q) => `“${q}”`).join(" / ")}: ${g.seen} results${skipped ? ` (skipped ${skipped})` : ""}, ${g.photos.length} usable`;
+}
+
 /** Put the owner's requested photo in the hero (as a full-bleed background when they said "background"). */
 function heroForRequest(hero: Section, facts: SiteFacts, design: DesignDirection, haveHero: boolean, scene: string | undefined, fresh: boolean, ownHero?: string): Section {
   // No subject named: the hero is one of the site's photos that suits a homepage (never whichever the page writer grabbed).
@@ -632,6 +644,11 @@ export async function buildLook(
     );
   };
   if (keepEntry) trace.images.push(keepEntry);
+  // Photo search shares the step budget with the page writer (they run in parallel).
+  const photoDeadline = stepStart + Math.max(10_000, Math.min(40_000, budget - 25_000));
+  // A usable but weak own hero (small) is replaced by a Google Images one only when PHOTO_SEARCH_WEAK_HEROES=1.
+  const weakHero = process.env.PHOTO_SEARCH_WEAK_HEROES === "1" && !scene && !kept && Boolean(photos[0]) && (photos[0]!.width < 1600 || (bestOwn?.score ?? 0) <= 0);
+  let googleHero: string | undefined;
   const heroAspect = design.heroStyle ? (design.heroStyle === "cinematic" ? "16:9" : "4:3") : design.hero === "split" ? "4:3" : "16:9";
   if (scene) {
     // The owner named what the hero should show. Order: one of the site's own photos that shows it (alt text,
@@ -644,7 +661,7 @@ export async function buildLook(
     // different one. With fewer photos than looks, a later look gets an AI photo (when images are on) or
     // shows the same photo in its own treatment.
     const findReal = async (): Promise<boolean> => {
-      type Real = { photo: Photo; credit: PhotoCredit; source: "photo" | "web"; alt: string };
+      type Real = { photo: Photo; credit: PhotoCredit; source: "photo" | "web"; alt: string; temp?: TemporaryPhoto };
       const real: Real[] = [];
       const labels = facts.imageText ?? {};
       const own = matchScraped(scene, place, facts.images.map((url) => ({ url, label: labels[url] ?? "" })));
@@ -654,9 +671,15 @@ export async function buildLook(
           real.push({ photo, source: "photo", alt: own.label || scene, credit: { title: own.label || scene, author: "", license: "", licenseUrl: "", sourceUrl: own.url, provider: "your site" } });
         }
       }
+      // Google Images (via Serper, when configured) before the free-license sites: temporary preview photos.
+      if (real.length < 3 && photoSearchEnabled()) {
+        const google = await findGooglePhotos(scene, facts, useAi, photoDeadline, 3);
+        for (const g of google.photos.slice(0, 3 - real.length)) real.push({ photo: g.photo, source: "web", alt: g.temp.title, credit: googleCredit(g.temp), temp: g.temp });
+        entry.search = googleSearchNote(google);
+      }
       if (real.length < 3 && webPhotosEnabled()) {
         const web = await findWebPhotos(scene, place, 8_000, 3 - real.length).catch(() => []);
-        entry.search = `web search ${webQueries(scene, place).map((x) => `“${x.q}”`).join(" / ")} (Openverse, Wikimedia Commons; CC0 / public domain / CC BY / CC BY-SA): ${web.length ? `${web.length} matching photo${web.length > 1 ? "s" : ""}` : "no matching photo"}`;
+        entry.search = `${entry.search ? `${entry.search} · ` : ""}web search ${webQueries(scene, place).map((x) => `“${x.q}”`).join(" / ")} (Openverse, Wikimedia Commons; CC0 / public domain / CC BY / CC BY-SA): ${web.length ? `${web.length} matching photo${web.length > 1 ? "s" : ""}` : "no matching photo"}`;
         for (const w of web) real.push({ photo: w.photo, source: "web", alt: w.credit.title, credit: w.credit });
       }
       if (!real.length) return false;
@@ -670,15 +693,39 @@ export async function buildLook(
         pick = real[rank % real.length]!;
       }
       await saveImage(id, "hero", pick.photo.type, pick.photo.bytes);
-      images.hero = { name: "hero", type: pick.photo.type, source: pick.source, alt: pick.alt, width: pick.photo.width, height: pick.photo.height, credit: pick.credit };
-      Object.assign(entry, pick.source === "web" ? { status: "web photo", source: "web search", credit: pick.credit } : { status: "your site's photo", source: "your site", credit: pick.credit } satisfies Partial<ImageTrace>);
+      images.hero = { name: "hero", type: pick.photo.type, source: pick.source, alt: pick.alt, width: pick.photo.width, height: pick.photo.height, credit: pick.credit, temporary: pick.temp };
+      Object.assign(
+        entry,
+        pick.temp
+          ? { status: "preview photo (Google Images)", source: "web search", credit: pick.credit }
+          : pick.source === "web"
+            ? { status: "web photo", source: "web search", credit: pick.credit }
+            : ({ status: "your site's photo", source: "your site", credit: pick.credit } satisfies Partial<ImageTrace>),
+      );
       return true;
     };
     wantImage("hero", "hero", heroAspect, `photo of ${scene}: the owner asked for this, so use it as the hero background image`, findReal, entry);
   } else if (kept) {
     // The kept picture is the hero; nothing is generated in its place.
-  } else if (!heroWorthy(photos[0]) || freshPhotos) {
-    wantImage("hero", "hero", heroAspect, `generated hero photo: ${design.heroSubject || kind}`);
+  } else if (!heroWorthy(photos[0]) || freshPhotos || (weakHero && photoSearchEnabled())) {
+    // No good hero photo on the site (or a weak one, with PHOTO_SEARCH_WEAK_HEROES=1): Google Images of the
+    // business type in its town when photo search is on (each look a different one), else an AI photo.
+    const tryGoogle = photoSearchEnabled() && !keepSubject
+      ? async (): Promise<boolean> => {
+          const google = await findGooglePhotos(undefined, facts, useAi, photoDeadline, 3);
+          const entry = trace.images.find((i) => i.name === "hero" && i.slot === "hero" && i.status !== "not found on your site");
+          if (entry) entry.search = googleSearchNote(google);
+          const pick = google.photos[photoRank(design, index)] ?? (imagesEnabled() ? undefined : google.photos[0]);
+          if (!pick) return false;
+          await saveImage(id, "hero", pick.photo.type, pick.photo.bytes);
+          images.hero = { name: "hero", type: pick.photo.type, source: "web", alt: pick.temp.title, width: pick.photo.width, height: pick.photo.height, credit: googleCredit(pick.temp), temporary: pick.temp };
+          if (entry) Object.assign(entry, { status: "preview photo (Google Images)", source: "web search", credit: googleCredit(pick.temp), scene: pick.temp.query } satisfies Partial<ImageTrace>);
+          trace.request.autoScene = trace.request.autoScene ?? pick.temp.query;
+          googleHero = pick.temp.query;
+          return true;
+        }
+      : undefined;
+    if (!heroWorthy(photos[0]) || freshPhotos || tryGoogle) wantImage("hero", "hero", heroAspect, `generated hero photo: ${design.heroSubject || kind}`, tryGoogle);
   }
   if (photos.length < 2 || freshPhotos) {
     wantImage("feature", "feature", "4:3", `generated photo: ${design.featureScene || `${kind} work in progress`}`);
@@ -701,7 +748,7 @@ export async function buildLook(
   const sections = resolveImages(result.sections, available);
   // The requested scene goes in the hero even if the page writer picked one of the site's own photos, and
   // "as background" means the full-bleed photo hero. With no photo of the scene, no unrelated photo is used.
-  if (sections[0]?.type.startsWith("hero-")) sections[0] = heroForRequest(sections[0], facts, design, Boolean(images.hero), scene ?? (kept ? keepSubject : undefined), freshPhotos, ownHero);
+  if (sections[0]?.type.startsWith("hero-")) sections[0] = heroForRequest(sections[0], facts, design, Boolean(images.hero), scene ?? (kept ? keepSubject : undefined) ?? googleHero, freshPhotos, ownHero);
   // Each look: its own hero treatment, section order and section variants (kept art shown whole, as a cutout).
   sections.splice(0, sections.length, ...arrangeSections(sections, design, available, facts.services, Boolean(images.hero?.cutout && sections[0]?.image === "hero")));
   trace.layout = lookSignature(design, sections, images.hero?.credit?.sourceUrl ?? sections[0]?.image);

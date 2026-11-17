@@ -1,6 +1,7 @@
 /** Shared (client + server) shapes for the live multi-page preview. */
 import type { PhotoCredit } from "./web-photo.ts";
 import type { SiteArt } from "./site-art.ts";
+import type { TemporaryPhoto } from "./google-photo.ts";
 
 export type SiteNavLink = { label: string; url: string };
 
@@ -179,6 +180,8 @@ export type StoredImage = {
   cutout?: boolean;
   /** Kept from the owner's site because they asked ("Keep the rocket"). */
   kept?: boolean;
+  /** A Google Images photo shown in the preview only: where it came from, so the build step can replace it. */
+  temporary?: TemporaryPhoto;
 };
 
 /** One image the build asked for: its prompt and what happened (no secrets; prompts never contain keys). */
@@ -187,7 +190,7 @@ export type ImageTrace = {
   slot: "hero" | "feature" | "service";
   scene: string;
   prompt: string;
-  status: "generated" | "failed" | "not generated (mock mode / images off)" | "your site's photo" | "web photo" | "skipped" | "kept from your site" | "not found on your site";
+  status: "generated" | "failed" | "not generated (mock mode / images off)" | "your site's photo" | "web photo" | "skipped" | "kept from your site" | "not found on your site" | "preview photo (Google Images)";
   /** How the hero photo was found: the site's own matching photo, a web search, or AI. */
   source?: "your site" | "web search" | "AI";
   /** Web search words and what came back (no secrets). */

@@ -5,6 +5,7 @@
  * streets"), the hero photo must depict it; their wishes are also given to every other image. Prompts never
  * include the business name (models love to paint it as a fake logo).
  */
+import { TEMP_PHOTO_LINE } from "./google-photo.ts";
 import { imageWishes, requestedPhoto, sceneToFind } from "./owner-request.ts";
 import { creditLine, placeOf } from "./web-photo.ts";
 import type { DesignDirection, PreviewTrace, SiteFacts } from "./types.ts";
@@ -115,6 +116,7 @@ export function photosLine(trace: PreviewTrace | undefined, ownPhotos: number): 
   }
   if (!hero) return `Photos: ${own}${scene ? "" : " (the note didn't name a photo subject)"}`;
   const what = scene ? `“${scene}”` : `“${hero.scene.slice(0, 60)}”`;
+  if (hero.status === "preview photo (Google Images)") return TEMP_PHOTO_LINE;
   if (hero.status === "your site's photo") return `Photo: your site's photo of ${what}${hero.credit?.title ? ` (“${hero.credit.title.slice(0, 50)}”)` : ""}`;
   if (hero.status === "web photo" && hero.credit) return `Photo: ${creditLine(hero.credit)}`;
   if (hero.status === "generated") return `AI photo of ${what}${scene ? " (no matching photo on your site or free photo sites)" : ""}`;
