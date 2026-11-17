@@ -242,6 +242,38 @@ The overlay reads "Building your site and preparing your picture…". It then sw
 
 **The Create New Site wizard** follows the same rule when it shows looks. If no looks could be built, it sends the brief right away, as before, without a picture.
 
+### Email Bot's instant reply (server webhook)
+
+When the visitor presses Choose this look, the **app server** also posts the submission as JSON to Email Bot's instant-reply webhook (Email Bot routine "Instant reply to reimago.ai submissions"). This is in addition to the Formcarry submission, which is unchanged: same fields, still sent from the browser with the picture attached.
+
+How it is sent:
+- The browser calls `notifyReplyWebhook` (`src/lib/reply-webhook.functions.ts`) right after the picture is stored. It does not wait for the answer, so "Check your email" never depends on it.
+- The server checks that the look exists on it and is rate-limited per IP (20 per hour). It then posts with `sendReplyWebhook()` (`src/lib/reply-webhook.server.ts`).
+- The webhook URL and key stay on the server and never reach the browser bundle.
+
+The payload is one JSON object; every value is a string:
+
+| Field | Value |
+|---|---|
+| `submission_id` | `reimago-<made id>-<look archetype>`, e.g. `reimago-9fbd8da257ef404c-editorial`. Set by the server from the chosen look and the same on every retry, including when the visitor presses Choose again after a Formcarry failure, so Email Bot can dedupe. Also sent as the `Idempotency-Key` header. |
+| `email`, `website`, `note` | The form's values; `website` is the bare domain, as in Formcarry. Create mode sends the brief's domain and its "anything else" text. |
+| `preview_url`, `preview_pages` | Same text as the Formcarry fields: one `Title: URL` per line. |
+| `chosen_look`, `change_requests` | Same text as the Formcarry fields: change requests are numbered rounds, `""` when none. |
+| `picture_url` | `<app>/made/<id>/img/capture`, only when the server has the stored picture. |
+| `picture_error` | Set when no picture was stored. |
+| `submitted_at` | ISO time, set by the server. |
+
+Request rules:
+- Headers: `Content-Type: application/json` and `Authorization: Bearer <REPLY_WEBHOOK_KEY>`. If the key already starts with a scheme word and a space (`Bearer …`, `Basic …`), it is sent as-is.
+- Timeout: 10 s.
+- Retry: once, on a network error, timeout or 5xx. A 4xx is not retried.
+- Logs: one line per attempt, with the submission id, the webhook host and the status code (`[reply-webhook] sent … : 200` or `… failed: 503 (attempt 1)`). The key and the URL path are never logged.
+- If `REPLY_WEBHOOK_URL` or `REPLY_WEBHOOK_KEY` is unset (or the URL is not https), nothing is sent and nothing is logged. Plain http is accepted only for localhost tests.
+
+Tests:
+- `src/lib/reply-webhook.test.ts` runs against a local endpoint and covers the header, the as-is scheme, the payload, skipping, retry rules, the timeout, no key in the logs, and dedupe-id stability.
+- `scripts/reply-webhook-e2e.mjs` (with `scripts/mock-reply-webhook.mjs`) runs the real flow: Formcarry is intercepted and fails once, and the visitor presses Choose again. Both webhook posts carry the same `submission_id`, and the mock checks the Authorization header and every field.
+
 ### The lead picture (Formcarry `picture`)
 
 The lead email also gets a PNG of the **chosen** look's homepage, as the old flow did. It is taken after the look is built, so it shows the polished homepage.
@@ -341,6 +373,8 @@ The old domain step (step 12) is gone. Wizard answers are kept in memory only (s
 | **`PREVIEW_STEP_BUDGET_MS`** | no | Time budget per step (default `85000`). |
 | `PREVIEW_MOCK` | no | `1` = no AI calls; looks are composed from the facts with three preset directions, labeled MOCK PREVIEW. |
 | `DATABASE_URL` | recommended in production | Stores preview sites (`preview_sites`) and their images (`preview_images`) in Postgres, created on first use. Without it, files go to `PREVIEW_STORE_DIR` and disappear on serverless restarts. |
+| **`REPLY_WEBHOOK_URL`** | no | Email Bot's instant-reply webhook URL (routine "Instant reply to reimago.ai submissions"). The server posts each "Choose this look" submission there as JSON. Unset: not sent. |
+| **`REPLY_WEBHOOK_KEY`** | no | That webhook's key; sent as `Authorization: Bearer <key>` (as-is if it already starts with `Bearer `/`Basic `). Server-only secret: set it in the host's environment settings, never in code or chat. Unset: not sent. |
 | **`PREVIEW_VISION_MODEL`** | no | Model for the "keep" vision fallback (which of the site's pictures shows the subject). Defaults to the main AI model. |
 | **`PREVIEW_WEB_PHOTOS`** | no | `0` turns off the free-license web photo search (Openverse, Wikimedia Commons) used when the owner's note asks for a photo of something. On by default, also in mock mode. |
 | `PREVIEW_STORE_DIR` | no | File storage folder when there is no `DATABASE_URL` (default: OS temp dir). |
