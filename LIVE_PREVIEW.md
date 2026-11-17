@@ -111,13 +111,39 @@ Bob wrote "use the brick streets" and got pipes. On the Pauls Valley site he wro
 - a usable scraped photo always beat generation;
 - the hero was the largest scraped photo, whatever it showed.
 
-**The scene.** `requestedScene()` in `owner-request.ts` reads the scene from the note or the newest feedback. Phrases like "use …", "photo/picture/background of …", "show …" and "in the background …" count. For example, "use the brick streets" gives "the brick streets", and Bob's note gives "the downtown brick streets". Design words (colors, fonts, sections) and negations are not scenes. `wantsBackground()` treats "background" (or "behind the headline", "full-width") as the hero background, so those looks switch to the full-bleed `hero-photo`.
+**The scene.** `requestedScene()` in `owner-request.ts` reads the photo subject. Sources, best first:
+1. The AI planner's `photoSubject`. The plan prompt asks for 2–6 plain words, with the place when known (for example "red brick streets downtown"), or "" when the note names no subject. `normalizePlan` cleans it with `cleanSubject()`, and `withPlanSubject()` copies it into the facts for every look. This covers wording the rules below can't read, such as "it would be great to see those old red bricks downtown".
+2. The newest feedback, then the note, sentence by sentence. Any "picture/photo/image/pic of X" counts, as does "put/use/show/add/want/make X as/in/for/behind the background/hero/header/banner/top", "make the background X", "the background should be X", "background: X" and plain "use/show X". The slot words, "please", "instead" and "a/our/my" are trimmed.
 
-**Finding the hero photo.** `buildLook` looks in this order, and every look uses the same photo:
+Examples: Bob's "put a picture of the red bricks as the background" gives "the red bricks", and "use the brick streets" gives "the brick streets". A subject is rejected only if it is *nothing but* design words. "use orange", "navy and gold colors", "add a gallery", "make the font bigger" and "red please" give no subject, and negated phrases ("no pictures of pipes") are skipped. Before pt95u, any color word anywhere killed the subject, so "red bricks" was read as a color request. The trace shows who read the subject (`request.subjectFrom`: "AI planner" or "note wording"). `wantsBackground()` treats "background" (or "behind the headline", "full-width") as the hero background, so those looks switch to the full-bleed `hero-photo`.
+
+**Finding the hero photo.** When there is a subject it is the hero of all three looks. Each look gets a different matching photo when there are several (`photoRank`; the full-bleed cinematic look gets the best). `buildLook` looks in this order:
 1. **The site's own photo of it.** The scrape now keeps each image's alt and title text as `facts.imageText`. `matchScraped()` needs most of the scene words (or close synonyms) in that text or the file name. "Brick and stone facade" or "reading a book" does not count.
 2. **A free-license web photo.** `web-photo.server.ts` searches Openverse and Wikimedia Commons (no keys) for the scene plus the town from the address. It also searches the town name alone and the town with each scene word. Only CC0, public-domain, CC BY and CC BY-SA photos are used; NC and ND are skipped. A photo must be at least 1200 px wide and landscape (at least 1.2:1), and its title or description must name the town and a telling scene word. "Street" alone is noise, because every address has one. A title naming the town's downtown or historic district counts double for a downtown scene. The whole search is time-boxed to about 8 seconds. The photo is downloaded and stored with the preview (same origin, so the lead picture can capture it). Its credit (title, author, license link, source) is recorded on the image and shown in the footer as "Photo: “…” by …, CC BY-SA 3.0, via Wikimedia Commons". Set `PREVIEW_WEB_PHOTOS=0` to skip this step.
+   **Search words** (`webQueries()`): color words only describe, so "the red bricks" searches on "brick". Bricks on a town site usually mean brick streets. For "the red bricks" in Pauls Valley the queries run in this order:
+   1. "Pauls Valley red bricks"
+   2. "Pauls Valley brick street"
+   3. "Pauls Valley brick"
+   4. "Pauls Valley Oklahoma"
+   5. "red brick street" (anywhere)
+   6. "brick paved street" (anywhere)
+
+   Town results rank above results from anywhere. A Commons photo titled with the town and found by a "<town> <subject>" query counts as a match even when its short description doesn't say so, because Commons search also reads the file page. That is how "Pauls Valley Historic District" (which shows the brick streets) is found. Photos from anywhere must contain most of the subject words. Streets *named* after the subject ("Brick Street, Derby", "Street signs in Brick Lane") are rejected.
 3. **An AI photo of it.** It is generated even when the site has enough photos. The hero prompt starts "The photo MUST clearly show: the downtown brick streets in Pauls Valley, Oklahoma. Make … the main subject" and adds photorealistic, golden-hour and "no text". For trades it also says "not plumbing company tools or equipment". The look's own hero idea is used only if it already shows the scene. The business name is removed, but the town is kept.
 4. **Nothing found** (for example, mock mode with no web match). The hero gets a plain background, never an unrelated scraped photo.
+
+**No subject named: hero suitability.** Bob asked why pipes showed up on a town website. With no subject, the hero used to be the *largest* scraped photo. Now `heroSuitability()` (`web-photo.ts`) scores each scraped photo from its alt text, file name and URL. There is no extra AI call.
+- **Preferred:** places and landmarks (downtown, streets, parks, lakes, courthouse, historic, storefront, exterior, welcome sign, depot, museum …), then people and events.
+- **Demoted everywhere:** logos, icons, documents/PDFs, forms, flyers, maps, agendas, bids, headshots/staff portraits and placeholders.
+- **Also demoted on civic sites** (`isCivic`): pipes, valves, meters, pumps, utility, sewer, treatment plants, tanks, equipment, machinery, infrastructure, and photos from utility, water, public-works, department, staff, bids or forms pages. A plumber's site may still show its pipes.
+
+How the scores are used:
+- Photos scoring below −3 are dropped from the preview.
+- The rest are stored best-first (`photo-1` is the best).
+- Each look leads with a different suitable photo (score > 0).
+- If a civic site has no suitable hero-sized photo, the hero shows the town instead: the subject becomes "downtown <town>" (`trace.request.autoScene`), and the same search runs, finding a free-license photo of the town or else an AI photo of it.
+
+On paulsvalley.com the pipes photo scores −9, "Open Bids" −4, the welcome sign 4, people reading 2 and the airport 0.
 
 Every image prompt also carries the owner's words as "The business owner's request (top priority …)". The look-directions prompt asks the AI to make each look's `heroSubject` the requested scene and adds a `featureScene`. Refine rounds that mention photos, images, scenes or backgrounds regenerate the images.
 
@@ -298,7 +324,7 @@ The old domain step (step 12) is gone. Wizard answers are kept in memory only (s
 - `src/lib/preview/theme.ts`: the design-system CSS. `legacy-theme.ts` keeps old (v2) previews rendering.
 - `src/lib/preview/images.server.ts`: real-photo selection/storage and generated images.
 - `src/lib/preview/look-variety.ts`: makes the three looks different (hero treatment, header, buttons, footer, section recipe), plus the distinctness check.
-- `src/lib/preview/image-prompts.ts`: image prompts (the owner's scene first) and the card's photo line. `web-photo.ts` handles place, scene words, matching, licenses and ranking (pure). `web-photo.server.ts` runs the Openverse and Commons search and the download.
+- `src/lib/preview/image-prompts.ts`: image prompts (the owner's scene first) and the card's photo line. `web-photo.ts` handles place, scene words, search words, matching, licenses, ranking and hero suitability of scraped photos (pure). `web-photo.server.ts` runs the Openverse and Commons search and the download.
 - `src/lib/preview/critique.server.ts`: screenshot + critique-and-revise.
 - `src/lib/preview/builder.server.ts`: plan, directions, `buildLook`, `finishSite`.
 - `src/lib/preview.functions.ts`: server functions `previewRead`, `previewFromBrief`, `previewDirections`, `previewLook`, `previewFinish`.
@@ -320,7 +346,7 @@ XAI_API_KEY=fake AI_BASE_URL=http://localhost:9999/v1 IMAGE_BASE_URL=http://loca
 CHROME_PATH=/usr/bin/google-chrome node scripts/live-preview-e2e.mjs https://www.morganplumbingokc.com/ live-preview-shots/morgan-ai 1
 ```
 
-To simulate real-API failures with the fake server, set `FAKE_FAIL=slow|length|badjson|reject-reasoning` (add `FAKE_FAIL_ALL=1` to make the fallback model fail too). `scripts/live-preview-retry-e2e.mjs` records each card's error and can click "Retry with AI". `FAKE_SHAPE=alt` answers in drifted shapes (type under `section`/`component`, CamelCase names, nested `props`). `scripts/create-wizard-domain-e2e.mjs` screenshots the domain-first wizard steps. `scripts/preview-picture-e2e.mjs reimagine|wizard <url|-> <outDir> [lookIndex]` does the following:
+`FAKE_PHOTO_SUBJECT="red brick streets downtown"` makes the fake planner return that `photoSubject`, to test the planner path. For example, `NOTE="it would be great to see those old red bricks downtown" node scripts/note-photo-e2e.mjs https://www.paulsvalley.com/ <outDir>`. To simulate real-API failures with the fake server, set `FAKE_FAIL=slow|length|badjson|reject-reasoning` (add `FAKE_FAIL_ALL=1` to make the fallback model fail too). `scripts/live-preview-retry-e2e.mjs` records each card's error and can click "Retry with AI". `FAKE_SHAPE=alt` answers in drifted shapes (type under `section`/`component`, CamelCase names, nested `props`). `scripts/create-wizard-domain-e2e.mjs` screenshots the domain-first wizard steps. `scripts/preview-picture-e2e.mjs reimagine|wizard <url|-> <outDir> [lookIndex]` does the following:
 - submits the form and checks that nothing reaches Formcarry before a look is chosen;
 - double-clicks **Choose this look** on the given look (default 1, the second);
 - checks that exactly one request is sent;
