@@ -1,0 +1,272 @@
+/**
+ * Targeted refinement: the owner's feedback names one of the looks ("The Night Brick is best just a little too
+ * dark."), so that look is EDITED, not replaced. Its name, layout, fonts, photo, copy and structure stay; only the
+ * requested change is applied, deterministically (look-edit.ts), as three stored copies: as asked, a half step
+ * more, a full step more ("Night Brick, lighter" / "…a bit lighter still" / "…noticeably lighter").
+ *
+ * The Grok planner reads the request into {targetLook, adjustments, copy, photo}; the wording rules
+ * (readAdjustments / findTargetLook) are the fallback and the safety net (a look counts as named only when the
+ * owner's words actually name it).
+ */
+import { PNG } from "pngjs";
+import jpeg from "jpeg-js";
+import {
+  addLevels,
+  changedLine,
+  cleanAdjustments,
+  findTargetLook,
+  nameScore,
+  readAdjustments,
+  tuneNumbers,
+  tunePalette,
+  variantLabel,
+  variationScales,
+  type Adjustment,
+  type LookEdit,
+  type LookRef,
+  type LookTune,
+} from "./look-edit.ts";
+import type { StoredSite } from "./render.ts";
+import type { StoredImage } from "./types.ts";
+
+/** The looks on screen, as read back from storage (never the browser's copy). */
+export function lookRefs(sites: StoredSite[]): LookRef[] {
+  return sites.map((s, i) => ({
+    id: s.id,
+    name: s.design?.tune?.base.name ?? s.design?.name ?? s.name,
+    archetype: s.design?.archetype ?? "editorial",
+    index: s.lookIndex ?? i,
+    background: s.palette.background,
+    primary: s.palette.primary,
+  }));
+}
+
+/** Rules-only reading (no AI): which look, which tweaks. */
+export function editByWording(text: string, looks: LookRef[], focusedId?: string): LookEdit {
+  const target = findTargetLook(text, looks, focusedId);
+  return { targetId: target?.id, how: target?.how, adjustments: readAdjustments(text), from: "wording" };
+}
+
+/**
+ * The Grok planner's reading, merged with the wording rules. The target must be named in the owner's words
+ * (rules), or be a look whose name the planner returned AND that appears (fuzzily) in the text; the planner's
+ * adjustments win when it returned any.
+ */
+export async function planEdit(text: string, looks: LookRef[], focusedId: string | undefined, useAi: boolean): Promise<LookEdit> {
+  const rules = editByWording(text, looks, focusedId);
+  if (!useAi) return rules;
+  try {
+    const { chatJson, aiModel } = await import("@/lib/ai-provider.server");
+    const raw = await chatJson<{ targetLook?: unknown; adjustments?: unknown; copy?: unknown; photo?: unknown }>({
+      model: aiModel(),
+      temperature: 0,
+      maxTokens: 600,
+      timeoutMs: 20_000,
+      retry: false,
+      messages: [
+        {
+          role: "system",
+          content: `You are editing ONE existing website look from the owner's feedback. The owner sees these looks (left to right):
+${looks.map((l, i) => `${i + 1}. "${l.name}" (${l.archetype}${l.id === focusedId ? ", currently previewed" : ""})`).join("\n")}
+Return ONLY JSON: {"targetLook": exact look name or null, "adjustments": [{"type": one of lighten|darken|more-contrast|less-contrast|saturate|desaturate|warmer|cooler|bigger-text|smaller-text|more-space|less-space|more-color|less-busy, "amount": "slight"|"medium"|"strong"}], "copy": {"headline"?: string, "lead"?: string} or null, "photo": string or null}
+Rules:
+- targetLook only when the feedback names or clearly points at one look (its name, "the second one", "the dark one", "this one" = the currently previewed look). Otherwise null.
+- "a little", "a bit", "slightly", "just a touch" = slight; no qualifier = medium; "much", "way", "a lot" = strong.
+- "too dark" = lighten; "too bright"/"washed out" = darken; "too busy" = less-busy; "hard to read" = more-contrast.
+- copy only when the owner dictates new words for the hero headline or intro; photo only when they ask for a different hero photo (the subject, 2-6 words).
+- Never invent changes the owner did not ask for.`,
+        },
+        { role: "user", content: text.slice(0, 400) },
+      ],
+    });
+    const named = typeof raw.targetLook === "string" ? looks.find((l) => l.name.toLowerCase() === raw.targetLook!.toString().toLowerCase().trim()) : undefined;
+    const aiTarget = named && nameScore(text, named.name) > 0 ? named : undefined;
+    const adjustments = cleanAdjustments(raw.adjustments);
+    const c = (raw.copy && typeof raw.copy === "object" ? raw.copy : {}) as Record<string, unknown>;
+    const clip = (v: unknown, n: number) => (typeof v === "string" ? v.replace(/\s+/g, " ").trim().slice(0, n) : "");
+    const copy = { headline: clip(c.headline, 120) || undefined, lead: clip(c.lead, 300) || undefined };
+    const photo = clip(raw.photo, 80) || undefined;
+    return {
+      targetId: rules.targetId ?? aiTarget?.id,
+      how: rules.how ?? (aiTarget ? `named “${aiTarget.name}” (AI)` : undefined),
+      adjustments: adjustments.length ? adjustments : rules.adjustments,
+      copy: copy.headline || copy.lead ? copy : undefined,
+      photo,
+      from: adjustments.length || copy.headline || copy.lead || photo ? "AI planner" : "wording",
+    };
+  } catch (error) {
+    console.warn("[refine] AI edit planner failed; using the wording rules", error instanceof Error ? error.message.slice(0, 120) : "");
+    return rules;
+  }
+}
+
+// ------------------------------------------------------------------------------------------- hero photo measure
+
+/** sRGB luma (0..1) of the hero photo region where the headline sits, at the 80th percentile. */
+export function heroLuma(bytes: Buffer, type: string, region: { x0: number; x1: number; y0: number; y1: number }): number | undefined {
+  try {
+    let width = 0;
+    let height = 0;
+    let data: Uint8Array;
+    if (type === "image/jpeg") {
+      const img = jpeg.decode(bytes, { useTArray: true, maxResolutionInMP: 40, maxMemoryUsageInMB: 600 });
+      ({ width, height, data } = img);
+    } else if (type === "image/png") {
+      const img = PNG.sync.read(bytes);
+      ({ width, height } = img);
+      data = img.data;
+    } else return undefined;
+    const values: number[] = [];
+    const step = Math.max(1, Math.floor(Math.sqrt((width * height) / 40_000)));
+    for (let y = Math.floor(region.y0 * height); y < Math.floor(region.y1 * height); y += step) {
+      for (let x = Math.floor(region.x0 * width); x < Math.floor(region.x1 * width); x += step) {
+        const i = (y * width + x) * 4;
+        values.push((0.2126 * data[i]! + 0.7152 * data[i + 1]! + 0.0722 * data[i + 2]!) / 255);
+      }
+    }
+    if (!values.length) return undefined;
+    values.sort((a, b) => a - b);
+    return values[Math.floor(values.length * 0.8)]!;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * The lowest scrim factor (1 = the designed overlay) that keeps white hero text at 4.5:1 over this photo after the
+ * brightness boost. `alpha` is the designed overlay opacity behind the text.
+ */
+export function scrimFloor(luma: number | undefined, brightness: number, alpha: number): number {
+  if (luma === undefined) return 0.6;
+  const lin = Math.min(1, luma * brightness) ** 2.2;
+  const maxBehind = 1.05 / 4.5 - 0.05; // relative luminance that still gives white text 4.5:1
+  if (lin <= maxBehind) return 0;
+  const needed = 1 - maxBehind / lin; // overlay opacity needed
+  return Math.min(1, needed / alpha);
+}
+
+// ------------------------------------------------------------------------------------------- building the edits
+
+export type EditedLook = { site: StoredSite; variant: string; changed: string; measured: { backgroundBefore: number; backgroundAfter: number; scrim: number; brightness: number } };
+
+async function copyImages(from: StoredSite, toId: string): Promise<void> {
+  const { readImage, saveImage } = await import("@/lib/pages.server");
+  await Promise.all(
+    Object.keys(from.images ?? {}).map(async (name) => {
+      const img = await readImage(from.id, name);
+      if (img) await saveImage(toId, name, img.type, img.bytes);
+    }),
+  );
+}
+
+/** A different hero photo for the edit ("…but use the depot photo"): Google Images, then free-license photos. */
+async function findEditPhoto(site: StoredSite, subject: string, step: number): Promise<{ bytes: Buffer; type: string; image: StoredImage } | undefined> {
+  if (!site.facts) return undefined;
+  const { findGooglePhotos, photoSearchEnabled } = await import("./google-photo.server.ts");
+  if (photoSearchEnabled()) {
+    const g = await findGooglePhotos(subject, site.facts, false, Date.now() + 25_000, 3).catch(() => undefined);
+    const pick = g?.photos[step % Math.max(1, g.photos.length)];
+    if (pick) {
+      const { googleCredit } = await import("./builder.server.ts");
+      return { bytes: pick.photo.bytes, type: pick.photo.type, image: { name: "hero", type: pick.photo.type, source: "web", alt: pick.temp.title, width: pick.photo.width, height: pick.photo.height, credit: googleCredit(pick.temp), temporary: pick.temp } };
+    }
+  }
+  const { findWebPhotos, webPhotosEnabled } = await import("./web-photo.server.ts");
+  const { placeOf } = await import("./web-photo.ts");
+  if (!webPhotosEnabled()) return undefined;
+  const web = await findWebPhotos(subject, placeOf(site.facts), 8_000, 3).catch(() => []);
+  const w = web[step % Math.max(1, web.length)];
+  return w ? { bytes: w.photo.bytes, type: w.photo.type, image: { name: "hero", type: w.photo.type, source: "web", alt: w.credit.title, width: w.photo.width, height: w.photo.height, credit: w.credit } } : undefined;
+}
+
+/**
+ * Three stored edits of `stored` (as asked, a half step more, a full step more), each a full look the owner
+ * can preview and choose. Everything but the requested change is copied as is.
+ */
+export async function buildEdits(stored: StoredSite, edit: LookEdit, feedback: string[]): Promise<EditedLook[]> {
+  const { newPageId, readImage, saveImage, saveSite } = await import("@/lib/pages.server");
+  const design = stored.design!;
+  const base: LookTune["base"] = design.tune?.base ?? { palette: stored.palette, motifs: [...design.motifs], name: design.name };
+  const intensity = edit.adjustments.length > 0;
+  const scales = intensity ? variationScales(edit.adjustments) : [1];
+  const home = stored.pages.find((p) => p.slug === "home");
+  const heroSection = home?.sections?.[0];
+  const photoHero = heroSection?.type === "hero-photo";
+  // Where the headline sits over the photo: the left side (cinematic) or the lower part (full-bleed).
+  const cinematic = photoHero && design.heroStyle === "cinematic";
+  const heroName = heroSection?.image;
+  const heroBytes = heroName ? await readImage(stored.id, heroName) : undefined;
+  const luma = heroBytes ? heroLuma(heroBytes.bytes, heroBytes.type, cinematic ? { x0: 0, x1: 0.5, y0: 0.2, y1: 0.85 } : { x0: 0, x1: 1, y0: 0.45, y1: 0.95 }) : undefined;
+  const out: EditedLook[] = [];
+  for (const [step, scale] of scales.entries()) {
+    const id = newPageId();
+    await copyImages(stored, id);
+    const levels = addLevels(design.tune?.levels, edit.adjustments, scale);
+    const numbers = tuneNumbers(levels);
+    const scrimMin = photoHero ? scrimFloor(luma, numbers.brightness, cinematic ? 0.72 : 0.8) : 0;
+    const palette = intensity ? tunePalette(base.palette, levels) : stored.palette;
+    const notes: string[] = [];
+    const pages = stored.pages.map((p) => ({ ...p, sections: p.sections?.map((s) => ({ ...s })) }));
+    const hero = pages.find((p) => p.slug === "home")?.sections?.[0];
+    if (hero && edit.copy?.headline) {
+      hero.heading = edit.copy.headline;
+      notes.push("new headline");
+    }
+    if (hero && edit.copy?.lead) {
+      hero.text = edit.copy.lead;
+      notes.push("new intro text");
+    }
+    const images: Record<string, StoredImage> = { ...(stored.images ?? {}) };
+    if (hero && edit.photo) {
+      const found = await findEditPhoto(stored, edit.photo, step);
+      if (found) {
+        await saveImage(id, "hero", found.type, found.bytes);
+        images.hero = found.image;
+        hero.image = "hero";
+        notes.push(`new photo: ${edit.photo}`);
+      } else notes.push(`couldn't find a photo of “${edit.photo}”, kept the current one`);
+    }
+    const variant = variantLabel(edit.adjustments, Math.min(step, 2) as 0 | 1 | 2, !intensity ? notes[0] : undefined);
+    const changed = changedLine(edit.adjustments, scale, photoHero, intensity ? notes : notes.slice(1));
+    const tune: LookTune = { levels, base, scrimMin: Math.round(scrimMin * 1000) / 1000, variant, changed };
+    const site: StoredSite = {
+      ...stored,
+      id,
+      createdAt: new Date().toISOString(),
+      palette,
+      design: { ...design, palette, motifs: (levels["less-busy"] ?? 0) > 0 ? [] : (base.motifs as typeof design.motifs), tune },
+      images,
+      pages,
+      facts: stored.facts ? { ...stored.facts, feedback } : stored.facts,
+      trace: stored.trace
+        ? {
+            ...stored.trace,
+            request: { ...stored.trace.request, feedback },
+            steps: [...stored.trace.steps, { step: `edit of “${base.name}” (${edit.how ?? "named"}; read by ${edit.from})`, ai: edit.from === "AI planner", ownerRequest: true }],
+          }
+        : stored.trace,
+    };
+    await saveSite(site);
+    const n = tuneNumbers(levels, tune.scrimMin);
+    out.push({
+      site,
+      variant,
+      changed,
+      measured: { backgroundBefore: relLumOf(base.palette.background), backgroundAfter: relLumOf(palette.background), scrim: n.scrim, brightness: n.brightness },
+    });
+    console.info(
+      `[refine] edited “${base.name}” (${stored.id} -> ${id}) ${variant}: ${JSON.stringify(levels)} · bg ${base.palette.background}->${palette.background} · scrim ${n.scrim}${scrimMin ? ` (AA floor ${tune.scrimMin}, hero luma p80 ${luma?.toFixed(2)})` : ""} · photo brightness ${n.brightness}`,
+    );
+  }
+  return out;
+}
+
+function relLumOf(hex: string): number {
+  const c = hex.replace("#", "").match(/../g)!.map((x) => {
+    const s = parseInt(x, 16) / 255;
+    return s <= 0.04045 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4;
+  });
+  return Math.round((0.2126 * c[0]! + 0.7152 * c[1]! + 0.0722 * c[2]!) * 10000) / 10000;
+}
+
+export type { Adjustment };

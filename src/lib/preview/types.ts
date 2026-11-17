@@ -2,6 +2,7 @@
 import type { PhotoCredit } from "./web-photo.ts";
 import type { SiteArt } from "./site-art.ts";
 import type { TemporaryPhoto } from "./google-photo.ts";
+import type { LookTune } from "./look-edit.ts";
 
 export type SiteNavLink = { label: string; url: string };
 
@@ -116,6 +117,8 @@ export type DesignDirection = {
   /** Below-the-fold section recipe; no two looks share one. */
   layout?: "editorial" | "showcase" | "bold";
   footer: "columns" | "minimal" | "statement";
+  /** Set on a look edited from the owner's feedback ("Night Brick, lighter"): cumulative levels + original palette. */
+  tune?: LookTune;
   /** A bold headline idea for the hero. */
   headline: string;
   /** Why this direction fits the business. */
@@ -244,6 +247,16 @@ export type LookInfo = {
   aiWarning?: string;
   /** Bumped after "Retry with AI" so thumbnails reload. */
   rev?: number;
+  /** An edit of an earlier look ("Night Brick, lighter"): the look's unchanged name is `name`. */
+  edit?: {
+    /** "lighter", "a bit lighter still", "noticeably lighter". */
+    variant: string;
+    /** "Changed: lightened backgrounds and photo overlay (slight)". */
+    changed: string;
+    /** The look this was edited from (id) and how the feedback named it. */
+    from: string;
+    how: string;
+  };
 };
 
 /**
@@ -312,6 +325,8 @@ export type SitePlan = {
   photoSubject?: string;
   /** "keep": the subject is a picture already on the owner's site (never searched for or generated). */
   photoIntent?: "keep" | "find" | "none";
+  /** 2-3 Google Images searches for photos that fit this business/place (used proactively, even with no note). */
+  imageQueries?: string[];
 };
 
 export type PreviewPageLink = { slug: string; title: string; url: string };
