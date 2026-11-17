@@ -17,11 +17,13 @@ import type { Photo } from "./images.server.ts";
 import { googleQueries, normalizeImages, rejectReason, scoreGoogleImage, type GoogleImage, type TemporaryPhoto } from "./google-photo.ts";
 import { placeOf } from "./web-photo.ts";
 import { businessKind, isCivic } from "./image-prompts.ts";
-import type { SiteFacts } from "./types.ts";
+import type { Archetype, SiteFacts } from "./types.ts";
+import { assignHeroes, heroScore, withDuplicateSigns, type HeroCandidate, type HeroPick } from "./hero-pick.ts";
 
 type Fetcher = (url: string) => Promise<Photo | null | undefined>;
 
-export type GooglePhoto = { photo: Photo; temp: TemporaryPhoto };
+/** `label`: Grok vision's short subject and sign flag (proactive searches with real AI). */
+export type GooglePhoto = { photo: Photo; temp: TemporaryPhoto; label?: { subject?: string; sign?: boolean }; relevance?: number };
 
 type Mode = { mode: "serper"; key: string; base: string } | { mode: "proxy"; url: string; key: string };
 
@@ -97,12 +99,18 @@ export function googleImages(q: string): Promise<GoogleImage[]> {
 }
 
 /** Ask Grok which downloaded candidates show the subject and suit a website hero, best first. */
-async function visionRank(subject: string, items: { photo: Photo; img: GoogleImage }[], deadline: number): Promise<number[] | undefined> {
+type VisionLabel = { subject?: string; sign?: boolean };
+
+async function visionRank(subject: string, items: { photo: Photo; img: GoogleImage }[], deadline: number, labels?: VisionLabel[]): Promise<number[] | undefined> {
   const { aiModel, chatJson } = await import("@/lib/ai-provider.server");
   const content: unknown[] = [
     {
       type: "text",
-      text: `We need a website hero photo of: ${subject}. Below are ${items.length} candidate photos numbered 1-${items.length}. List the numbers of the photos that clearly show ${subject} and would work as a wide website hero (a real photo, sharp, no watermark, no text overlay, no logo, not a collage), best first. Answer only JSON: {"good": [numbers]} (empty if none).`,
+      text:
+        `We need a website hero photo of: ${subject}. Below are ${items.length} candidate photos numbered 1-${items.length}. List the numbers of the photos that clearly show ${subject} and would work as a wide website hero (a real photo, sharp, no watermark, no text overlay, no logo, not a collage), best first. ` +
+        (labels
+          ? `Prefer wide scenes with depth and good light (streets, downtown, historic buildings, landmarks, people); put close-ups of signs, plaques or text, dim or flat photos, and shots that are mostly sky or grass last or leave them out. Also describe EVERY photo: a 2-4 word subject (e.g. "welcome sign", "downtown street at night", "train depot", "city park") and whether it is mainly a sign, plaque or text. Answer only JSON: {"good": [numbers], "photos": [{"n": 1, "subject": "...", "sign": false}, ...]}.`
+          : `Answer only JSON: {"good": [numbers]} (empty if none).`),
     },
   ];
   items.forEach((it, i) => {
@@ -110,15 +118,22 @@ async function visionRank(subject: string, items: { photo: Photo; img: GoogleIma
     content.push({ type: "image_url", image_url: { url: `data:${it.photo.type};base64,${it.photo.bytes.toString("base64")}`, detail: "low" } });
   });
   try {
-    const answer = await chatJson<{ good?: unknown }>({
+    const answer = await chatJson<{ good?: unknown; photos?: unknown }>({
       model: process.env.PREVIEW_VISION_MODEL || aiModel(),
       messages: [{ role: "user", content: content as never }],
-      maxTokens: 300,
+      maxTokens: labels ? 900 : 300,
       temperature: 0,
       timeoutMs: Math.max(3000, Math.min(20_000, deadline - Date.now())),
       deadline,
       retry: false,
     });
+    if (labels && Array.isArray(answer.photos)) {
+      for (const raw of answer.photos as { n?: unknown; subject?: unknown; sign?: unknown }[]) {
+        const n = Number(raw?.n);
+        if (!Number.isInteger(n) || n < 1 || n > items.length) continue;
+        labels[n - 1] = { subject: typeof raw.subject === "string" ? raw.subject.slice(0, 60) : undefined, sign: raw.sign === true };
+      }
+    }
     if (!Array.isArray(answer.good)) return undefined;
     return [...new Set(answer.good.map(Number).filter((n) => Number.isInteger(n) && n >= 1 && n <= items.length).map((n) => n - 1))];
   } catch {
@@ -200,12 +215,15 @@ export async function searchGooglePhotos(
     )
   ).filter((x): x is NonNullable<typeof x> => Boolean(x));
   const byScore = () => loaded.map((l, i) => ({ i, s: strict(l.img, l.q) })).filter((x) => x.s > 0).sort((a, b) => b.s - a.s).map((x) => x.i);
+  const visionLabels = new Map<(typeof loaded)[number], VisionLabel>();
   let order = useVision ? loaded.map((_, i) => i) : byScore();
   let pickedBy: TemporaryPhoto["pickedBy"] = "score";
   let ranking = useVision ? "" : "title/size/aspect score (no AI)";
   if (useVision && loaded.length) {
     const small = loaded.filter((l) => l.photo.bytes.length < 1_800_000);
-    const ranked = small.length ? await visionRank(label, small, deadline) : undefined;
+    const labels: VisionLabel[] | undefined = proactive?.length ? [] : undefined;
+    const ranked = small.length ? await visionRank(label, small, deadline, labels) : undefined;
+    if (labels) small.forEach((l, i) => labels[i] && visionLabels.set(l, labels[i]!));
     if (ranked?.length) {
       order = ranked.map((i) => loaded.indexOf(small[i]!));
       pickedBy = "vision";
@@ -218,9 +236,12 @@ export async function searchGooglePhotos(
     }
   }
   const via: TemporaryPhoto["via"] = photoSearchMode()?.mode === "proxy" ? "photo-search proxy" : "Serper";
-  const photos = order.slice(0, max).map((i) => {
+  const photos = order.slice(0, max).map((i, rank) => {
     const l = loaded[i]!;
     return {
+      label: visionLabels.get(l),
+      // Search relevance for the hero score: rank in the vision / title order (3 = first).
+      relevance: Math.max(0, 3 - rank * 0.4),
       photo: l.photo,
       temp: { provider: "Google Images", via, title: l.img.title || l.q, imageUrl: l.img.imageUrl, sourcePage: l.img.link, domain: l.img.domain, query: l.q, pickedBy } satisfies TemporaryPhoto,
     };
@@ -247,8 +268,19 @@ export function findGooglePhotos(scene: string | undefined, facts: SiteFacts, us
 }
 
 /** A prefetched proactive search, as stored between steps (no image bytes: the chosen one is downloaded again). */
-export type PlannedPhoto = { temp: TemporaryPhoto; width: number; height: number };
-export type PlannedPhotos = { queries: string[]; photos: PlannedPhoto[]; seen: number; rejected: Record<string, number>; ranking?: string; at: string };
+export type PlannedPhoto = { temp: TemporaryPhoto; width: number; height: number; candidate?: HeroCandidate };
+export type PlannedPhotos = {
+  queries: string[];
+  photos: PlannedPhoto[];
+  /** The site's own hero-sized photos, scored the same way (absent when the owner asked for new photos). */
+  site?: HeroCandidate[];
+  /** One hero per look, all different subjects, chosen together once the looks' archetypes are known. */
+  assign?: { archetypes: (Archetype | undefined)[]; picks: HeroPick[] };
+  seen: number;
+  rejected: Record<string, number>;
+  ranking?: string;
+  at: string;
+};
 
 /** Stable 16-hex key for a site + its planner queries (the prefetch is stored under it, server-side only). */
 export function plannedKey(facts: Pick<SiteFacts, "sourceUrl" | "name">, queries: string[]): string {
@@ -260,18 +292,54 @@ export function plannedKey(facts: Pick<SiteFacts, "sourceUrl" | "name">, queries
  * best few. Started by the plan step (so it runs while the looks are being designed) and stored server-side, so
  * the three look builds (which may run on other server instances) read the same ranking without new searches.
  */
-export async function prefetchPlannedPhotos(facts: SiteFacts, queries: string[], useVision: boolean, deadline: number): Promise<PlannedPhotos | undefined> {
+export async function prefetchPlannedPhotos(
+  facts: SiteFacts,
+  queries: string[],
+  useVision: boolean,
+  deadline: number,
+  opts: { archetypes?: Promise<(Archetype | undefined)[] | undefined>; site?: boolean } = {},
+): Promise<PlannedPhotos | undefined> {
   if (!photoSearchEnabled() || !queries.length) return undefined;
-  const found = await findGooglePhotos(undefined, facts, useVision, deadline, 4, queries);
+  const { measurePhoto, siteHeroCandidates } = await import("@/lib/preview/hero-pick.server");
+  const [found, site] = await Promise.all([
+    findGooglePhotos(undefined, facts, useVision, deadline, 10, queries),
+    opts.site === false ? Promise.resolve([] as HeroCandidate[]) : siteHeroCandidates(facts).catch(() => [] as HeroCandidate[]),
+  ]);
+  const photos: PlannedPhoto[] = found.photos.map((p) => {
+    const m = measurePhoto(p.photo.bytes, p.photo.type);
+    const candidate: HeroCandidate = {
+      id: p.temp.imageUrl,
+      source: "google",
+      text: p.temp.title,
+      visionSubject: p.label?.subject,
+      visionSign: p.label?.sign,
+      width: p.photo.width,
+      height: p.photo.height,
+      stats: m?.stats,
+      hash: m?.hash,
+      relevance: p.relevance ?? 1,
+    };
+    return { temp: p.temp, width: p.photo.width, height: p.photo.height, candidate };
+  });
+  // The looks' archetypes (from the directions step, running alongside) let each photo suit its look's mood.
+  const archetypes = ((await opts.archetypes?.catch(() => undefined)) ?? [undefined, undefined, undefined]).slice(0, 3);
+  const all = [...photos.map((p) => p.candidate!), ...site];
+  const picks = assignHeroes(all, archetypes);
   const planned: PlannedPhotos = {
     queries: found.queries,
-    photos: found.photos.map((p) => ({ temp: p.temp, width: p.photo.width, height: p.photo.height })),
+    photos,
+    site,
+    assign: { archetypes, picks },
     seen: found.seen,
     rejected: found.rejected,
     ranking: found.ranking,
     at: new Date().toISOString(),
   };
-  console.info(`[photo-search] proactive ${JSON.stringify(found.queries)}: ${found.seen} results, ${planned.photos.length} usable (${found.ranking ?? "score"})${Object.keys(found.rejected).length ? `; skipped ${JSON.stringify(found.rejected)}` : ""}`);
+  console.info(`[photo-search] proactive ${JSON.stringify(found.queries)}: ${found.seen} results, ${planned.photos.length} usable (${found.ranking ?? "score"})${Object.keys(found.rejected).length ? `; skipped ${JSON.stringify(found.rejected)}` : ""}; ${site.length} site photo${site.length === 1 ? "" : "s"} competing`);
+  for (const c of withDuplicateSigns(all.map(heroScore)).sort((a, b) => b.score - a.score)) {
+    console.info(`[photo-search]   candidate ${c.source} score ${c.score}${c.sign ? " SIGN" : ""} subject "${c.subject || "?"}" “${(c.visionSubject ? `${c.visionSubject} / ` : "") + c.text.slice(0, 60)}”${c.stats ? ` brightness ${c.stats.mean} contrast ${c.stats.contrast}` : ""}`);
+  }
+  for (const p of picks) console.info(`[photo-search] pick look ${p.index + 1}${archetypes[p.index] ? ` (${archetypes[p.index]})` : ""}: ${p.source} “${all.find((c) => c.id === p.id)?.text.slice(0, 60)}” · ${p.reason}`);
   try {
     const { saveImage } = await import("@/lib/pages.server");
     await saveImage(plannedKey(facts, queries), "photo-search", "application/json", Buffer.from(JSON.stringify(planned)));
