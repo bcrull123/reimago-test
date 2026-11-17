@@ -213,6 +213,26 @@ Every image prompt also carries the owner's words as "The business owner's reque
 
 It contains no secrets.
 
+### Proactive Google Images on the first round (no note needed)
+
+When photo search is on (`SERPER_API_KEY` on the master, or the photo-search proxy), round 1 gets Google photos even with no note:
+- The AI planner returns 2-3 `imageQueries` from the scrape ("downtown Pauls Valley Oklahoma brick streets", "Pauls Valley Oklahoma landmark"; "plumber truck Oklahoma City", "plumber at work"). They are cleaned by `cleanImageQueries` (`photo-queries.ts`). Without AI, `defaultImageQueries` builds them from the business type and town.
+- `previewDirections` starts the searches as soon as the plan is ready, in parallel with the directions (`prefetchForPlan`). The queries run in parallel, the results are ranked once (vision when AI is on, otherwise title/size/aspect), and the ranking is stored with the previews under a hash of the queries (6 h). Each look reads it (`plannedPhotos`) instead of searching again, also on another server instance.
+- Each look picks a different hero (`photoRank`). The pool is: the site's single best photo when it is strong (hero suitability ≥ 2 and hero-sized), then the Google results, then the site's other strong photos, then its weak ones. "New photos" feedback puts Google first. So a good, relevant site photo can still win one look, but weak or irrelevant site photos lose to strong Google results.
+- Not used when the owner asked to keep something ("Keep the rocket"): keep requests stay site-only and never search. Not used either when the note names a subject (that search runs instead).
+- Logs: `[photo-search] proactive [queries]: N results, M usable (ranking); skipped {...}` once per round, and one line per look: `[photo] look N "Name": hero = Google Images (domain) · query "..." | your site (photo-n) | AI photo | none · status · search ...`. The same text is in the card's "How your request was used". When search is off, the trace says "Google Images: off on this server (no SERPER_API_KEY or photo-search proxy)".
+
+### Editing one look from feedback ("Night Brick, just a little too dark")
+
+When the refine feedback names a look, that look is EDITED instead of making three new ones (`previewRefine`, `look-edit.ts`, `look-edit.server.ts`):
+- A look can be named by name (exact or fuzzy: case, typos, a missing word), by description ("the dark one", "the second one", "the middle one", "the editorial one", "the blue one"), or as "this one" / "the one I'm previewing" (the look open in the preview). `findTargetLook` reads it; the Grok planner (`planEdit`) can only confirm a look whose name is in the owner's words.
+- Supported tweaks (`{type, amount: slight|medium|strong}`): lighten, darken, more/less contrast, saturate/desaturate, warmer/cooler, bigger/smaller text, more/less spacing, more color, less busy. The planner returns `{targetLook, adjustments, copy, photo}`; a regex reading handles common phrases ("a little too dark" = lighten slight) and is used when AI is off or fails.
+- Everything else is kept: name, layout, fonts, photo, copy, sections. The palette is recomputed from the ORIGINAL palette plus cumulative levels (no drift over rounds): background/surface lightness moves in OKLCH, then text, muted and primary colors are re-picked to keep WCAG AA (text ≥ 7:1 where it was, never < 4.5:1). Over the hero photo, the dark overlay is reduced and the photo filter gets `brightness()`; the overlay never goes below what keeps white text at 4.5:1 over the measured photo (80th-percentile luma of the text area).
+- Three looks come back: as asked ("Night Brick, lighter"), a half step more ("a bit lighter still") and a full step more ("noticeably lighter"). The name does not change; the card heading shows ", lighter" and a green line says what changed ("Changed: lightened backgrounds and photo overlay (slight)"). The banner says "Edited Night Brick … (round n of 5)".
+- When a look is named but nothing applicable is asked ("Night Brick is great"), the box says so and the round is not used. Feedback that names no look keeps the old behavior (3 new looks with the feedback).
+- Log lines: `[refine] "<feedback>" -> edit Night Brick (named “Night Brick”) · adjustments [...] · read by AI planner|wording` and per edited look `[refine] edited “Night Brick” (old -> new id) lighter: {"lighten":1} · bg #0e1013->#1e2023 · scrim 0.774 (AA floor …) · photo brightness 1.11`.
+- Copy/photo changes in an edit ("same but use the depot photo") use Google/web photos only; no AI image is generated in an edit.
+
 ### Three looks that really differ
 
 Bob's Pauls Valley run (on a2b92fb) gave three looks that were the same except for the wording. Each one had the same Wikimedia photo as a full-bleed hero, in the same layout. `look-variety.ts` now keeps the looks apart. `directionsFor` runs `diversifyDirections`, so each look gets its own:
@@ -420,6 +440,8 @@ The old domain step (step 12) is gone. Wizard answers are kept in memory only (s
 - `src/lib/preview/critique.server.ts`: screenshot + critique-and-revise.
 - `src/lib/preview/builder.server.ts`: plan, directions, `buildLook`, `finishSite`.
 - `src/lib/preview.functions.ts`: server functions `previewRead`, `previewFromBrief`, `previewDirections`, `previewLook`, `previewFinish`.
+- `src/lib/preview/photo-queries.ts`: the planner's proactive Google Images queries (clean + no-AI defaults).
+- `src/lib/preview/look-edit.ts` (pure: which look, which tweaks, OKLCH palette tuning with AA, CSS, labels) and `look-edit.server.ts` (Grok edit planner, photo luma, building the edited looks).
 - `src/components/looks-picker.tsx`, `live-preview.tsx`, `home-page.tsx`: UI.
 - Routes:
   - `made.$id.ts` and `made.$id.$slug.ts` serve the pages; unfinished looks are sent `no-cache`;
@@ -459,3 +481,5 @@ The last argument picks which look to choose (0–2); `APP_URL` points the scrip
 **Google Images without a real key**: `node scripts/mock-serper.mjs` (port 9997) answers like Serper's `/images`, checks `X-API-KEY` (`mock-serper-key`), logs queries (`GET /log`, `POST /reset`), and returns real Wikimedia image URLs plus decoys (a Shutterstock result, a logo, a 640 px image, a broken URL, a portrait). Run the app with `SERPER_API_KEY=mock-serper-key SERPER_BASE_URL=http://localhost:9997`, then `NOTE="put a picture of the red bricks as the background" node scripts/note-photo-e2e.mjs https://www.paulsvalley.com/ live-preview-shots/serper-mock/paulsvalley-red-bricks`. For proxy mode, run a second "master" dev server with `SERPER_API_KEY`, `SERPER_BASE_URL` and `PHOTO_SEARCH_PROXY_KEY`, and point the clone at it with `PHOTO_SEARCH_PROXY_URL`/`PHOTO_SEARCH_PROXY_KEY`. With the fake AI server the vision step answers too (`FAKE_GOOGLE_VISION=reverse|none`). Unit tests: `src/lib/preview/google-photo.test.ts`.
 
 `scripts/note-photo-e2e.mjs <url> <outDir>` (`NOTE`, default "use the brick streets") submits the form with a note. It screenshots the cards (photo line and "How your request was used") and each look's top. It also takes a footer shot when there is a photo credit, plus full-page shots and side-by-side boards of the three look tops (`05-tops-side-by-side.png`) and full pages (`06-full-pages-side-by-side.png`). Each look's hero image, hero type and credit go in `summary.json`. Formcarry is intercepted and nothing is chosen. Example: `NOTE="Use a photo of the downtown brick streets as background" node scripts/note-photo-e2e.mjs https://www.paulsvalley.com/ live-preview-shots/note-photo-paulsvalley-mock`.
+
+`scripts/refine-edit-e2e.mjs <url> <outDir>` repeats Bob's steps: round 1 with no note, then "Use a photo of downtown pauls valley with the brick streets for the background", then "The <darkest look> is best just a little too dark." It screenshots every round, puts the dark look before/after side by side (`04-before-after-top.png`, `05-before-after-full.png`), and writes luminance numbers (mean WCAG relative luminance and CIE L* of the first screen, of the page below the hero and of the whole page) to `summary.json`. Run with the fake AI server (`FAKE_DARK_NAME="Night Brick"` names the dark look like Bob's run and keeps one dark look in every round) and the mock Serper. Unit tests: `src/lib/preview/look-edit.test.ts`.
