@@ -109,8 +109,10 @@ describe("assignHeroes: three looks, three different subjects", () => {
   });
   it("a sign is used at most once, even when little else is left", () => {
     const picks = assignHeroes([bob[0]!, bob[1]!, bob[2]!, bob[3]!, bob[5]!], [undefined, undefined, undefined]);
-    assert.equal(picks.filter((p) => ["g1", "g2", "g3", "site1"].includes(p.id)).length, 1);
-    assert.ok(picks.length === 2, "the third look falls back instead of repeating the sign");
+    assert.ok(picks.filter((p) => ["g1", "g2", "g3", "site1"].includes(p.id)).length <= 1, "never a sign twice");
+    // Fewer good photos than looks: the third look shows a good photo again (its own treatment), never a sign.
+    assert.equal(picks.length, 3);
+    assert.ok(picks.some((p) => /reused/.test(p.reason)));
   });
   it("near-duplicate pixels count as the same subject (and inherit the sign penalty)", () => {
     const picks = assignHeroes([bob[0]!, bob[1]!, bob[5]!, bob[7]!], [undefined, undefined, undefined]);

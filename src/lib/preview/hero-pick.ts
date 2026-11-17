@@ -8,6 +8,7 @@
  * (same scene words, or a near-duplicate picture by perceptual hash), and each look's photo suits its mood where
  * possible (dark premium: dusk or night; editorial: a daytime historic building; playful / bold: a lively street).
  */
+import { LOW_QUALITY } from "./hero-brief.ts";
 import type { Archetype } from "./types.ts";
 
 // ------------------------------------------------------------------------------------------------ pixels
@@ -160,7 +161,7 @@ const LIVELY = /\b(?:festival|parade|crowd|people|market|street|streets|main\s+s
 export type HeroCandidate = {
   /** Stable id (the image URL). */
   id: string;
-  source: "google" | "site";
+  source: "google" | "site" | "web";
   /** Title / alt text / vision label: what the picture shows. */
   text: string;
   /** Grok vision's short subject label when real AI looked at it. */
@@ -175,7 +176,23 @@ export type HeroCandidate = {
   relevance: number;
   /** Already the hero of a look in an earlier round of this session (a new round should show something new). */
   shownBefore?: boolean;
+  /** Vision rating 1-10: "would a designer use this as the hero of a beautiful homepage for THIS business?" */
+  appeal?: number;
+  /** The rater's few words on why ("dim gravel lot", "bright historic main street"). */
+  appealNote?: string;
+  /** Off-topic for this kind of business by its title / label (hero-brief.ts; the no-AI fallback). */
+  offTopic?: boolean;
 };
+
+/** Minimum vision rating for a hero (out of 10). */
+export const HERO_BAR = 7;
+
+/** Good enough to be a homepage hero: rated ≥ HERO_BAR by vision, or (no rating) a clean on-topic scene. */
+export function passesBar(c: Scored): boolean {
+  if (c.sign) return false;
+  if (c.appeal !== undefined) return c.appeal >= HERO_BAR;
+  return !c.offTopic && !LOW_QUALITY.test(`${c.visionSubject ?? ""} ${c.text}`) && c.score >= 3;
+}
 
 export type Scored = HeroCandidate & { score: number; subject: string; sign: boolean; why: string[] };
 
@@ -197,6 +214,9 @@ export function heroScore(c: HeroCandidate): Scored {
   add(Math.min(3, scene) * 1.2, "street/building/landmark scene");
   add(sign ? -5 : 0, "sign, plaque or text");
   add(c.shownBefore ? -8 : 0, "shown in an earlier round");
+  if (c.appeal !== undefined) add((c.appeal - 6) * 1.5, `designer rating ${c.appeal}/10${c.appealNote ? ` (${c.appealNote})` : ""}`);
+  add(c.offTopic ? -6 : 0, "off-topic for this business");
+  add(LOW_QUALITY.test(words) ? -4 : 0, "low quality / unflattering subject");
   const ratio = c.width / Math.max(1, c.height);
   add(ratio >= 1.3 && ratio <= 2.1 ? 1 : ratio < 1.15 ? -1.5 : 0, ratio >= 1.3 && ratio <= 2.1 ? "wide" : "not wide");
   add(c.width >= 1600 ? 0.5 : 0, "large");
@@ -262,7 +282,7 @@ export function sameSubject(a: Scored, b: Scored): boolean {
   return Boolean(a.subject) && a.subject === b.subject;
 }
 
-export type HeroPick = { index: number; id: string; source: "google" | "site"; subject: string; score: number; fit: number; reason: string };
+export type HeroPick = { index: number; id: string; source: "google" | "site" | "web"; subject: string; score: number; fit: number; reason: string };
 
 /**
  * Assign one photo per look (indices 0..n-1), all different subjects, maximizing hero score + mood fit. Brute force
@@ -270,7 +290,10 @@ export type HeroPick = { index: number; id: string; source: "google" | "site"; s
  * With fewer distinct subjects than looks, the remaining looks get no pick (they fall back to the old path).
  */
 export function assignHeroes(candidates: HeroCandidate[], archetypes: (Archetype | undefined)[]): HeroPick[] {
-  const scored = withDuplicateSigns(candidates.map(heroScore)).sort((a, b) => b.score - a.score).slice(0, 12);
+  const all = withDuplicateSigns(candidates.map(heroScore)).sort((a, b) => b.score - a.score);
+  // The quality bar: only photos a designer would use compete; below-bar ones only when nothing passes.
+  const passing = all.filter(passesBar);
+  const scored = (passing.length ? passing : all).slice(0, 12);
   const n = archetypes.length;
   const fits = scored.map((c) => archetypes.map((a) => moodFit(c, a)));
   let best: { total: number; picks: number[] } = { total: -Infinity, picks: [] };
@@ -294,6 +317,24 @@ export function assignHeroes(candidates: HeroCandidate[], archetypes: (Archetype
     }
   };
   walk(0, [], 0);
+  // Fewer good photos than looks: a look shows a good photo again (in its own treatment) rather than a bad one.
+  const reused = new Set<number>();
+  if (passing.length) {
+    best.picks = best.picks.map((p, look) => {
+      if (p >= 0) return p;
+      let at = 0;
+      let top = -Infinity;
+      scored.forEach((c, i) => {
+        const v = c.score + fits[i]![look]!.fit - best.picks.filter((q) => q === i).length * 3;
+        if (v > top) {
+          top = v;
+          at = i;
+        }
+      });
+      reused.add(look);
+      return at;
+    });
+  }
   return best.picks.flatMap((p, look) => {
     if (p < 0) return [];
     const c = scored[p]!;
@@ -304,6 +345,8 @@ export function assignHeroes(candidates: HeroCandidate[], archetypes: (Archetype
       fit.fit ? `mood ${fmt(fit.fit)} (${fit.why})` : "",
       runnerUp ? `beat “${runnerUp.text.slice(0, 50)}” (${runnerUp.source}, score ${runnerUp.score}${runnerUp.sign ? ", sign" : ""})` : "",
       c.subject ? `subject: ${c.subject}` : "",
+      reused.has(look) ? `reused: only ${passing.length} photo${passing.length === 1 ? "" : "s"} passed the quality bar` : "",
+      passing.length ? "" : "nothing passed the quality bar; best available",
     ]
       .filter(Boolean)
       .join(" · ");
