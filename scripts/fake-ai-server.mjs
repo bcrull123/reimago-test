@@ -436,6 +436,13 @@ http
           const pictures = (Array.isArray(json.messages?.[0]?.content) ? json.messages[0].content : []).filter((p) => p?.type === "image_url").length;
           out = { index: Number(process.env.FAKE_VISION_INDEX ?? 0) };
           log("vision keep", `${pictures} pictures`, "->", out.index);
+        } else if (system.includes("We need a website hero photo of")) {
+          // Vision ranking of Google Images candidates: all good, best first in the order given, or reversed with
+          // FAKE_GOOGLE_VISION=reverse (to prove the vision order is used), or none with FAKE_GOOGLE_VISION=none.
+          const n = (Array.isArray(json.messages?.[0]?.content) ? json.messages[0].content : []).filter((p) => p?.type === "image_url").length;
+          const all = Array.from({ length: n }, (_, i) => i + 1);
+          out = { good: process.env.FAKE_GOOGLE_VISION === "none" ? [] : process.env.FAKE_GOOGLE_VISION === "reverse" ? all.reverse() : all };
+          log("vision google", `${n} pictures`, "->", out.good.join(","));
         } else if (system.includes("senior art director reviewing")) {
           await sleep(3000);
           out = critique(user, hasImage(userContent));
