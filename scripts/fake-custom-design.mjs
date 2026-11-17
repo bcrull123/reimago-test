@@ -110,7 +110,10 @@ export function fakeDesign(system, user, mode) {
   const phone = site.phone ? `<a class="phone" href="tel:${site.phone.replace(/[^\d+]/g, "")}">${esc(site.phone)}</a>` : "";
   const headline = brief.headline || `${site.name}, at its best.`;
   const [h1a, ...rest] = headline.split(" ");
-  const heroMedia = has("hero")
+  const sig = (site.images ?? []).find((i) => i.kind === "the business's signature graphic");
+  const heroMedia = !has("hero") && sig
+    ? `<figure class="kept signature"><img src="${sig.src}" alt="${esc(sig.shows ?? "")}"></figure>`
+    : has("hero")
     ? keep
       ? `<figure class="kept"><img src="@img:hero" alt="${esc(site.images.find((i) => i.src === "@img:hero")?.shows ?? "")}"></figure>`
       : `<figure class="mask"><img src="@img:hero" alt="${esc(site.images.find((i) => i.src === "@img:hero")?.shows ?? "")}"></figure>`
@@ -274,4 +277,34 @@ export function withFakeAsset(out, concept) {
     css: `${out.css}\n.deco-art{display:block;width:min(200px,40vw);height:auto;margin:0 auto 1.5rem;border-radius:50%}`,
     assets: [{ name: "art-1", prompt: `a flat decorative illustration for “${concept}”: simple geometric shapes in the brand colors`, aspect: "1:1" }],
   };
+}
+
+/**
+ * The stand-in vision build from an Imagine mockup: the realistic page, the region list the prompt asks for first,
+ * and the art. Art made up front for this design (kind "imagine art" in the site JSON) is used as given; otherwise
+ * one extra asset is asked for (as before). FAKE_CUSTOM=plain: a first build that ignores the mockup's dark color
+ * blocking (white header / hero / next section), so the fidelity check sends it back once.
+ */
+export function fakeMockupBuild(system, user, mode, plain = false) {
+  const concept = (user.match(/"concept":"([^"]+)"/) ?? [])[1] ?? "Signature";
+  const site = (() => {
+    try {
+      return JSON.parse(user.slice(user.indexOf("Site: ") + 6).split("\n")[0]);
+    } catch {
+      return {};
+    }
+  })();
+  const art = (site.images ?? []).filter((i) => i.kind === "imagine art").map((i) => i.src);
+  let out = fakeDesign(system, user, mode);
+  if (art.length) {
+    const tiles = art.filter((a) => a !== "@img:hero").map((a) => `<img class="deco-art" src="${a}" alt="">`).join("");
+    out = { ...out, html: out.html.replace(/(<section\b[^>]*>)([\s\S]*?<section\b[^>]*>)/, (all, first, rest) => `${first}${rest}<div class="art-strip">${tiles}</div>`), css: `${out.css}\n.art-strip{display:flex;gap:1rem;justify-content:center;flex-wrap:wrap;margin:0 auto 1.5rem}.deco-art{display:block;width:min(200px,40vw);height:auto;border-radius:24px}.kept.signature img{object-fit:contain;max-height:420px}` };
+  } else out = withFakeAsset(out, concept);
+  if (plain) out = { ...out, css: `${out.css}\n.top{background:#ffffff;color:#111111}.hero{background:#ffffff;color:#111111}.band{background:#ffffff;color:#111111}.steps{background:#ffffff;color:#111111}` };
+  out.regions = [
+    { name: "header", background: "#0b1026", layout: "logo left, nav right, button", elements: "small" },
+    { name: "hero", background: "#0b1026", layout: "2-column split", elements: "huge headline, centerpiece art" },
+    { name: "band", background: "#ff5a36", layout: "marquee", elements: "services" },
+  ];
+  return out;
 }

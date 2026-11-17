@@ -14,7 +14,7 @@
  * review) so the validators are exercised.
  */
 import http from "node:http";
-import { fakeBrief, fakeDesign, fakeEdit, fakeMockupPng, withFakeAsset } from "./fake-custom-design.mjs";
+import { fakeBrief, fakeDesign, fakeEdit, fakeMockupBuild, fakeMockupPng } from "./fake-custom-design.mjs";
 
 const PORT = Number(process.env.PORT ?? 9999);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -401,17 +401,30 @@ http
             return;
           }
           const bytes = await fakeMockupPng(json.prompt ?? "");
-          log("imagine mockup", req.url.endsWith("/edits") ? "edits (logo)" : "generations", json.model, json.aspect_ratio, json.resolution, `${(json.prompt ?? "").length} chars`, /rocket/i.test(json.prompt ?? "") ? "with rocket" : "");
+          const refs = Array.isArray(json.images) ? json.images.length : json.image ? 1 : 0;
+          log("imagine mockup", req.url.endsWith("/edits") ? `edits (${refs} reference image${refs === 1 ? "" : "s"})` : "generations", json.model, json.aspect_ratio, json.resolution, `${(json.prompt ?? "").length} chars`, /rocket|signature graphic/i.test(json.prompt ?? "") ? "with the signature graphic / rocket" : "");
           res.writeHead(200, { "content-type": "application/json" });
           res.end(JSON.stringify({ data: [{ b64_json: bytes.toString("base64") }] }));
           return;
         }
-        if (req.url.endsWith("/images/edits")) {
+        // Imagine art drawn from the mockup (+ the signature graphic) as reference images.
+        if (req.url.endsWith("/images/edits") && /Illustration \/ artwork for a website section/.test(json.prompt ?? "")) {
+          if (process.env.FAKE_IMAGINE === "fail" || process.env.FAKE_IMAGINE === "artfail") {
+            log("imagine art (edits)", "FAIL");
+            res.writeHead(500, { "content-type": "application/json" });
+            res.end(JSON.stringify({ error: "fake imagine art failure" }));
+            return;
+          }
+          const refs = Array.isArray(json.images) ? json.images.length : json.image ? 1 : 0;
+          json.prompt = json.prompt ?? "";
+          log("imagine art (edits)", `${refs} reference image(s)`, json.aspect_ratio, (json.prompt.match(/^[^:.]*/) ?? [""])[0].slice(0, 60));
+          req.fakeArt = true;
+        } else if (req.url.endsWith("/images/edits")) {
           res.writeHead(400, { "content-type": "application/json" });
-          res.end(JSON.stringify({ error: "fake: edits only for mockups" }));
+          res.end(JSON.stringify({ error: "fake: edits only for mockups and art" }));
           return;
         }
-        if (req.url.endsWith("/images/generations")) {
+        if (req.url.endsWith("/images/generations") || req.fakeArt) {
           await sleep(1500);
           if (/Illustration \/ artwork for a website section/.test(json.prompt ?? "")) {
             const art = await photoFor(json.prompt ?? "", false);
@@ -469,17 +482,18 @@ http
           log("custom edit", JSON.stringify(out.palette));
         } else if (system.includes("REPAIR this from-scratch homepage")) {
           await sleep(3000);
-          out = fakeDesign(system, user, process.env.FAKE_CUSTOM === "broken-always" ? "broken" : "ok");
-          log("custom repair", process.env.FAKE_CUSTOM === "broken-always" ? "still broken" : "fixed", out.html.length);
+          out = system.includes("MATCH THE DESIGN MOCKUP")
+            ? fakeMockupBuild(system, user, process.env.FAKE_CUSTOM === "broken-always" ? "broken" : "ok")
+            : fakeDesign(system, user, process.env.FAKE_CUSTOM === "broken-always" ? "broken" : "ok");
+          log("custom repair", process.env.FAKE_CUSTOM === "broken-always" ? "still broken" : "fixed", /Mockup fidelity:/.test(user) ? "(with the fidelity differences)" : "", out.html.length);
         } else if (system.includes("MATCH THE DESIGN MOCKUP")) {
           // The vision build from the Imagine mockup (the image must be attached).
           const images = (Array.isArray(userContent) ? userContent : []).filter((p) => p?.type === "image_url").length;
           if (process.env.FAKE_CUSTOM === "slow") await sleep(180_000);
           await sleep(5000);
           const mode = /^broken/.test(process.env.FAKE_CUSTOM ?? "") ? "broken" : process.env.FAKE_CUSTOM === "lowcontrast" ? "lowcontrast" : "ok";
-          const concept = (user.match(/"concept":"([^"]+)"/) ?? [])[1] ?? "Signature";
-          out = withFakeAsset(fakeDesign(system, user, mode), concept);
-          log("custom build from mockup", `${images} image(s) attached`, mode, out.html.length);
+          out = fakeMockupBuild(system, user, mode, process.env.FAKE_CUSTOM === "plain");
+          log("custom build from mockup", `${images} image(s) attached`, process.env.FAKE_CUSTOM === "plain" ? "plain (ignores the mockup's colors)" : mode, /Colors sampled from the mockup/.test(system) ? "with sampled colors" : "", out.html.length);
         } else if (system.includes("Design this homepage FROM SCRATCH")) {
           if (process.env.FAKE_CUSTOM === "slow") await sleep(180_000);
           await sleep(5000);
