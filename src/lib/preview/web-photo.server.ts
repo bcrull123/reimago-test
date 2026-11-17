@@ -8,7 +8,7 @@ import { fetchPhoto, type Photo } from "@/lib/preview/images.server";
 import { pickWebPhoto, sceneKeywords, webQuery, type PhotoCredit, type WebPhotoCandidate } from "@/lib/preview/web-photo";
 
 const UA = "ReimagoPreview/1.0 (https://reimago.ai; preview photo search)";
-const cache = new Map<string, { at: number; value: WebPhotoResult | undefined }>();
+const cache = new Map<string, { at: number; value: WebPhotoResult[] }>();
 
 export type WebPhotoResult = { photo: Photo; credit: PhotoCredit; query: string };
 
@@ -96,31 +96,32 @@ async function commons(query: string, signal: AbortSignal): Promise<WebPhotoCand
   });
 }
 
-/** Search, rank and download the best free-license photo of `scene` near `place`. Undefined if none fits in time. */
-export async function findWebPhoto(scene: string, place: { city: string; state: string } | undefined, budgetMs = 8_000): Promise<WebPhotoResult | undefined> {
+/** Search, rank and download up to `max` different free-license photos of `scene` near `place` (best first). Empty if none fit in time. */
+export async function findWebPhotos(scene: string, place: { city: string; state: string } | undefined, budgetMs = 8_000, max = 3): Promise<WebPhotoResult[]> {
   const query = webQuery(scene, place);
-  if (!query) return undefined;
+  if (!query) return [];
   const hit = cache.get(query);
   if (hit && Date.now() - hit.at < 30 * 60_000) return hit.value;
   const deadline = Date.now() + budgetMs;
-  const signal = AbortSignal.timeout(Math.max(1000, budgetMs - 2500));
+  const signal = AbortSignal.timeout(Math.max(1000, budgetMs - 3000));
   const place2 = place?.city ? `${place.city} ${place.state}`.trim() : "";
   // Full-text search wants every word, so also search the town with each scene word ("Pauls Valley brick").
   const perWord = place?.city ? sceneKeywords(scene, place).slice(0, 3).map((k) => `${place.city} ${k}`) : [];
   const searches = [openverse(query, signal), commons(query, signal), ...[place2, ...perWord].filter(Boolean).map((q) => commons(q, signal))];
   const found = (await Promise.allSettled(searches)).flatMap((r) => (r.status === "fulfilled" ? r.value : []));
-  const unique = found.filter((c, i, list) => c.imageUrl && list.findIndex((x) => x.imageUrl === c.imageUrl) === i);
-  let value: WebPhotoResult | undefined;
-  for (const candidate of pickWebPhoto(unique, scene, place).slice(0, 3)) {
-    const left = deadline - Date.now();
-    if (left < 500) break;
-    const photo = await Promise.race([fetchPhoto(candidate.imageUrl), new Promise<null>((r) => setTimeout(() => r(null), left))]);
-    if (photo && photo.width >= 1200 && photo.width / photo.height >= 1.2) {
-      const { imageUrl: _u, width: _w, height: _h, text: _t, ...credit } = candidate;
-      value = { photo, credit, query };
-      break;
-    }
-  }
+  const unique = found.filter((c, i, list) => c.imageUrl && list.findIndex((x) => x.imageUrl === c.imageUrl || (x.title === c.title && x.provider === c.provider)) === i);
+  const ranked = pickWebPhoto(unique, scene, place).slice(0, max + 2);
+  // Download the best few in parallel, within what is left of the time box; keep rank order.
+  const left = Math.max(500, deadline - Date.now());
+  const downloads = await Promise.all(
+    ranked.map((candidate) => Promise.race([fetchPhoto(candidate.imageUrl), new Promise<null>((r) => setTimeout(() => r(null), left))]).catch(() => null)),
+  );
+  const value: WebPhotoResult[] = [];
+  downloads.forEach((photo, i) => {
+    if (!photo || value.length >= max || photo.width < 1200 || photo.width / photo.height < 1.2) return;
+    const { imageUrl: _u, width: _w, height: _h, text: _t, ...credit } = ranked[i]!;
+    value.push({ photo, credit, query });
+  });
   cache.set(query, { at: Date.now(), value });
   if (cache.size > 100) cache.delete(cache.keys().next().value!);
   return value;

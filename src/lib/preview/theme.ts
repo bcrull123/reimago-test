@@ -56,7 +56,8 @@ export function darkSurface(p: SitePalette): string {
 /** Body classes that switch the design system for one direction. */
 export function designClasses(design: DesignDirection | undefined, overlayHeader: boolean): string {
   if (!design) return "a-classic r-soft b-pill h-light f-columns";
-  const header = design.header === "overlay" && !overlayHeader ? "light" : design.header;
+  // An overlay header needs a photo behind it; without one, the look keeps a dark bar (not the light one another look uses).
+  const header = design.header === "overlay" && !overlayHeader ? (design.heroStyle ? "dark" : "light") : design.header;
   return [
     `a-${design.archetype}`,
     `r-${design.radius}`,
@@ -140,6 +141,9 @@ p{margin:0 0 1em}
 .site-footer .logo img{height:40px}
 .site-footer .logo.plate img{height:32px}
 .h-overlay .site-header{position:absolute;top:auto;left:0;right:0;background:linear-gradient(180deg,rgba(0,0,0,.55),transparent);border-bottom:0;color:#fff;backdrop-filter:none;-webkit-backdrop-filter:none}
+.h-center .site-header .bar{display:grid;grid-template-columns:1fr auto 1fr;grid-template-areas:". brand cta" "nav nav nav";row-gap:.2rem;padding:.7rem 0 0;min-height:0}
+.h-center .brand{grid-area:brand;justify-self:center}.h-center .header-cta,.h-center .menu{grid-area:cta;justify-self:end}
+.h-center .site-nav{grid-area:nav;justify-content:center;border-top:1px solid var(--line);padding:.55rem 0 .6rem;margin-top:.5rem}
 .h-overlay .brand{color:#fff}.h-overlay .logo.plain img{filter:drop-shadow(0 2px 8px rgba(0,0,0,.35))}
 @media (max-width:900px){.site-nav{display:none}.menu{display:block}.site-header .header-cta{display:none}}
 /* ---------- buttons */
@@ -192,6 +196,36 @@ p{margin:0 0 1em}
 .s-hero-type .row .actions{margin-top:0}
 .s-hero-type .strip{margin-top:clamp(2.5rem,5vw,4rem)}
 .s-hero-type .strip .media{aspect-ratio:21/9}
+/* hero treatments: no two looks share one (look-variety.ts) */
+.s-hero-split.v-caption{background:var(--surface)}
+.s-hero-split.v-caption .grid{grid-template-columns:.9fr 1.1fr}
+.s-hero-split.v-caption .hero-copy{background:var(--bg);padding:clamp(1.8rem,4vw,3.2rem);border:1px solid var(--line);border-radius:var(--radius)}
+.s-hero-split.v-caption .frame{margin:0}
+.s-hero-split.v-caption .frame::before{display:none}
+.s-hero-split.v-caption .media{aspect-ratio:4/3;box-shadow:0 30px 60px -40px rgba(0,0,0,.35)}
+.s-hero-split.v-caption figcaption{margin-top:.75rem;padding-top:.6rem;border-top:1px solid var(--line);font-size:.82rem;color:var(--muted);letter-spacing:.01em}
+.s-hero-photo.v-cinematic{min-height:min(100vh,960px);align-items:center;padding-top:clamp(9rem,16vw,12rem)}
+.s-hero-photo.v-cinematic .bgimg img{object-position:50% 88%;transform:scale(1.2);transform-origin:50% 100%;animation:none;filter:saturate(.85) contrast(1.08)}
+.s-hero-photo.v-cinematic::after{background:linear-gradient(90deg,rgba(0,0,0,.88) 0%,rgba(0,0,0,.66) 36%,rgba(0,0,0,.12) 78%),linear-gradient(0deg,var(--dark-bg) 0%,transparent 28%)}
+.s-hero-photo.v-cinematic h1{max-width:11ch;font-size:clamp(3rem,7vw,6.4rem);line-height:.98}
+.s-hero-photo.v-cinematic .eyebrow{letter-spacing:.32em}
+.s-hero-split.v-collage{overflow:hidden}
+.s-hero-split.v-collage::before{content:"";position:absolute;right:-8vw;top:9%;width:50vw;height:82%;background:var(--accent);border-radius:56px;transform:rotate(-7deg);z-index:0}
+.s-hero-split.v-collage .wrap{position:relative;z-index:1}
+.s-hero-split.v-collage .frame{margin:1.5rem 2rem 2.5rem 3rem}
+.s-hero-split.v-collage .frame::before{display:none}
+.s-hero-split.v-collage .frame>.media:not(.tile){aspect-ratio:1/1;border-radius:40px;border:10px solid #fff;transform:rotate(3deg);box-shadow:0 40px 70px -35px rgba(0,0,0,.55)}
+.s-hero-split.v-collage .frame>.media:not(.tile) img{filter:grayscale(1) contrast(1.12)}
+.s-hero-split.v-collage .frame>.media:not(.tile)::after{content:"";position:absolute;inset:0;background:var(--accent);mix-blend-mode:multiply;opacity:.6;pointer-events:none}
+.s-hero-split.v-collage .tile{position:absolute;width:44%;aspect-ratio:1/1;left:-14%;bottom:-12%;border-radius:26px;border:8px solid #fff;transform:rotate(-8deg);z-index:2;box-shadow:0 24px 40px -20px rgba(0,0,0,.5)}
+.s-hero-split.v-collage .badge{display:grid!important;width:156px;height:156px;right:-26px;top:-34px;transform:rotate(12deg)}
+.s-hero-type.v-caption .hero-copy{background:var(--bg);border:1px solid var(--line);border-radius:var(--radius);padding:clamp(2rem,5vw,4rem)}
+.s-hero-type.v-cinematic{padding:clamp(7rem,14vw,11rem) 0 clamp(4rem,8vw,6rem)}
+.s-hero-type.v-cinematic h1{font-size:clamp(3.2rem,8vw,7rem);max-width:11ch;line-height:.95}
+.s-hero-type.v-collage{overflow:hidden}
+.s-hero-type.v-collage::before{content:"";position:absolute;right:-10vw;top:12%;width:44vw;height:76%;background:var(--accent);border-radius:56px;transform:rotate(-7deg);z-index:0}
+.s-hero-type.v-collage .wrap{position:relative;z-index:1}
+@media (max-width:900px){.s-hero-split.v-caption .grid{grid-template-columns:1fr}.s-hero-split.v-collage .frame{margin:1rem}.s-hero-split.v-collage::before{width:90vw;right:-30vw}}
 .s-page-hero{padding:clamp(4rem,8vw,6.5rem) 0 clamp(3rem,6vw,4.5rem)}
 .s-page-hero .grid{display:grid;grid-template-columns:1.2fr .8fr;gap:clamp(2rem,5vw,4rem);align-items:end}
 .s-page-hero .media{aspect-ratio:5/4}

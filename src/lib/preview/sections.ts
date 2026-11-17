@@ -653,6 +653,8 @@ export type RenderContext = {
   /** Image names that exist for this site. */
   images: Set<string>;
   imageAlt: (name: string) => string;
+  /** Caption under a captioned hero photo, e.g. "Pauls Valley Historic District · Photo: Crimsonedge34, CC BY-SA 3.0". */
+  imageCaption?: (name: string) => string | undefined;
   page: string;
 };
 
@@ -719,10 +721,18 @@ export function renderSection(section: Section, ctx: RenderContext): string {
   const open = `<section class="${cls}">`;
   const items = section.items ?? [];
   switch (section.type) {
-    case "hero-split":
-      return `${open}<div class="wrap grid"><div class="hero-copy">${section.eyebrow ? `<span class="eyebrow">${esc(section.eyebrow)}</span>` : ""}<h1>${rich(section.heading || ctx.name)}</h1>${paragraphs(section.text, "lead")}${actions(section, ctx)}</div><div class="frame rv">${badge(ctx)}${media(section.image, ctx)}</div></div></section>`;
+    case "hero-split": {
+      // v-caption: framed photo with a caption under it; v-collage: tilted photo + a second photo tile + stamp.
+      const caption = section.variant === "caption" && section.image ? ctx.imageCaption?.(section.image) : undefined;
+      const tile = section.variant === "collage" && section.items?.[0]?.image && ctx.images.has(section.items[0].image) ? media(section.items[0].image, ctx, "media tile") : "";
+      const visual =
+        section.variant === "caption"
+          ? `<figure class="frame rv">${media(section.image, ctx)}${caption ? `<figcaption>${esc(caption)}</figcaption>` : ""}</figure>`
+          : `<div class="frame rv">${badge(ctx)}${media(section.image, ctx)}${tile}</div>`;
+      return `${open}<div class="wrap grid"><div class="hero-copy">${section.eyebrow ? `<span class="eyebrow">${esc(section.eyebrow)}</span>` : ""}<h1>${rich(section.heading || ctx.name)}</h1>${paragraphs(section.text, "lead")}${actions(section, ctx)}</div>${visual}</div></section>`;
+    }
     case "hero-photo":
-      return `<section class="sec s-hero-photo t-dark"><div class="bgimg">${
+      return `<section class="sec s-hero-photo t-dark${section.variant ? ` v-${esc(section.variant)}` : ""}"><div class="bgimg">${
         section.image && ctx.images.has(section.image) ? `<img src="@img:${esc(section.image)}" alt="${esc(ctx.imageAlt(section.image))}">` : `<div class="ph"></div>`
       }</div><div class="wrap"><div class="hero-copy">${section.eyebrow ? `<span class="eyebrow">${esc(section.eyebrow)}</span>` : ""}<h1>${rich(section.heading || ctx.name)}</h1>${paragraphs(section.text, "lead")}${actions(section, ctx)}</div></div></section>`;
     case "hero-type":

@@ -18,7 +18,9 @@ import { SECTION_GUIDE, checkSections, composeImages, composeMockPage, corpusFor
 import { redact } from "@/lib/ai-json";
 import { hasOwnerRequest, ownerRequestRule, ownerRequests, requestedScene, wantsBackground, wantsNewPhotos } from "@/lib/preview/owner-request";
 import { matchScraped, placeOf, webQuery, type PhotoCredit } from "@/lib/preview/web-photo";
-import { findWebPhoto, webPhotosEnabled } from "@/lib/preview/web-photo.server";
+import { arrangeSections, diversifyDirections, lookSignature, photoRank } from "@/lib/preview/look-variety";
+import { findWebPhotos, webPhotosEnabled } from "@/lib/preview/web-photo.server";
+import type { Photo } from "@/lib/preview/images.server";
 import { imagePrompt, sceneFor } from "@/lib/preview/image-prompts";
 import type { ImageTrace, PreviewTrace } from "@/lib/preview/types";
 
@@ -233,7 +235,13 @@ const ARCHETYPE_GUIDE = `Archetypes (each look must use a different one):
 - "minimal-luxury": lots of white space, fine serif, restrained neutral palette, hairline details
 - "warm-craft": earthy warm palette, tactile textures, stamp badges, approachable serif + clean sans`;
 
+/** Three looks that differ in more than wording: hero treatment, header, buttons, footer and section order (look-variety.ts). */
 export async function directionsFor(facts: SiteFacts, variation = 0): Promise<{ directions: DesignDirection[]; note?: string; mock: boolean }> {
+  const result = await rawDirections(facts, variation);
+  return { ...result, directions: diversifyDirections(result.directions) };
+}
+
+async function rawDirections(facts: SiteFacts, variation = 0): Promise<{ directions: DesignDirection[]; note?: string; mock: boolean }> {
   if (isMockMode() || !aiAvailable()) {
     return {
       directions: mockDirections(facts, variation),
@@ -263,7 +271,8 @@ Return ONLY JSON: {"looks": [{
  "featureScene": what a second, supporting photograph shows, concretely (same rules),
  "motifs": 1-3 of ["grain","thin-rules","oversized-numbers","diagonal-cuts","soft-blobs","underline-marks","grid-lines","glow","outlined-type","stamp-badges"],
  "radius": "sharp"|"soft"|"round", "buttons": "pill"|"square"|"outline",
- "hero": "split"|"photo"|"type", "header": "light"|"dark"|"overlay" (overlay only with hero "photo"), "footer": "columns"|"minimal"|"statement",
+ "heroStyle": "caption" (split hero: text on a light panel, photo with a caption) | "cinematic" (full-bleed photo, strong overlay) | "collage" (photo in a tilted rounded frame on color blocks, with a stamp) — each look a DIFFERENT one,
+ "hero": "split"|"photo"|"type", "header": "light"|"dark"|"overlay"|"center" (overlay only with hero "photo"; center = centered logo), "footer": "columns"|"minimal"|"statement",
  "headline": a bold hero headline, max 9 words, may emphasize ONE word with *asterisks*
 }]}
 ${ARCHETYPE_GUIDE}
@@ -273,6 +282,7 @@ Rules:
 - If "sites_to_emulate" are given, let at least one look borrow their vibe (palette, type, mood) without copying them.
 - Headlines must not invent facts: no years, awards, prices, guarantees, statistics, or claims not in the facts.
 - Photos: if the owner's request names a scene, subject or place (e.g. "use the brick streets"), EVERY look's "heroSubject" must depict exactly that as the main subject (styled for the look), not generic tools or equipment of the trade. Use "featureScene" for a second, related scene.
+- The three looks must differ in layout, not just wording and colors: different "heroStyle", "header", "buttons" and "footer" for each look. When the owner asks for a photo or background, honor it in each look in a different way (e.g. editorial split with a captioned photo, cinematic full-bleed, playful framed collage), and vary the camera angle / framing in "heroSubject".
 - Respect the owner's requested changes and style notes when present: requested colors go into the palettes, requested moods/styles shape the archetypes and fonts, and feedback on earlier looks means these three must be clearly different from what they rejected.${variation ? `\n- This is attempt ${variation + 1}: go somewhere new compared with an obvious first attempt.` : ""}${requestBlock(facts)}`,
         },
         { role: "user", content: JSON.stringify(factsForPrompt(facts)) },
@@ -497,9 +507,10 @@ function resolveImages(sections: Section[], available: string[]): Section[] {
 }
 
 /** Put the owner's requested photo in the hero (as a full-bleed background when they said "background"). */
-function heroForRequest(hero: Section, facts: SiteFacts, haveHero: boolean, scene: string | undefined, fresh: boolean): Section {
+function heroForRequest(hero: Section, facts: SiteFacts, design: DesignDirection, haveHero: boolean, scene: string | undefined, fresh: boolean): Section {
   if (!scene && !fresh) return hero;
-  if (haveHero) return { ...hero, image: "hero", type: wantsBackground(facts) ? "hero-photo" : hero.type };
+  // Looks with a hero treatment (look-variety.ts) each show the photo their own way; older looks use the full-bleed hero for "background".
+  if (haveHero) return { ...hero, image: "hero", type: wantsBackground(facts) && !design.heroStyle ? "hero-photo" : hero.type };
   return scene ? { ...hero, image: undefined } : hero;
 }
 
@@ -562,7 +573,7 @@ export async function buildLook(
       })(),
     );
   };
-  const heroAspect = design.hero === "split" ? "4:3" : "16:9";
+  const heroAspect = design.heroStyle ? (design.heroStyle === "cinematic" ? "16:9" : "4:3") : design.hero === "split" ? "4:3" : "16:9";
   if (scene) {
     // The owner named what the hero should show. Order: one of the site's own photos that shows it (alt text,
     // title or file name) -> a free-license web photo of it near the business -> an AI photo of it. Never just
@@ -570,26 +581,38 @@ export async function buildLook(
     const place = placeOf(facts);
     const entry: ImageTrace = { name: "hero", slot: "hero", scene, prompt: imagePrompt("hero", facts, design), status: "not generated (mock mode / images off)" };
     trace.images.push(entry);
+    // Up to three real photos of the scene (the site's own match first, then web photos); each look takes a
+    // different one. With fewer photos than looks, a later look gets an AI photo (when images are on) or
+    // shows the same photo in its own treatment.
     const findReal = async (): Promise<boolean> => {
+      type Real = { photo: Photo; credit: PhotoCredit; source: "photo" | "web"; alt: string };
+      const real: Real[] = [];
       const labels = facts.imageText ?? {};
       const own = matchScraped(scene, place, facts.images.map((url) => ({ url, label: labels[url] ?? "" })));
       if (own) {
         const photo = await fetchPhoto(own.url);
         if (photo && photo.width >= 1000 && photo.width / photo.height >= 1.2) {
-          await saveImage(id, "hero", photo.type, photo.bytes);
-          const credit: PhotoCredit = { title: own.label || scene, author: "", license: "", licenseUrl: "", sourceUrl: own.url, provider: "your site" };
-          images.hero = { name: "hero", type: photo.type, source: "photo", alt: own.label || scene, width: photo.width, height: photo.height, credit };
-          Object.assign(entry, { status: "your site's photo", source: "your site", credit } satisfies Partial<ImageTrace>);
-          return true;
+          real.push({ photo, source: "photo", alt: own.label || scene, credit: { title: own.label || scene, author: "", license: "", licenseUrl: "", sourceUrl: own.url, provider: "your site" } });
         }
       }
-      if (!webPhotosEnabled()) return false;
-      const web = await findWebPhoto(scene, place, 8_000).catch(() => undefined);
-      entry.search = `web search “${webQuery(scene, place)}” (Openverse, Wikimedia Commons; CC0 / public domain / CC BY / CC BY-SA): ${web ? "found" : "no matching photo"}`;
-      if (!web) return false;
-      await saveImage(id, "hero", web.photo.type, web.photo.bytes);
-      images.hero = { name: "hero", type: web.photo.type, source: "web", alt: web.credit.title, width: web.photo.width, height: web.photo.height, credit: web.credit };
-      Object.assign(entry, { status: "web photo", source: "web search", credit: web.credit } satisfies Partial<ImageTrace>);
+      if (real.length < 3 && webPhotosEnabled()) {
+        const web = await findWebPhotos(scene, place, 8_000, 3 - real.length).catch(() => []);
+        entry.search = `web search “${webQuery(scene, place)}” (Openverse, Wikimedia Commons; CC0 / public domain / CC BY / CC BY-SA): ${web.length ? `${web.length} matching photo${web.length > 1 ? "s" : ""}` : "no matching photo"}`;
+        for (const w of web) real.push({ photo: w.photo, source: "web", alt: w.credit.title, credit: w.credit });
+      }
+      if (!real.length) return false;
+      const rank = photoRank(design, index);
+      let pick = real[rank];
+      if (!pick) {
+        if (imagesEnabled()) {
+          entry.search = `${entry.search ?? ""}${entry.search ? " · " : ""}only ${real.length} real photo${real.length > 1 ? "s" : ""}, so this look gets an AI photo instead of repeating one`;
+          return false;
+        }
+        pick = real[rank % real.length]!;
+      }
+      await saveImage(id, "hero", pick.photo.type, pick.photo.bytes);
+      images.hero = { name: "hero", type: pick.photo.type, source: pick.source, alt: pick.alt, width: pick.photo.width, height: pick.photo.height, credit: pick.credit };
+      Object.assign(entry, pick.source === "web" ? { status: "web photo", source: "web search", credit: pick.credit } : { status: "your site's photo", source: "your site", credit: pick.credit } satisfies Partial<ImageTrace>);
       return true;
     };
     wantImage("hero", "hero", heroAspect, `photo of ${scene}: the owner asked for this, so use it as the hero background image`, findReal, entry);
@@ -617,7 +640,10 @@ export async function buildLook(
   const sections = resolveImages(result.sections, available);
   // The requested scene goes in the hero even if the page writer picked one of the site's own photos, and
   // "as background" means the full-bleed photo hero. With no photo of the scene, no unrelated photo is used.
-  if (sections[0]?.type.startsWith("hero-")) sections[0] = heroForRequest(sections[0], facts, Boolean(images.hero), scene, freshPhotos);
+  if (sections[0]?.type.startsWith("hero-")) sections[0] = heroForRequest(sections[0], facts, design, Boolean(images.hero), scene, freshPhotos);
+  // Each look: its own hero treatment, section order and section variants.
+  sections.splice(0, sections.length, ...arrangeSections(sections, design, available, facts.services));
+  trace.layout = lookSignature(design, sections, images.hero?.credit?.sourceUrl ?? sections[0]?.image);
   trace.steps.push({ step: "homepage sections", ai: result.ai, ownerRequest: Boolean(result.ownerRequest) });
   const pages: StoredPage[] = plan.pages.map((p) =>
     p.slug === "home" ? { slug: p.slug, title: p.title, navLabel: p.navLabel, body: "", sections } : { slug: p.slug, title: p.title, navLabel: p.navLabel, body: "", pending: true },
@@ -721,8 +747,10 @@ export async function finishSite(site: StoredSite): Promise<{ site: StoredSite; 
     if (page.slug === "home") {
       const home = resolveImages(polished.sections, available);
       // Keep the owner's requested scene in the hero after the critique pass.
-      if (home[0]?.type.startsWith("hero-")) home[0] = heroForRequest(home[0], facts, Boolean(images.hero), trace.request.scene, wantsNewPhotos(facts));
-      return { ...page, sections: home, pending: false };
+      if (home[0]?.type.startsWith("hero-")) home[0] = heroForRequest(home[0], facts, design, Boolean(images.hero), trace.request.scene, wantsNewPhotos(facts));
+      const arranged = arrangeSections(home, design, available, facts.services);
+      trace.layout = lookSignature(design, arranged, images.hero?.credit?.sourceUrl ?? arranged[0]?.image);
+      return { ...page, sections: arranged, pending: false };
     }
     const done = built.find((b) => b.slug === page.slug);
     return { ...page, sections: resolveImages(done?.sections ?? [], available), pending: false };
