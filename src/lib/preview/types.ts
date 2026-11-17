@@ -41,6 +41,8 @@ export type SiteFacts = {
   notes: string;
   /** "Not quite right?" feedback rounds from the looks picker, oldest first (max 5). */
   feedback?: string[];
+  /** The photo subject the AI planner read from the note/feedback (copied from the plan when a look is built). */
+  photoSubject?: string;
   /** Extra brief details from the Create a New Site wizard. */
   brief?: string;
   /** Set when the live site could not be read and on-file copy was used. */
@@ -183,7 +185,15 @@ export type ImageTrace = {
 };
 /** Which AI steps ran with the OWNER'S REQUEST block, and the image prompts used. Stored with the preview. */
 export type PreviewTrace = {
-  request: { note: string; feedback: string[]; scene?: string };
+  request: {
+    note: string;
+    feedback: string[];
+    /** The photo subject the owner asked for, and who read it from their words. */
+    scene?: string;
+    subjectFrom?: "AI planner" | "note wording";
+    /** No subject named and no suitable photo on the site: the hero shows the town instead. */
+    autoScene?: string;
+  };
   steps: { step: string; ai: boolean; ownerRequest: boolean }[];
   images: ImageTrace[];
   /** What makes this look different from the other two (hero treatment, header, buttons, footer, section order, photo). */
@@ -282,6 +292,8 @@ export type SitePlan = {
   pages: PlanPage[];
   /** True when the plan came from the deterministic mock/fallback, not the AI. */
   mock?: boolean;
+  /** What the owner asked to see in the hero/background photo, as the AI planner read the note ("red brick streets"). */
+  photoSubject?: string;
 };
 
 export type PreviewPageLink = { slug: string; title: string; url: string };

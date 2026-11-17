@@ -5,7 +5,7 @@
  * falls back to AI generation. The chosen photo is downloaded and stored with the preview (same origin).
  */
 import { fetchPhoto, type Photo } from "@/lib/preview/images.server";
-import { pickWebPhoto, sceneKeywords, webQuery, type PhotoCredit, type WebPhotoCandidate } from "@/lib/preview/web-photo";
+import { pickWebPhoto, webQueries, webQuery, type PhotoCredit, type WebPhotoCandidate } from "@/lib/preview/web-photo";
 
 const UA = "ReimagoPreview/1.0 (https://reimago.ai; preview photo search)";
 const cache = new Map<string, { at: number; value: WebPhotoResult[] }>();
@@ -104,12 +104,22 @@ export async function findWebPhotos(scene: string, place: { city: string; state:
   if (hit && Date.now() - hit.at < 30 * 60_000) return hit.value;
   const deadline = Date.now() + budgetMs;
   const signal = AbortSignal.timeout(Math.max(1000, budgetMs - 3000));
-  const place2 = place?.city ? `${place.city} ${place.state}`.trim() : "";
-  // Full-text search wants every word, so also search the town with each scene word ("Pauls Valley brick").
-  const perWord = place?.city ? sceneKeywords(scene, place).slice(0, 3).map((k) => `${place.city} ${k}`) : [];
-  const searches = [openverse(query, signal), commons(query, signal), ...[place2, ...perWord].filter(Boolean).map((q) => commons(q, signal))];
+  // Town-scoped searches first ("Pauls Valley red brick", "Pauls Valley brick street", "Pauls Valley Oklahoma"),
+  // then the subject anywhere ("red brick street"). Openverse gets the first town query and the plain one.
+  const queries = webQueries(scene, place);
+  const tag = (scope: "town" | "generic", q: string) => (list: WebPhotoCandidate[]) => {
+    const words = q.toLowerCase().split(/\s+/).filter((w) => !(place?.city ?? "").toLowerCase().split(" ").includes(w)).map((w) => (w.length > 4 && w.endsWith("s") ? w.slice(0, -1) : w));
+    return list.map((c) => ({ ...c, scope, queryWords: words }));
+  };
+  const firstTown = queries.find((x) => x.scope === "town");
+  const searches = [
+    ...queries.map((x) => commons(x.q, signal).then(tag(x.scope, x.q))),
+    ...queries.filter((x) => x.scope === "generic" || x === firstTown).map((x) => openverse(x.q, signal).then(tag(x.scope, x.q))),
+  ];
   const found = (await Promise.allSettled(searches)).flatMap((r) => (r.status === "fulfilled" ? r.value : []));
-  const unique = found.filter((c, i, list) => c.imageUrl && list.findIndex((x) => x.imageUrl === c.imageUrl || (x.title === c.title && x.provider === c.provider)) === i);
+  // The same photo found by a town search and a generic one counts as a town photo.
+  const sorted = [...found].sort((x, y) => Number(x.scope === "generic") - Number(y.scope === "generic"));
+  const unique = sorted.filter((c, i, list) => c.imageUrl && list.findIndex((x) => x.imageUrl === c.imageUrl || (x.title === c.title && x.provider === c.provider)) === i);
   const ranked = pickWebPhoto(unique, scene, place).slice(0, max + 2);
   // Download the best few in parallel, within what is left of the time box; keep rank order.
   const left = Math.max(500, deadline - Date.now());

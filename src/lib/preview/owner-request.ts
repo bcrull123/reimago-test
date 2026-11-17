@@ -32,7 +32,7 @@ export function cleanFeedback(value: unknown): string[] {
     .slice(-MAX_FEEDBACK_ROUNDS);
 }
 
-type RequestFacts = Pick<SiteFacts, "notes"> & { feedback?: string[] };
+type RequestFacts = Pick<SiteFacts, "notes"> & { feedback?: string[]; photoSubject?: string };
 
 export function ownerRequests(facts: RequestFacts): { note: string; feedback: string[] } {
   return { note: cleanRequest(facts.notes, NOTE_MAX), feedback: cleanFeedback(facts.feedback) };
@@ -153,44 +153,81 @@ export function requestHints(facts: RequestFacts): RequestHints {
 // ---------------------------------------------------------------- photos: the scene the owner asked for
 
 /** Words that make a phrase about design, not a photo subject ("use navy and gold", "use bigger fonts"). */
-const NOT_A_SCENE =
-  /\b(colou?rs?|navy|gold|red|blue|green|orange|yellow|purple|pink|black|white|gr[ae]y|brown|teal|font|fonts|type|typography|style|layout|section|sections|button|buttons|text|copy|wording|headline|headlines|logo|menu|darker|lighter|dark|light|bold|bolder|playful|modern|minimal|premium|warm|cozy|clean|simple|bigger|smaller|larger|spacing|white space|reviews?|testimonials?|faq|gallery|steps|phone|number|email|address|hours|contact|form)\b/;
+/** Words about the design, not about what a photo shows ("use orange", "navy and gold", "add a gallery"). */
+const DESIGN_WORD =
+  /^(colou?rs?|navy|gold|red|blue|green|orange|yellow|purple|pink|black|white|gr[ae]y|brown|teal|tan|cream|font|fonts|type|typography|style|styles|layout|section|sections|button|buttons|text|copy|wording|headline|headlines|logo|menu|darker|lighter|dark|light|bold|bolder|playful|modern|minimal|premium|warm|cozy|clean|simple|bigger|smaller|larger|spacing|space|reviews?|testimonials?|faq|gallery|steps|how|works|phone|number|email|address|hours|contact|form|look|feel|vibe|theme|scheme|palette|accent|accents|shade|shades|tone|tones|it|this|that|everything|site|website|page|pages|please|something|stuff|better|nicer|pretty|more|less|bit|lot|one|ones|thing|things|photo|photos|picture|pictures|image|images|pic|pics|background|backgrounds|hero|backdrop|banner|header|top|instead|too|also|here|there|and|or|with|the|a|an|of|in|on|for|to|as|at|my|our|some|use|using|put|add|show|make|want|like)$/;
 
-/** Phrases that introduce what a photo should show. */
+/** A real subject has at least one word that is not about colors/fonts/layout ("the red bricks" yes, "red and gold" no). */
+function isSubject(scene: string): boolean {
+  return scene
+    .toLowerCase()
+    .split(/[^a-z']+/)
+    .some((w) => w.length > 2 && !DESIGN_WORD.test(w));
+}
+
+const PICTURE = String.raw`(?:photos?|pictures?|pics?|images?|shots?|photographs?|backgrounds?|backdrops?|hero(?:\s+(?:image|photo|picture|background))?|header\s+(?:image|photo))`;
+const SLOT = String.raw`(?:the\s+|a\s+|my\s+|our\s+)?(?:background|backdrop|hero(?:\s+(?:image|photo|section))?|header(?:\s+(?:image|photo))?|banner|top(?:\s+of\s+the\s+page)?|main\s+(?:image|photo|picture)|headline|title)`;
+const WANT = String.raw`(?:put|use|using|show|showing|add|want|place|make|feature|featuring|depict|include|need|like|have|set|see|get|give\s+(?:me|us))`;
+
+/** Phrases that introduce what a photo should show, most specific first. */
 const SCENE_PATTERNS: RegExp[] = [
-  /\b(?:photos?|pictures?|images?|shots?|backgrounds?|hero)\s+(?:image\s+|photo\s+)?(?:of|showing|with|featuring)\s+([^.;!?\n]{3,90})/,
-  /\b(?:show|showing|feature|featuring|depict|depicting|picture|include)\s+(?:me\s+)?([^.;!?\n]{3,90})/,
-  /\b(?:use|using)\s+([^.;!?\n]{3,90})/,
-  /\b(?:in|on)\s+(?:the\s+)?background\s*[:,-]?\s*([^.;!?\n]{3,90})/,
+  // "a picture of the red bricks", "photos showing our trucks", "background with the lake"
+  new RegExp(String.raw`\b${PICTURE}\s+(?:of|showing|with|featuring|that\s+shows?)\s+([^.;!?\n]{3,90})`),
+  // "put the red bricks as the background", "use the depot in the hero", "the lake behind the headline"
+  new RegExp(String.raw`\b${WANT}\s+(?:me\s+|us\s+)?([^.;!?\n]{3,90}?)\s+(?:as|in|for|on|behind|at)\s+${SLOT}\b`),
+  // "red bricks in the background please" (no verb)
+  new RegExp(String.raw`^\s*([^.;!?\n]{3,90}?)\s+(?:as|in|for|on|behind)\s+${SLOT}\b`),
+  // "make the background red bricks", "set the hero to the old depot", "background: downtown at sunset"
+  new RegExp(String.raw`\b(?:make|set|change|turn|switch)\s+${SLOT}\s+(?:to\s+|into\s+|be\s+)?(?:an?\s+|the\s+)?(?:${PICTURE}\s+of\s+)?([^.;!?\n]{3,90})`),
+  new RegExp(String.raw`\b${SLOT}\s*(?::|-|=|should\s+(?:be|show)|could\s+(?:be|show)|to\s+be|is|shows?)\s*(?:an?\s+|the\s+)?(?:${PICTURE}\s+of\s+)?([^.;!?\n]{3,90})`),
+  // "show our trucks", "feature the courthouse", "use the brick streets"
+  /\b(?:show|showing|feature|featuring|depict|depicting|picture|include|see)\s+(?:me\s+|us\s+)?([^.;!?\n]{3,90})/,
+  /\b(?:use|using|put|add)\s+([^.;!?\n]{3,90})/,
 ];
 
 function trimScene(raw: string): string {
   return raw
-    .split(/\b(?:and (?:make|use|add|change|give|put)|but|instead of|rather than|so that|because)\b|,\s*(?:make|use|add|and)\b/)[0]!
-    .replace(/\b(?:in|for|as|on) (?:the )?(?:hero|header|top|background|banner|homepage|home page|main) (?:image|photo|picture|section)?\b.*$/, "")
-    .replace(/\b(?:as|for) (?:the )?(?:photos?|pictures?|images?|hero|background)\b.*$/, "")
-    .replace(/\s+(?:instead|please|too|as well|also|here|there)$/, "")
+    .split(/\b(?:and (?:make|use|add|change|give|put)|but|instead of|rather than|so that|because|so it|so the)\b|,\s*(?:make|use|add|and|please)\b/)[0]!
+    .replace(/\b(?:in|for|as|on|at|behind|to|into) (?:the |a |my |our )?(?:hero|header|top|background|backdrop|banner|homepage|home page|main|headline|title)\b.*$/, "")
+    .replace(/\b(?:as|for) (?:the |a )?(?:photos?|pictures?|images?|hero|background)\b.*$/, "")
+    .replace(/\s+(?:instead|please|too|as well|also|here|there|thanks|thank you)$/, "")
     .replace(/\s+/g, " ")
     .trim()
-    .replace(/^(?:a|an|some|more|our|my)\s+/, "")
+    // Filler at the start: "a picture of", "some", "our".
+    .replace(/^(?:(?:a|an|some|more|our|my|nice|good|big|large)\s+)*(?:(?:photos?|pictures?|pics?|images?|shots?|photographs?)\s+of\s+)?(?:(?:a|an|some)\s+)?/, "")
+    .replace(/\s+(?:please|thanks)$/, "")
+    .trim()
     .slice(0, 90);
+}
+
+/** The owner's photo subject as the AI planner read it ("red brick streets"); cleaned, or "" if it isn't a subject. */
+export function cleanSubject(raw: unknown): string {
+  if (typeof raw !== "string") return "";
+  const text = cleanRequest(raw, 120).toLowerCase();
+  if (!text || /^(none|n\/a|no|null|empty)$/.test(text)) return "";
+  const scene = trimScene(text);
+  return scene && isSubject(scene) ? scene : "";
 }
 
 /**
  * The scene/subject/place the owner wants in the photos, if their words name one
- * ("use the brick streets" → "the brick streets"). The newest feedback wins over the note.
+ * ("use the brick streets" → "the brick streets", "put a picture of the red bricks as the background" → "the red bricks").
+ * The AI planner's reading (facts.photoSubject) wins when present; then the newest feedback, then the note.
  */
 export function requestedScene(facts: RequestFacts): string | undefined {
+  const planned = cleanSubject(facts.photoSubject);
+  if (planned) return planned;
   const { note, feedback } = ownerRequests(facts);
   for (const text of [...feedback].reverse().concat(note ? [note] : [])) {
-    const lower = text.toLowerCase();
-    for (const pattern of SCENE_PATTERNS) {
-      for (const match of lower.matchAll(new RegExp(pattern.source, "g"))) {
-        if (negated(lower, match.index ?? 0)) continue;
-        const scene = trimScene(match[1] ?? "");
-        const words = scene.split(" ").filter((w) => w.length > 2 && !/^(the|and|with|our|their|more|some)$/.test(w));
-        if (!words.length || NOT_A_SCENE.test(scene)) continue;
-        return scene;
+    // One sentence at a time, so "Make it dark. Use the depot as the background." finds the depot.
+    for (const sentence of text.toLowerCase().split(/(?<=[.!?;\n])\s+/)) {
+      for (const pattern of SCENE_PATTERNS) {
+        for (const match of sentence.matchAll(new RegExp(pattern.source, "g"))) {
+          if (negated(sentence, match.index ?? 0)) continue;
+          const scene = trimScene(match[1] ?? "");
+          if (!scene || !isSubject(scene)) continue;
+          return scene;
+        }
       }
     }
   }
