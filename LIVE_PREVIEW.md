@@ -80,6 +80,30 @@ Details:
 
 This applies to the header and footer of every look and page.
 
+### The owner's request and "Not quite right?"
+
+**The form's note ("What should change?") goes into every AI step.** `owner-request.ts` cleans it and caps it at 800 characters (no markup, control characters or code fences). It then reaches the AI in two ways:
+- **Instruction:** every system prompt gets an "OWNER'S REQUEST — HIGH PRIORITY" block. This covers the page plan, the three design directions, the homepage sections, the inner pages and the critique pass. The block tells the AI to follow the wishes visibly unless they conflict with the safety rules (no invented facts, contact details, prices, statistics or reviews; JSON only).
+- **Data:** the note is also sent as `requested_changes`, alongside the facts.
+
+**Mock mode** reads simple wishes from the note so they can be tested without AI:
+- colors (for example red, navy or gold) lead every palette;
+- "dark" or "light" sets the backgrounds;
+- tone words (playful, bold, warm, minimal, editorial, dark) put those styles first;
+- requested sections (gallery, reviews, how-it-works steps, a promise statement) are added when real facts can fill them.
+
+Negations such as "no red" or "too dark" are ignored.
+
+**Each card shows** "Based on your request: “…”". In mock mode it also shows what was applied.
+
+**The refine box** sits under the cards: "Not quite right? What would you like to see different?" with a **Show me 3 new looks** button.
+- It makes three new looks, using the same browser-orchestrated steps as the first looks, so each request stays inside the step budget.
+- They are built from the original note plus every feedback round so far: up to 5 rounds, each capped at 400 characters, with the newest round mattering most.
+- The new looks replace the old cards, with an overlay that reads "Making 3 new looks from your feedback…" and a "3 new looks from your feedback (round N of 5)" line.
+- The rounds travel as `facts.feedback` and are passed to the AI as `change_requests`.
+- The preview's sticky bar has a **Change something** link that scrolls to the box.
+- **Refining never sends the form.**
+
 ### When the form is sent
 
 **Nothing is sent when the looks appear.** The email, website and note are collected up front and held in memory.
@@ -101,6 +125,7 @@ The overlay reads "Building your site and preparing your picture…". It then sw
 - `preview_url`: the chosen look's full site.
 - `preview_pages`: that site's pages.
 - `chosen_look`: the name and style, for example `Front Page (Bold photo-led)`.
+- `change_requests`: the numbered feedback rounds, if any. The `note` field still carries the original note.
 - `picture`, `picture_url` or `picture_error`: see below.
 
 **The Create New Site wizard** follows the same rule when it shows looks. If no looks could be built, it sends the brief right away, as before, without a picture.
@@ -244,5 +269,13 @@ To simulate real-API failures with the fake server, set `FAKE_FAIL=slow|length|b
 - saves the `picture` from the intercepted body.
 
 Set `BREAK_CANVAS=1` to check the `picture_error` path.
+
+`scripts/refine-looks-e2e.mjs <url> <outDir>` tests the note and the refine box. It checks that:
+- the cards show the note;
+- "Change something" scrolls to the box;
+- "Show me 3 new looks" produces three new looks that reflect the feedback;
+- nothing is sent until **Choose this look**, which then sends one request with `note` and `change_requests`.
+
+Set `NOTE` and `FEEDBACK` to change the text it uses.
 
 The last argument picks which look to choose (0–2); `APP_URL` points the script at another port. The e2e scripts intercept Formcarry, so no real lead is sent. The fake AI server deliberately returns an invented phone, email, stats and review so you can see the validators remove them.
