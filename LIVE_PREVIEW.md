@@ -96,7 +96,9 @@ Negations such as "no red" or "too dark" are ignored.
 
 **Each card shows** "Based on your request: “…”". In mock mode it also shows what was applied.
 
-**The refine box** sits under the cards: "Not quite right? What would you like to see different?" with a **Show me 3 new looks** button.
+**One name per look** (Bob: "Just name them one thing"). Each look goes by its style only: Editorial, Dark Premium, Bold Photo, Playful, Minimal Luxury or Warm Craft (`archetype-label.ts`). The AI's concept names are not shown. The name is the same on the card, in the preview banner and in the `chosen_look` form/webhook field. An edited look keeps it, with the variant after a dot: "Dark Premium · lighter". The three looks of a round always have different styles, so the names are unique on screen.
+
+**The refine box** sits under the cards: "Not quite right? What would you like to see different?" with a **Make this change** button. If the request names a look, only that look changes (next section). Otherwise:
 - It makes three new looks, using the same browser-orchestrated steps as the first looks, so each request stays inside the step budget.
 - They are built from the original note plus every feedback round so far: up to 5 rounds, each capped at 400 characters, with the newest round mattering most.
 - The new looks replace the old cards, with an overlay that reads "Making 3 new looks from your feedback…" and a "3 new looks from your feedback (round N of 5)" line.
@@ -224,16 +226,52 @@ When photo search is on (`SERPER_API_KEY` on the master, or the photo-search pro
 - Not used when the owner asked to keep something ("Keep the rocket"): keep requests stay site-only and never search. Not used either when the note names a subject (that search runs instead).
 - Logs: `[photo-search] proactive [queries]: N results, M usable (ranking); skipped {...}; K site photos competing` once per round, then one `[photo-search]   candidate google|site score S [SIGN] subject "…" “title” brightness B contrast C` line per candidate and one `[photo-search] pick look N (archetype): google|site “title” · score … · mood … · beat “runner-up” … · subject: …` line per look, and one line per look: `[photo] look N "Name": hero = Google Images (domain) · query "..." | your site (photo-n) | AI photo | none · status · search ...`. The same text is in the card's "How your request was used". When search is off, the trace says "Google Images: off on this server (no SERPER_API_KEY or photo-search proxy)".
 
-### Editing one look from feedback ("Night Brick, just a little too dark")
+### Editing one look from feedback ("Make Dark Premium lighter", "Use editorials picture on dark premium")
 
-When the refine feedback names a look, that look is EDITED instead of making three new ones (`previewRefine`, `look-edit.ts`, `look-edit.server.ts`):
-- A look can be named by name (exact or fuzzy: case, typos, a missing word), by description ("the dark one", "the second one", "the middle one", "the editorial one", "the blue one"), or as "this one" / "the one I'm previewing" (the look open in the preview). `findTargetLook` reads it; the Grok planner (`planEdit`) can only confirm a look whose name is in the owner's words.
+When the refine feedback names a look, that look is EDITED in place instead of making three new ones (`previewRefine`, `look-edit.ts`, `look-edit.server.ts`). **Only that card changes**: same place, same name. The other two cards stay exactly as they were (same ids, same renders). The banner reads "Edited Dark Premium only, as you asked (round n of 5) … The other looks are unchanged."
+- A look can be named by:
+  - its name or style label, case-insensitive and fuzzy: "DARK PREMIUM", "dark-premium", "premium", "editorials", "editoral", "Playfull", "the bold one". Older sessions with creative names ("Night Courthouse") still resolve by those names AND by the style label;
+  - a possessive ("editorial's picture");
+  - its position ("the first one", "the middle one", "the last look");
+  - a description ("the dark one", "the blue one");
+  - "this one" / "the one I'm previewing" (the look open in the preview).
+- A style word used as a wish is not a look: "make it more playful" names no look, so it makes 3 new looks.
+- `findLookRefs` lists every look mentioned, with its position in the text. `findTargetLook` picks the target. The Grok planner (`planEdit`) can only confirm a look the owner's words refer to (name, label or position); it no longer needs the creative name.
+- **Cross-look edits** (`findBorrow`): "Use editorials picture on dark premium", "use the first one's photo on the middle one", "give dark premium the editorial colors", "Dark Premium with the photo from Editorial", "put Playful's fonts on Editorial". The look after on/onto/to/for/into (or after give/make) is edited; the possessive one or the one after "from" lends its asset:
+  - **photo:** the lender's hero image bytes and credit are copied; no new search and no AI image;
+  - **colors:** the lender's palette becomes the new base, so later tweaks are computed from it;
+  - **fonts:** the lender's fonts.
+
+  The edited look keeps its layout, copy and name. Its card says "Changed: photo from “Editorial”". A borrow alone gives one look. A borrow plus a tweak ("…and make it lighter") gives three.
 - Supported tweaks (`{type, amount: slight|medium|strong}`): lighten, darken, more/less contrast, saturate/desaturate, warmer/cooler, bigger/smaller text, more/less spacing, more color, less busy. The planner returns `{targetLook, adjustments, copy, photo}`; a regex reading handles common phrases ("a little too dark" = lighten slight) and is used when AI is off or fails.
 - Everything else is kept: name, layout, fonts, photo, copy, sections. The palette is recomputed from the ORIGINAL palette plus cumulative levels (no drift over rounds): background/surface lightness moves in OKLCH, then text, muted and primary colors are re-picked to keep WCAG AA (text ≥ 7:1 where it was, never < 4.5:1). Over the hero photo, the dark overlay is reduced and the photo filter gets `brightness()`; the overlay never goes below what keeps white text at 4.5:1 over the measured photo (80th-percentile luma of the text area).
-- Three looks come back: as asked ("Night Brick, lighter"), a half step more ("a bit lighter still") and a full step more ("noticeably lighter"). The name does not change; the card heading shows ", lighter" and a green line says what changed ("Changed: lightened backgrounds and photo overlay (slight)"). The banner says "Edited Night Brick … (round n of 5)".
+- A tweak gives three variations: as asked ("Dark Premium · lighter"), a half step more ("a bit lighter still") and a full step more ("noticeably lighter"). They replace ONLY the target card. The card shows the first one, with three chips to switch between them in place (`data-look-variants`). The name does not change. A green line says what changed ("Changed: lightened backgrounds and photo overlay (slight)").
 - When a look is named but nothing applicable is asked ("Night Brick is great"), the box says so and the round is not used. Feedback that names no look keeps the old behavior (3 new looks with the feedback).
-- Log lines: `[refine] "<feedback>" -> edit Night Brick (named “Night Brick”) · adjustments [...] · read by AI planner|wording` and per edited look `[refine] edited “Night Brick” (old -> new id) lighter: {"lighten":1} · bg #0e1013->#1e2023 · scrim 0.774 (AA floor …) · photo brightness 1.11`.
+- Log lines:
+  - `[refine] "<feedback>" -> edit Dark Premium only (style “dark-premium” | named “…” | photo from “Editorial” onto “Dark Premium”); unchanged: Editorial, Playful · adjustments [...] · borrow photo from Editorial · read by AI planner|wording`;
+  - one line per edited look: `[refine] edited “Dark Premium” (old -> new id) lighter · borrowed photo from “Editorial” (id): {"lighten":1} · bg #0e1013->#1e2023 · scrim 0.774 (AA floor …) · photo brightness 1.11`.
 - Copy/photo changes in an edit ("same but use the depot photo") use Google/web photos only; no AI image is generated in an edit.
+
+### Every round is new (creativity)
+
+Bob: "The first look is the same still. no creativity … all it did was change the order." Each round now draws from a wider pool and avoids what the owner has already seen:
+- **Random seed per round** (`previewDirections`):
+  - archetypes are picked at random from the business's five best fits (`archetypesFor(facts, variation, {seed, archetypes})`);
+  - hero treatments are shuffled; the AI art director's pick is only one candidate, because a real model gives each archetype the same hero every time.
+- **Six hero treatments** (`look-variety.ts`, CSS in `theme.ts`):
+  - caption: split hero, captioned photo;
+  - cinematic: full-bleed photo, side overlay;
+  - collage: tilted frame, stamp;
+  - **poster:** full-bleed photo, giant centered headline at the bottom;
+  - **panorama:** big type first, a 21:8 photo strip under it;
+  - **framed:** large photo on the left, copy card overlapping it.
+
+  Header, buttons, footer and the below-the-fold recipe are kept distinct within a round.
+- **The previous rounds** (`round-memory.server.ts`): the browser sends the ids of every look shown this session; the server reads them itself and passes them on:
+  - the last round's archetypes, hero treatments, names and palettes go to `directionsFor`. A regenerated round prefers at least 2 new styles and new treatments. The AI prompt lists what was already shown ("must look VISIBLY different"). A palette too close to an earlier one gets its hue turned;
+  - every earlier hero photo (image URL / source page plus a perceptual hash) goes in `plan.avoidPhotos`. Requested-scene photos ("brick streets") look 6 results deep and put already-shown photos last. A log line reads `[photo] look N: K photos shown in an earlier round moved behind M new ones`. Proactive searches give shown photos −8 ("shown in an earlier round") and add two more town queries (courthouse, landmark, aerial view, park, depot, festival).
+- The owner's note is still honored in every round (the requested scene stays the subject).
+- Log line per round: `[looks] round (regenerated): “Playful” playful/poster · … · previous round: “Editorial” editorial/caption · …`.
 
 ### Three looks that really differ
 
@@ -484,6 +522,12 @@ The last argument picks which look to choose (0–2); `APP_URL` points the scrip
 
 `scripts/note-photo-e2e.mjs <url> <outDir>` (`NOTE`, default "use the brick streets") submits the form with a note. It screenshots the cards (photo line and "How your request was used") and each look's top. It also takes a footer shot when there is a photo credit, plus full-page shots and side-by-side boards of the three look tops (`05-tops-side-by-side.png`) and full pages (`06-full-pages-side-by-side.png`). Each look's hero image, hero type and credit go in `summary.json`. Formcarry is intercepted and nothing is chosen. Example: `NOTE="Use a photo of the downtown brick streets as background" node scripts/note-photo-e2e.mjs https://www.paulsvalley.com/ live-preview-shots/note-photo-paulsvalley-mock`.
 
-`scripts/refine-edit-e2e.mjs <url> <outDir>` repeats Bob's steps: round 1 with no note, then "Use a photo of downtown pauls valley with the brick streets for the background", then "The <darkest look> is best just a little too dark." It screenshots every round, puts the dark look before/after side by side (`04-before-after-top.png`, `05-before-after-full.png`), and writes luminance numbers (mean WCAG relative luminance and CIE L* of the first screen, of the page below the hero and of the whole page) to `summary.json`. Run with the fake AI server (`FAKE_DARK_NAME="Night Brick"` names the dark look like Bob's run and keeps one dark look in every round) and the mock Serper. Unit tests: `src/lib/preview/look-edit.test.ts`.
+`scripts/refine-edit-e2e.mjs <url> <outDir>` repeats Bob's steps:
+1. Round 1 with his note ("use a photo of downtown pauls valley with the brick streets for the background").
+2. "Use editorials picture on dark premium". Checks: only the Dark Premium card changes, it keeps its name and layout, its hero bytes equal Editorial's, and it has a "photo from" line.
+3. "Make Dark Premium lighter so you can see the image better." Checks: only Dark Premium changes, there are 3 variation chips, a Changed: line, a brighter hero and the same photo; a chip swaps only that card.
+4. "Show me something different" (no look named). Checks: at least 2 new styles, at least 2 new hero treatments and at least 2 hero photos not shown in round 1.
+
+It exits 1 on any failed check, writes before/after boards (`03-borrow-before-after.png`, `04-lighten-before-after.png`, `06-round1-vs-regenerated.png`) and writes `summary.json`. Run it with the fake AI server (`FAKE_BOB_ROUND1=1` makes round 1 Editorial / Dark Premium / Playful like Bob's) and the mock Serper. Unit tests: `src/lib/preview/look-edit.test.ts` and `src/lib/preview/refine-target.test.ts` (Bob's two phrases, labels, positions, borrows, round variety).
 
 Round 1 photos: run the app with the mock Serper and the fake AI server, then `SERVER_LOG=<dev log> EXPECT_DISTINCT_HEROES=1 NOTE="" node scripts/note-photo-e2e.mjs https://www.paulsvalley.com/ live-preview-shots/round1-photos`. The mock's round-1 fixtures for the three town queries mix three welcome signs (one of them the same picture at another size, titled "gateway"), a dim park, the historic district, a downtown night street, a brick main street, the depot and the water tower. The check passes when the three heroes are different pictures with three different subjects and none is a sign. Unit tests: `src/lib/preview/hero-pick.test.ts`.
