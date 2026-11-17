@@ -22,6 +22,7 @@ import { readImage } from "@/lib/pages.server";
 import { renderSitePage, type PolishInfo, type StoredSite } from "@/lib/preview/render";
 import { SECTION_GUIDE, normalizeSections, type NormalizeContext } from "@/lib/preview/sections";
 import type { Section } from "@/lib/preview/types";
+import { ownerRequestRule } from "@/lib/preview/owner-request";
 
 export function critiqueMode(): "auto" | "vision" | "html" | "off" {
   const raw = (env("PREVIEW_CRITIQUE") ?? "auto").toLowerCase();
@@ -167,7 +168,12 @@ export async function polishHome(
       json: true,
       model: env("CRITIQUE_MODEL"),
       messages: [
-        { role: "system", content: CRITIQUE_SYSTEM.replace("{IMAGES}", Object.keys(site.images ?? {}).filter((n) => !n.startsWith("logo")).join(", ") || "(none — use no image fields)") },
+        {
+          role: "system",
+          content: `${CRITIQUE_SYSTEM.replace("{IMAGES}", Object.keys(site.images ?? {}).filter((n) => !n.startsWith("logo")).join(", ") || "(none — use no image fields)")}${
+            site.facts && ownerRequestRule(site.facts) ? `\n\n${ownerRequestRule(site.facts)}\nYour revision must keep (or improve) how well the homepage follows the owner's request.` : ""
+          }`,
+        },
         { role: "user", content },
       ],
     });

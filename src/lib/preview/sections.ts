@@ -9,6 +9,7 @@
  *   - images only from the site's own stored image set
  */
 import { escapeHtml, pageSlugFor, scrubInventedContacts } from "./sanitize.ts";
+import { requestHints, type RequestedSection } from "./owner-request.ts";
 import { SECTION_TYPES, type DesignDirection, type PlanPage, type Section, type SectionItem, type SectionType, type SiteFacts, type SitePlan } from "./types.ts";
 
 // ---------------------------------------------------------------- icons (trusted, inline SVG)
@@ -441,6 +442,7 @@ export function corpusFor(facts: SiteFacts): string {
     facts.address,
     facts.brief ?? "",
     facts.notes,
+    ...(facts.feedback ?? []),
     ...facts.pages.map((p) => `${p.title} ${p.headings.join(" ")} ${p.text}`),
     ...facts.testimonials.map((t) => t.quote),
   ].join(" \n ");
@@ -578,20 +580,29 @@ export function composeMockPage(page: PlanPage, facts: SiteFacts, plan: SitePlan
       secondary: !call && servicesSlug ? { label: "Our services", page: servicesSlug } : undefined,
       call,
     };
-    switch (a) {
-      case "editorial":
-        return [hero, ...statement, ...servicesBlock("light", "list"), ...feature("tint"), ...quote, ctaBand];
-      case "dark-premium":
-        return [hero, ...servicesBlock("light", "images"), ...feature("tint", true), process, ...quote, ctaBand];
-      case "bold-photo":
-        return [hero, ...marquee, ...servicesBlock("light", "images"), ...feature("tint"), ...gallery, ...quote, ctaBand];
-      case "playful":
-        return [hero, ...servicesBlock("tint", "icons"), process, ...feature("light", true), ...quote, ctaBand];
-      case "minimal-luxury":
-        return [hero, ...feature("light"), ...servicesBlock("tint", "list"), ...statement, ...quote, ctaBand];
-      case "warm-craft":
-        return [hero, ...servicesBlock("tint", "bento"), ...feature("light"), process, ...quote, ctaBand];
+    const byArchetype: Record<DesignDirection["archetype"], Section[]> = {
+      editorial: [hero, ...statement, ...servicesBlock("light", "list"), ...feature("tint"), ...quote, ctaBand],
+      "dark-premium": [hero, ...servicesBlock("light", "images"), ...feature("tint", true), process, ...quote, ctaBand],
+      "bold-photo": [hero, ...marquee, ...servicesBlock("light", "images"), ...feature("tint"), ...gallery, ...quote, ctaBand],
+      playful: [hero, ...servicesBlock("tint", "icons"), process, ...feature("light", true), ...quote, ctaBand],
+      "minimal-luxury": [hero, ...feature("light"), ...servicesBlock("tint", "list"), ...statement, ...quote, ctaBand],
+      "warm-craft": [hero, ...servicesBlock("tint", "bento"), ...feature("light"), process, ...quote, ctaBand],
+    };
+    const list = byArchetype[a];
+    // Sections the owner asked for (mock mode reads the request; the AI gets it as an instruction).
+    // Only sections we can fill with real facts are added: reviews need testimonials, a gallery needs photos.
+    const requested: Record<RequestedSection, Section[]> = {
+      reviews: quote,
+      gallery: images.photos.length >= 2 ? (gallery.length ? gallery : [{ type: "gallery", tone: "light", eyebrow: "Our work", heading: "A look *around*", items: images.photos.slice(0, 6).map((p, i) => ({ title: `Photo ${i + 1}`, text: "", image: p })) }]) : [],
+      process: [process],
+      statement,
+    };
+    for (const want of requestHints(facts).sections) {
+      for (const section of requested[want]) {
+        if (!list.some((item) => item.type === section.type)) list.splice(list.length - 1, 0, section);
+      }
     }
+    return list;
   }
   const pageHero = (eyebrow: string, title: string, text: string, image?: string): Section => ({ type: "page-hero", tone: a === "dark-premium" ? "light" : "tint", eyebrow, heading: title, text, image });
   if (page.slug === "contact") {

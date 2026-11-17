@@ -16,6 +16,13 @@ import { ARCHETYPES, type DesignDirection, type PlanPage, type PlanSection, type
 import { PRESETS, archetypesFor, mockDirections, normalizeDirection, HEADING_FONTS as DISPLAY_FONTS, BODY_FONTS as TEXT_FONTS } from "@/lib/preview/design";
 import { SECTION_GUIDE, checkSections, composeImages, composeMockPage, corpusFor, type NormalizeContext } from "@/lib/preview/sections";
 import { redact } from "@/lib/ai-json";
+import { ownerRequestRule, ownerRequests } from "@/lib/preview/owner-request";
+
+/** The owner's note + feedback rounds as a high-priority block at the end of a system prompt. */
+function requestBlock(facts: SiteFacts): string {
+  const rule = ownerRequestRule(facts);
+  return rule ? `\n\n${rule}` : "";
+}
 import type { StoredPage, StoredSite } from "@/lib/preview/render";
 
 const MAX_PAGES = 6;
@@ -60,7 +67,8 @@ function factsForPrompt(facts: SiteFacts) {
     current_navigation: facts.nav.map((n) => n.label),
     pages_read: facts.pages.map((p) => ({ title: p.title, url: p.url, headings: p.headings.slice(0, 10), text: p.text.slice(0, 1200) })),
     owner_brief: facts.brief ?? null,
-    requested_changes: facts.notes || null,
+    requested_changes: ownerRequests(facts).note || null,
+    change_requests: ownerRequests(facts).feedback.length ? ownerRequests(facts).feedback : null,
     sites_to_emulate: facts.inspiration?.length ? facts.inspiration : null,
   };
 }
@@ -198,7 +206,7 @@ Rules:
 - 3 to ${MAX_PAGES} pages. The first page is "home". Always include "contact". Mirror the real pages the business already has (about, services, menu, etc.).
 - Use ONLY facts provided. Never invent phone numbers, emails, street addresses, prices, awards, years in business, staff names, statistics, or reviews.
 - Keep the business name exactly as given. (Visual design is decided separately — plan structure and content only.)
-- Respect the requested changes when present.${variation ? `\n- Variation ${variation}: choose a clearly different structure and emphasis from a typical first attempt.` : ""}`,
+- Respect the requested changes when present: add, drop or reorder pages and sections the owner asks for.${variation ? `\n- Variation ${variation}: choose a clearly different structure and emphasis from a typical first attempt.` : ""}${requestBlock(facts)}`,
         },
         { role: "user", content: JSON.stringify(factsForPrompt(facts)) },
       ],
@@ -259,7 +267,7 @@ Rules:
 - Respect the brand: if brand colors are given, at least one look keeps them prominent, and every look should feel compatible with the logo.
 - If "sites_to_emulate" are given, let at least one look borrow their vibe (palette, type, mood) without copying them.
 - Headlines must not invent facts: no years, awards, prices, guarantees, statistics, or claims not in the facts.
-- Respect the owner's requested changes and style notes when present.${variation ? `\n- This is attempt ${variation + 1}: go somewhere new compared with an obvious first attempt.` : ""}`,
+- Respect the owner's requested changes and style notes when present: requested colors go into the palettes, requested moods/styles shape the archetypes and fonts, and feedback on earlier looks means these three must be clearly different from what they rejected.${variation ? `\n- This is attempt ${variation + 1}: go somewhere new compared with an obvious first attempt.` : ""}${requestBlock(facts)}`,
         },
         { role: "user", content: JSON.stringify(factsForPrompt(facts)) },
       ],
@@ -370,7 +378,7 @@ Content rules:
 - ${home ? `This is the HOME page: 5-8 sections. The first section MUST be "${HERO_FOR[design.hero]}". Include proof (reviews if testimonials exist), what they do, and a strong closing "cta-band".` : `This is an inner page: the first section MUST be "page-hero", then 2-5 sections that fully cover the page's purpose.`}${
           page.slug === "contact" ? `\n- This is the contact page: include a "contact-block" (details fill in automatically). A contact form is appended automatically — do not describe one.` : ""
         }
-- Prefer real photos of the business when available; vary images, do not repeat the same image twice on a page.`,
+- Prefer real photos of the business when available; vary images, do not repeat the same image twice on a page.${requestBlock(facts)}`,
       },
       {
         role: "user",
