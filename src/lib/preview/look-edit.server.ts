@@ -174,7 +174,8 @@ export type EditedLook = { site: StoredSite; variant: string; changed: string; m
 async function copyImages(from: StoredSite, toId: string): Promise<void> {
   const { readImage, saveImage } = await import("@/lib/pages.server");
   await Promise.all(
-    Object.keys(from.images ?? {}).map(async (name) => {
+    // The Custom Design look's Imagine mockup travels with it (shown on the card next to the built page).
+    [...Object.keys(from.images ?? {}), ...(from.customMockup ? ["mockup"] : [])].map(async (name) => {
       const img = await readImage(from.id, name);
       if (img) await saveImage(toId, name, img.type, img.bytes);
     }),
