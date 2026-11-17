@@ -34,6 +34,9 @@ const cand = (id: string, text: string, extra: Partial<HeroCandidate> = {}): Her
 describe("hero brief: what a good hero is depends on the business type (not town rules)", () => {
   it("reads the type", () => {
     assert.equal(heroBrief(town).category, "town");
+    // A town's utility photos (a site photo on paulsvalley.com) are never its hero, even at the site photos' 6/10 bar.
+    assert.ok(heroBrief(town).offTopic.test("A network of white industrial pipes with flanged joints"));
+    assert.ok(!heroBrief(plumber).offTopic.test("A network of white industrial pipes with flanged joints"));
     assert.equal(heroBrief(plumber).category, "trades");
     assert.equal(heroBrief(restaurant).category, "restaurant");
     assert.equal(heroBrief({ ...base, name: "Smith & Jones", industry: "law firm" } as SiteFacts).category, "legal-finance");

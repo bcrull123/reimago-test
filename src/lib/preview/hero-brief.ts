@@ -160,7 +160,7 @@ const TOWN: Omit<HeroBrief, "kind"> = {
   category: "town",
   good: "an attractive establishing shot of the place itself: its downtown or main street, historic buildings, best-known landmark, a scenic park, skyline or aerial view, in good light",
   avoid: "airports, utility or infrastructure (towers, poles, wires, water plants), parking or gravel lots, office or library interiors, people sitting at desks or in meetings, signs and seals",
-  offTopic: /\b(?:airport|runway|hangar|antenna|substation|water\s+(?:plant|treatment)|wastewater|landfill|council\s+meeting|meeting|desks?|office\s+interior|library\s+interior|people\s+sitting|reading\s+books|taking\s+notes|classroom|seal|agenda)\b/i,
+  offTopic: /\b(?:airport|runway|hangar|antenna|substation|water\s+(?:plant|treatment)|industrial|pipes|pipelines?|valves?|machinery|pump\s+station|storage\s+tanks?|wastewater|landfill|council\s+meeting|meeting|desks?|office\s+interior|library\s+interior|people\s+sitting|reading\s+books|taking\s+notes|classroom|seal|agenda)\b/i,
   scenes: ["{city} {state} downtown historic main street", "{city} {state} landmark", "{city} {state} aerial view", "{city} {state} park", "{city} {state} courthouse", "{city} {state} festival"],
 };
 
