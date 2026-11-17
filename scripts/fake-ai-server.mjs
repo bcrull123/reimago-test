@@ -427,6 +427,12 @@ http
         if (req.url.endsWith("/images/generations") || req.fakeArt) {
           await sleep(1500);
           if (/Illustration \/ artwork for a website section/.test(json.prompt ?? "")) {
+            if (process.env.FAKE_IMAGINE === "artfail") {
+              log("imagine art (generations retry)", "FAIL (FAKE_IMAGINE=artfail)");
+              res.writeHead(500, { "content-type": "application/json" });
+              res.end(JSON.stringify({ error: "fake imagine art failure" }));
+              return;
+            }
             const art = await photoFor(json.prompt ?? "", false);
             log("imagine art", (json.prompt ?? "").slice(0, 80));
             res.writeHead(200, { "content-type": "application/json" });

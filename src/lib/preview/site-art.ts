@@ -241,7 +241,7 @@ export function sanitizeSvg(markup: string): string | undefined {
 }
 
 /** Words that mark small UI pictures, not a brand's signature graphic. */
-const NOT_SIGNATURE = /\b(?:icons?|favicon|logos?|badges?|buttons?|arrows?|chevron|avatar|gravatar|headshot|portrait|profile|sponsors?|partners?|payment|visa|mastercard|paypal|social|facebook|instagram|twitter|linkedin|youtube|tiktok|spinner|loader|placeholder|pixel|tracking|qr)\b/i;
+const NOT_SIGNATURE = /\b(?:icons?|favicon|logos?|badges?|buttons?|arrows?|chevron|avatar|gravatar|headshot|portrait|profile|sponsors?|partners?|payment|visa|mastercard|paypal|social|facebook|instagram|twitter|linkedin|youtube|tiktok|spinner|loader|placeholder|pixel|tracking|qr|circles?|shapes?|blobs?|dividers?|separators?|dots?|lines?)\b/i;
 
 /**
  * Candidates for the site's signature brand graphic (a mascot, an illustration like bob.me's rocket): pictures in
@@ -265,6 +265,7 @@ export function isSignatureArt(file: { cutout: boolean; width?: number; height?:
   const w = file.width ?? 0;
   const h = file.height ?? 0;
   if (file.type !== "image/svg+xml" && (w < 200 || h < 200)) return false;
-  if (w && h && (w / h > 3 || h / w > 3)) return false;
+  // wider than 2:1 reads as a wordmark or banner (a logo in text), not a mascot / centerpiece graphic
+  if (w && h && (w / h > 2 || h / w > 3)) return false;
   return true;
 }

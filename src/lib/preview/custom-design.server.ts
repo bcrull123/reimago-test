@@ -401,7 +401,10 @@ async function googleHero(site: StoredSite, deadline: number): Promise<boolean> 
   if (!photoSearchEnabled()) return false;
   const g = await findGooglePhotos(undefined, site.facts, aiAvailable() && !isMockMode(), Math.min(deadline - 30_000, Date.now() + 20_000), 1).catch(() => undefined);
   const pick = g?.photos[0];
-  if (!pick) return false;
+  if (!pick) {
+    console.info("[photo] Custom Design: Grok Imagine art unavailable and the Google Images last resort found no usable photo: the page uses a typographic hero");
+    return false;
+  }
   const { saveImage } = await import("@/lib/pages.server");
   const { googleCredit } = await import("./builder.server.ts");
   await saveImage(site.id, "hero", pick.photo.type, pick.photo.bytes);
@@ -432,6 +435,8 @@ function photoLineFor(site: StoredSite, html: string): string | undefined {
   else if (art && !(imgs.hero && !imgs.hero.imagine && uses("hero"))) parts.push("Art: created by Grok Imagine for this design");
   if (imgs.hero?.temporary && uses("hero")) parts.push("Photo: from Google Images (Grok Imagine was unavailable; preview only)");
   else if (own) parts.push(`Photo${own === 1 ? "" : "s"}: your site's own (${own})`);
+  // the site's own photo leads, Imagine filled the gaps: say both
+  if (art && !parts.some((p) => p.startsWith("Art:"))) parts.push(`Art: ${art} piece${art === 1 ? "" : "s"} created by Grok Imagine for this design`);
   return parts.join(" · ") || undefined;
 }
 
