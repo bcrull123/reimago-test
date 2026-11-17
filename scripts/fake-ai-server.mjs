@@ -331,7 +331,7 @@ async function photoFor(prompt, wide) {
     .toLowerCase()
     .replace(/[^a-z ]/g, " ")
     .split(/\s+/)
-    .filter((w) => w.length > 3 && !/website|photograph|photo|hero|composition|negative|space|headline|calm|wide|authentic|business|illustrating|clear|single|subject|editorial|style|product|behind|scenes|skilled|work|progress|details|tools|materials|craft|natural|candid|framing|local|striking|scene|represents/.test(w));
+    .filter((w) => w.length > 3 && !/website|photograph|photo|hero|composition|negative|space|headline|calm|wide|authentic|business|illustrating|clear|single|subject|editorial|style|product|behind|scenes|skilled|work|progress|details|tools|materials|craft|natural|candid|framing|local|striking|scene|represents|must|clearly|show|make|main|instead|equipment|company|owner|request|priority|long|text|logos/.test(w));
   const query = [...new Set(words)].slice(0, 3).join(" ") || "workshop";
   const key = `${query}|${hash(prompt) % 7}`;
   if (imageCache.has(key)) return imageCache.get(key);
@@ -371,7 +371,7 @@ http
         if (req.url.endsWith("/images/generations")) {
           await sleep(1500);
           if (/no text|letters|logos/i.test(json.prompt) === false) log("WARNING: image prompt without text/logo guard");
-          if (/morgan|reddy|plumbing co/i.test(json.prompt)) log("WARNING: business name in image prompt");
+          if (/morgan|reddy/i.test(json.prompt)) log("WARNING: business name in image prompt");
           const wide = /16:9|1536x1024|4:3/.test(`${json.aspect_ratio ?? ""}${json.size ?? ""}`);
           const bytes = await photoFor(json.prompt ?? "", wide);
           log("image", (json.prompt ?? "").slice(0, 90));

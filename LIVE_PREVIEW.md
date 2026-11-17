@@ -104,6 +104,38 @@ Negations such as "no red" or "too dark" are ignored.
 - The preview's sticky bar has a **Change something** link that scrolls to the box.
 - **Refining never sends the form.**
 
+### Photos the owner asks for
+
+Bob wrote "use the brick streets" and got pipes. On the Pauls Valley site he wrote "Use a photo of the downtown brick streets as background" and got the site's own photos (people reading, the airport). There were three causes:
+- the image prompts never saw the note;
+- a usable scraped photo always beat generation;
+- the hero was the largest scraped photo, whatever it showed.
+
+**The scene.** `requestedScene()` in `owner-request.ts` reads the scene from the note or the newest feedback. Phrases like "use …", "photo/picture/background of …", "show …" and "in the background …" count. For example, "use the brick streets" gives "the brick streets", and Bob's note gives "the downtown brick streets". Design words (colors, fonts, sections) and negations are not scenes. `wantsBackground()` treats "background" (or "behind the headline", "full-width") as the hero background, so those looks switch to the full-bleed `hero-photo`.
+
+**Finding the hero photo.** `buildLook` looks in this order, and every look uses the same photo:
+1. **The site's own photo of it.** The scrape now keeps each image's alt and title text as `facts.imageText`. `matchScraped()` needs most of the scene words (or close synonyms) in that text or the file name. "Brick and stone facade" or "reading a book" does not count.
+2. **A free-license web photo.** `web-photo.server.ts` searches Openverse and Wikimedia Commons (no keys) for the scene plus the town from the address. It also searches the town name alone and the town with each scene word. Only CC0, public-domain, CC BY and CC BY-SA photos are used; NC and ND are skipped. A photo must be at least 1200 px wide and landscape (at least 1.2:1), and its title or description must name the town and a telling scene word. "Street" alone is noise, because every address has one. A title naming the town's downtown or historic district counts double for a downtown scene. The whole search is time-boxed to about 8 seconds. The photo is downloaded and stored with the preview (same origin, so the lead picture can capture it). Its credit (title, author, license link, source) is recorded on the image and shown in the footer as "Photo: “…” by …, CC BY-SA 3.0, via Wikimedia Commons". Set `PREVIEW_WEB_PHOTOS=0` to skip this step.
+3. **An AI photo of it.** It is generated even when the site has enough photos. The hero prompt starts "The photo MUST clearly show: the downtown brick streets in Pauls Valley, Oklahoma. Make … the main subject" and adds photorealistic, golden-hour and "no text". For trades it also says "not plumbing company tools or equipment". The look's own hero idea is used only if it already shows the scene. The business name is removed, but the town is kept.
+4. **Nothing found** (for example, mock mode with no web match). The hero gets a plain background, never an unrelated scraped photo.
+
+Every image prompt also carries the owner's words as "The business owner's request (top priority …)". The look-directions prompt asks the AI to make each look's `heroSubject` the requested scene and adds a `featureScene`. Refine rounds that mention photos, images, scenes or backgrounds regenerate the images.
+
+**On the card.** A small line says what happened:
+- "Photo: “Pauls Valley Historic District” by Crimsonedge34 (CC BY-SA 3.0) from Wikimedia Commons";
+- "Photo: your site's photo of …";
+- "AI photo of “the brick streets”";
+- "Photos: no photo of … found; would generate one (mock mode / AI images off)".
+
+"How your request was used" (`look.trace`, saved with the preview as `trace`) lists:
+- each AI step and whether it got the OWNER'S REQUEST block;
+- each image's status and source;
+- the web search words and result;
+- the credit;
+- the AI image prompt.
+
+It contains no secrets.
+
 ### When the form is sent
 
 **Nothing is sent when the looks appear.** The email, website and note are collected up front and held in memory.
@@ -229,6 +261,7 @@ The old domain step (step 12) is gone. Wizard answers are kept in memory only (s
 | **`PREVIEW_STEP_BUDGET_MS`** | no | Time budget per step (default `85000`). |
 | `PREVIEW_MOCK` | no | `1` = no AI calls; looks are composed from the facts with three preset directions, labeled MOCK PREVIEW. |
 | `DATABASE_URL` | recommended in production | Stores preview sites (`preview_sites`) and their images (`preview_images`) in Postgres, created on first use. Without it, files go to `PREVIEW_STORE_DIR` and disappear on serverless restarts. |
+| **`PREVIEW_WEB_PHOTOS`** | no | `0` turns off the free-license web photo search (Openverse, Wikimedia Commons) used when the owner's note asks for a photo of something. On by default, also in mock mode. |
 | `PREVIEW_STORE_DIR` | no | File storage folder when there is no `DATABASE_URL` (default: OS temp dir). |
 | `CURSOR_API_KEY` | no | When set, "Send to Cursor" starts a Cursor agent with the preview links; otherwise the button downloads a brief. |
 
@@ -241,6 +274,7 @@ The old domain step (step 12) is gone. Wizard answers are kept in memory only (s
 - `src/lib/preview/sections.ts`: section types, validation (`normalizeSections`), mock composer, HTML templates.
 - `src/lib/preview/theme.ts`: the design-system CSS. `legacy-theme.ts` keeps old (v2) previews rendering.
 - `src/lib/preview/images.server.ts`: real-photo selection/storage and generated images.
+- `src/lib/preview/image-prompts.ts`: image prompts (the owner's scene first) and the card's photo line. `web-photo.ts` handles place, scene words, matching, licenses and ranking (pure). `web-photo.server.ts` runs the Openverse and Commons search and the download.
 - `src/lib/preview/critique.server.ts`: screenshot + critique-and-revise.
 - `src/lib/preview/builder.server.ts`: plan, directions, `buildLook`, `finishSite`.
 - `src/lib/preview.functions.ts`: server functions `previewRead`, `previewFromBrief`, `previewDirections`, `previewLook`, `previewFinish`.
@@ -279,3 +313,5 @@ Set `BREAK_CANVAS=1` to check the `picture_error` path.
 Set `NOTE` and `FEEDBACK` to change the text it uses.
 
 The last argument picks which look to choose (0–2); `APP_URL` points the script at another port. The e2e scripts intercept Formcarry, so no real lead is sent. The fake AI server deliberately returns an invented phone, email, stats and review so you can see the validators remove them.
+
+`scripts/note-photo-e2e.mjs <url> <outDir>` (`NOTE`, default "use the brick streets") submits the form with a note. It screenshots the cards (photo line and "How your request was used") and each look's top. It also takes a footer shot when there is a photo credit. Each look's hero image, hero type and credit go in `summary.json`. Formcarry is intercepted and nothing is chosen. Example: `NOTE="Use a photo of the downtown brick streets as background" node scripts/note-photo-e2e.mjs https://www.paulsvalley.com/ live-preview-shots/note-photo-paulsvalley-mock`.
