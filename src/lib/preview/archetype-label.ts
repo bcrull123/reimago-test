@@ -1,11 +1,18 @@
-import type { LookInfo } from "@/lib/preview/types";
+import type { Archetype } from "./types.ts";
 
-/** Human names for the look archetypes (picker cards and the `chosen_look` form field). */
-export const ARCHETYPE_LABEL: Record<LookInfo["archetype"], string> = {
+/**
+ * The ONE name a look goes by (Bob: "Just name them one thing"): its style. Shown on the cards, the preview
+ * banner and the `chosen_look` form field, kept through refine rounds, and what refine requests resolve by.
+ */
+export const ARCHETYPE_LABEL: Record<Archetype, string> = {
   editorial: "Editorial",
-  "dark-premium": "Dark premium",
-  "bold-photo": "Bold photo-led",
+  "dark-premium": "Dark Premium",
+  "bold-photo": "Bold Photo",
   playful: "Playful",
-  "minimal-luxury": "Minimal luxury",
-  "warm-craft": "Warm craft",
+  "minimal-luxury": "Minimal Luxury",
+  "warm-craft": "Warm Craft",
 };
+
+export function lookName(archetype: Archetype): string {
+  return ARCHETYPE_LABEL[archetype] ?? archetype;
+}

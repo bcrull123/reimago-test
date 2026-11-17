@@ -43,8 +43,12 @@ export type LookEdit = {
   copy?: { headline?: string; lead?: string };
   /** A different hero photo subject ("…but with the depot photo"). */
   photo?: string;
+  /** "Use Editorial's picture on Dark Premium": take these assets from another look on screen. */
+  borrow?: { fromId: string; assets: BorrowAsset[] };
   from: "AI planner" | "wording";
 };
+
+export type BorrowAsset = "photo" | "palette" | "fonts";
 
 /** Cumulative numeric levels per adjustment (slight = 1, medium = 2, strong = 3), stored on the edited look. */
 export type TuneLevels = Partial<Record<AdjustType, number>>;
@@ -211,6 +215,133 @@ export function oklch(hex: string): { l: number; c: number; h: number } {
   return { l: L, c: Math.hypot(a, b), h: ((Math.atan2(b, a) * 180) / Math.PI + 360) % 360 };
 }
 
+/** Style labels as people type them (the card shows ONE name per look: its style, e.g. "Dark Premium"). */
+const LABELS: [Archetype, RegExp][] = [
+  ["dark-premium", /\bdark[\s-]*premium(?:'?s)?\b|\bpremium(?:'?s)?\b/g],
+  ["editorial", /\bedit[a-z]{3,6}(?:'?s)?\b/g],
+  ["playful", /\bpla[a-z]{3,5}l(?:'?s)?\b/g],
+  ["bold-photo", /\bbold[\s-]*photo(?:[\s-]*led)?(?:'?s)?\b|\bphoto[\s-]*led(?:'?s)?\b|\bbold(?:'s|s)?(?=\s+(?:one|look|version|design|option|card|picture|photo|image|pic|hero|background|colou?rs?|palette|fonts?)\b|\s*$)|\bthe\s+bold\b(?!er)/g],
+  ["warm-craft", /\bwarm[\s-]*craft(?:'?s)?\b|\bcraft(?:'?s)?\b/g],
+  ["minimal-luxury", /\bminimal[\s-]*luxury(?:'?s)?\b|\bluxury(?:'?s)?\b|\bthe\s+minimal\b/g],
+];
+/** Fuzzy single words for the labels (typos: "editoral", "premuim", "playfull"). */
+const LABEL_WORDS: [string, Archetype][] = [
+  ["editorial", "editorial"],
+  ["premium", "dark-premium"],
+  ["playful", "playful"],
+  ["luxury", "minimal-luxury"],
+];
+const ADJECTIVAL = /\b(?:more|less|too|bit|very|so|super|extra|quite|less|it|feel|look|looks|feels|seem|seems)\s+$/;
+
+export type LookMention = { id: string; how: string; at: number; end: number; possessive: boolean };
+
+/**
+ * Every look the text refers to, with where: by name (fuzzy), by style label ("Dark Premium", "editorials",
+ * "the playful one"), by position ("the first one", "the middle one"). Used for single targets and for
+ * cross-look edits ("Use editorials picture on dark premium").
+ */
+export function findLookRefs(text: string, looks: LookRef[]): LookMention[] {
+  const t = norm(text);
+  const out: LookMention[] = [];
+  const add = (look: LookRef | undefined, how: string, at: number, end: number) => {
+    if (!look || out.some((m) => m.id === look.id && Math.abs(m.at - at) < 3)) return;
+    const after = t.slice(end, end + 3);
+    const word = t.slice(at, end);
+    out.push({ id: look.id, how, at, end, possessive: /'s$|s'$/.test(word) || /^'s\b/.test(after) || /s$/.test(word.replace(/'s$/, "")) });
+  };
+  // Names: exact phrase anywhere, else fuzzy (a unique best match only).
+  const fuzzy: { look: LookRef; s: number }[] = [];
+  for (const look of looks) {
+    const n = norm(look.name).replace(/^the /, "");
+    const at = n ? ` ${t} `.indexOf(` ${n}`) : -1;
+    const adjectival = at >= 0 && ADJECTIVAL.test(t.slice(0, at)) && !/^\s*(?:one|look|version|design|option|card)\b/.test(t.slice(at + n.length));
+    if (adjectival) continue; // "make it more playful" is a wish, not the Playful look
+    if (at >= 0 && n.length >= 3) add(look, `named “${look.name}”`, at, at + n.length + (t.slice(at + n.length).startsWith("'s") ? 2 : 0));
+    else {
+      const s = nameScore(text, look.name);
+      if (s > 0) fuzzy.push({ look, s });
+    }
+  }
+  fuzzy.sort((a, b) => b.s - a.s);
+  if (fuzzy.length && (fuzzy.length === 1 || fuzzy[0]!.s > fuzzy[1]!.s)) {
+    const first = tokens(fuzzy[0]!.look.name)
+      .map((w) => t.split(" ").findIndex((x) => tokenHit(w, [x])))
+      .filter((i) => i >= 0);
+    const words = t.split(" ");
+    const wi = first.length ? Math.min(...first) : 0;
+    const at = words.slice(0, wi).join(" ").length + (wi ? 1 : 0);
+    add(fuzzy[0]!.look, `named “${fuzzy[0]!.look.name}”`, at, at + (words[wi]?.length ?? 0));
+  }
+  // Style labels.
+  const byArchetype = (a: Archetype) => {
+    const hit = looks.filter((l) => l.archetype === a);
+    return hit.length === 1 ? hit[0] : undefined;
+  };
+  for (const [archetype, pattern] of LABELS) {
+    for (const m of t.matchAll(pattern)) {
+      const at = m.index! + (m[0].startsWith("the ") ? 4 : 0);
+      if (ADJECTIVAL.test(t.slice(0, at)) && !/^\s*(?:one|look|version|design|option|card)\b/.test(t.slice(at + m[0].length))) continue;
+      if (archetype === "editorial" && !/^edit(?:orial|oral|orail|orial|torial|orials?|oral's)/.test(m[0]) && lev(m[0].replace(/'?s$/, ""), "editorial") > 1) continue;
+      if (archetype === "playful" && lev(m[0].replace(/'?s$/, ""), "playful") > 1) continue;
+      add(byArchetype(archetype), `style “${archetype}”`, at, at + m[0].length - (m[0].startsWith("the ") ? 4 : 0));
+    }
+  }
+  let pos = 0;
+  for (const w of t.split(" ")) {
+    const bare = w.replace(/'?s$/, "");
+    for (const [label, archetype] of LABEL_WORDS) {
+      if (bare !== label && bare.length >= 6 && lev(bare, label) <= 1 && !ADJECTIVAL.test(t.slice(0, pos))) add(byArchetype(archetype), `style “${archetype}”`, pos, pos + w.length);
+    }
+    pos += w.length + 1;
+  }
+  // Positions.
+  const byIndex = [...looks].sort((a, b) => a.index - b.index);
+  for (const [pattern, at] of ORDINALS) {
+    const m = pattern.exec(t);
+    if (m) add(at === "last" ? byIndex.at(-1) : byIndex[at], `position (${at === "last" ? "last" : at + 1})`, m.index, m.index + m[0].length);
+  }
+  return out.sort((a, b) => a.at - b.at);
+}
+
+const ASSETS: [BorrowAsset, RegExp][] = [
+  ["photo", /\b(?:picture|photo|photograph|pic|image|hero|background|backdrop|shot|bg)s?\b/],
+  ["palette", /\b(?:colou?rs?|palette|color\s+scheme)\b/],
+  ["fonts", /\b(?:fonts?|typefaces?|typography|lettering)\b/],
+];
+
+/**
+ * A cross-look edit: "Use editorials picture on dark premium", "put the first one's photo on the playful one",
+ * "give Dark Premium the editorial colors", "Dark Premium with the photo from Editorial". The destination is the
+ * look that gets edited; the source only lends its asset. Undefined unless two different looks are named and an
+ * asset (photo / colors / fonts) is mentioned.
+ */
+export function findBorrow(text: string, looks: LookRef[], focusedId?: string): { targetId: string; fromId: string; assets: BorrowAsset[]; how: string } | undefined {
+  const t = norm(text);
+  const assets = ASSETS.filter(([, p]) => p.test(t)).map(([a]) => a);
+  if (!assets.length || !/\b(?:use|using|put|give|take|borrow|swap|apply|bring|copy|move|same|steal|with|from)\b/.test(t)) return undefined;
+  const refs = findLookRefs(text, looks);
+  const ids = [...new Set(refs.map((r) => r.id))];
+  let dest: LookMention | undefined;
+  let src: LookMention | undefined;
+  if (ids.length === 1 && focusedId && focusedId !== ids[0] && /\b(?:this|current)\s+(?:one|look|design|version)\b/.test(t)) {
+    return { targetId: focusedId, fromId: ids[0]!, assets, how: "the look you were previewing" };
+  }
+  if (ids.length < 2) return undefined;
+  const before = (m: LookMention) => t.slice(Math.max(0, m.at - 14), m.at);
+  dest = refs.find((m) => /\b(?:on|onto|to|for|into|in)\s+(?:the\s+)?$/.test(before(m)) && !m.possessive);
+  dest ??= refs.find((m) => /\b(?:give|make|change|update|edit)\s+(?:the\s+)?$/.test(before(m)));
+  src = refs.find((m) => m.id !== dest?.id && (/\bfrom\s+(?:the\s+)?$/.test(before(m)) || m.possessive));
+  if (!dest && src) dest = refs.find((m) => m.id !== src!.id);
+  if (dest && !src) src = refs.find((m) => m.id !== dest!.id);
+  if (!dest || !src) {
+    src = refs[0];
+    dest = refs.find((m) => m.id !== src!.id);
+  }
+  if (!dest || !src || dest.id === src.id) return undefined;
+  const name = (id: string) => looks.find((l) => l.id === id)?.name ?? id;
+  return { targetId: dest.id, fromId: src.id, assets, how: `${assets.join(" + ")} from “${name(src.id)}” onto “${name(dest.id)}”` };
+}
+
 /**
  * Which existing look the feedback names: by name (fuzzy), position ("the second one", "the middle one"),
  * description ("the dark one", "the editorial one", "the green one"), or "this one" / "the one I'm previewing"
@@ -219,9 +350,12 @@ export function oklch(hex: string): { l: number; c: number; h: number } {
 export function findTargetLook(text: string, looks: LookRef[], focusedId?: string): { id: string; how: string } | undefined {
   if (!looks.length) return undefined;
   const t = norm(text);
-  // 1. By name.
-  const scored = looks.map((l) => ({ l, s: nameScore(text, l.name) })).filter((x) => x.s > 0).sort((a, b) => b.s - a.s);
-  if (scored.length && (scored.length === 1 || scored[0]!.s > scored[1]!.s)) return { id: scored[0]!.l.id, how: `named “${scored[0]!.l.name}”` };
+  // 0. A cross-look edit edits the destination ("…picture on dark premium" -> Dark Premium).
+  const borrow = findBorrow(text, looks, focusedId);
+  if (borrow) return { id: borrow.targetId, how: borrow.how };
+  // 1. By name, style label ("Dark Premium", "editorials") or position; with several, the first one named.
+  const refs = findLookRefs(text, looks);
+  if (refs.length) return { id: refs[0]!.id, how: refs[0]!.how };
   const byIndex = [...looks].sort((a, b) => a.index - b.index);
   // 2. "this one" / "the one I'm previewing".
   if (focusedId && looks.some((l) => l.id === focusedId) && /\b(?:this|current|previewed|selected)\s+(?:one|look|design|version|option)\b|\bthe\s+one\s+(?:i'?m|i\s+am)\s+(?:previewing|looking\s+at|viewing|seeing)\b|\bthe\s+one\s+(?:below|shown|on\s+screen)\b|\bthis\s+preview\b/.test(t)) {

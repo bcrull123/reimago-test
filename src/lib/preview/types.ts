@@ -113,7 +113,7 @@ export type DesignDirection = {
   /** "center" = centered logo with the menu under it. */
   header: "light" | "dark" | "overlay" | "center";
   /** How the hero shows its photo; no two looks share one (see look-variety.ts). */
-  heroStyle?: "caption" | "cinematic" | "collage";
+  heroStyle?: "caption" | "cinematic" | "collage" | "poster" | "panorama" | "framed";
   /** Below-the-fold section recipe; no two looks share one. */
   layout?: "editorial" | "showcase" | "bold";
   footer: "columns" | "minimal" | "statement";
@@ -256,6 +256,8 @@ export type LookInfo = {
     /** The look this was edited from (id) and how the feedback named it. */
     from: string;
     how: string;
+    /** The three variations of this edit ("lighter" / "a bit lighter still" / "noticeably lighter"): the card swaps among them. */
+    alternatives?: LookInfo[];
   };
 };
 
@@ -327,6 +329,8 @@ export type SitePlan = {
   photoIntent?: "keep" | "find" | "none";
   /** 2-3 Google Images searches for photos that fit this business/place (used proactively, even with no note). */
   imageQueries?: string[];
+  /** Photos shown in earlier rounds of this session (image URLs / source pages and perceptual hashes): not reused when alternatives exist. */
+  avoidPhotos?: { keys: string[]; hashes: string[] };
 };
 
 export type PreviewPageLink = { slug: string; title: string; url: string };
@@ -350,3 +354,15 @@ export type PreviewStepResult<T> = ({ ok: true } & T) | { ok: false; error: stri
 
 /** What the AI sent when some of its sections were dropped: the reasons and a short, masked raw sample. */
 export type AiDebug = { model: string; at: string; total: number; used: number; rejected: string[]; sample: string };
+
+/** What the owner saw in earlier rounds of this session (read server-side from the stored looks). */
+export type PreviousRound = {
+  /** The last round's looks. */
+  names: string[];
+  archetypes: Archetype[];
+  heroStyles: NonNullable<DesignDirection["heroStyle"]>[];
+  palettes: { primary: string; background: string }[];
+  /** Every earlier round's hero photos. */
+  photoKeys: string[];
+  photoHashes: string[];
+};

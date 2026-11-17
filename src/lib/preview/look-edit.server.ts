@@ -14,14 +14,16 @@ import {
   addLevels,
   changedLine,
   cleanAdjustments,
+  findBorrow,
+  findLookRefs,
   findTargetLook,
-  nameScore,
   readAdjustments,
   tuneNumbers,
   tunePalette,
   variantLabel,
   variationScales,
   type Adjustment,
+  type BorrowAsset,
   type LookEdit,
   type LookRef,
   type LookTune,
@@ -44,7 +46,14 @@ export function lookRefs(sites: StoredSite[]): LookRef[] {
 /** Rules-only reading (no AI): which look, which tweaks. */
 export function editByWording(text: string, looks: LookRef[], focusedId?: string): LookEdit {
   const target = findTargetLook(text, looks, focusedId);
-  return { targetId: target?.id, how: target?.how, adjustments: readAdjustments(text), from: "wording" };
+  const borrow = findBorrow(text, looks, focusedId);
+  return {
+    targetId: target?.id,
+    how: target?.how,
+    adjustments: readAdjustments(text),
+    borrow: borrow && borrow.targetId === target?.id ? { fromId: borrow.fromId, assets: borrow.assets } : undefined,
+    from: "wording",
+  };
 }
 
 /**
@@ -57,7 +66,7 @@ export async function planEdit(text: string, looks: LookRef[], focusedId: string
   if (!useAi) return rules;
   try {
     const { chatJson, aiModel } = await import("@/lib/ai-provider.server");
-    const raw = await chatJson<{ targetLook?: unknown; adjustments?: unknown; copy?: unknown; photo?: unknown }>({
+    const raw = await chatJson<{ targetLook?: unknown; adjustments?: unknown; copy?: unknown; photo?: unknown; borrowFrom?: unknown; borrow?: unknown }>({
       model: aiModel(),
       temperature: 0,
       maxTokens: 600,
@@ -68,9 +77,10 @@ export async function planEdit(text: string, looks: LookRef[], focusedId: string
           role: "system",
           content: `You are editing ONE existing website look from the owner's feedback. The owner sees these looks (left to right):
 ${looks.map((l, i) => `${i + 1}. "${l.name}" (${l.archetype}${l.id === focusedId ? ", currently previewed" : ""})`).join("\n")}
-Return ONLY JSON: {"targetLook": exact look name or null, "adjustments": [{"type": one of lighten|darken|more-contrast|less-contrast|saturate|desaturate|warmer|cooler|bigger-text|smaller-text|more-space|less-space|more-color|less-busy, "amount": "slight"|"medium"|"strong"}], "copy": {"headline"?: string, "lead"?: string} or null, "photo": string or null}
+Return ONLY JSON: {"targetLook": exact look name or null, "adjustments": [{"type": one of lighten|darken|more-contrast|less-contrast|saturate|desaturate|warmer|cooler|bigger-text|smaller-text|more-space|less-space|more-color|less-busy, "amount": "slight"|"medium"|"strong"}], "copy": {"headline"?: string, "lead"?: string} or null, "photo": string or null, "borrowFrom": exact look name or null, "borrow": subset of ["photo","palette","fonts"]}
 Rules:
-- targetLook only when the feedback names or clearly points at one look (its name, "the second one", "the dark one", "this one" = the currently previewed look). Otherwise null.
+- targetLook only when the feedback names or clearly points at one look (its name, its style such as "Dark Premium" or "editorial", "the second one", "the dark one", "this one" = the currently previewed look). Otherwise null.
+- "Use X's picture on Y" / "give Y X's colors": targetLook = Y (the look that changes), borrowFrom = X, borrow = what moves; then "photo" is null (no search: the picture comes from X).
 - "a little", "a bit", "slightly", "just a touch" = slight; no qualifier = medium; "much", "way", "a lot" = strong.
 - "too dark" = lighten; "too bright"/"washed out" = darken; "too busy" = less-busy; "hard to read" = more-contrast.
 - copy only when the owner dictates new words for the hero headline or intro; photo only when they ask for a different hero photo (the subject, 2-6 words).
@@ -80,19 +90,30 @@ Rules:
       ],
     });
     const named = typeof raw.targetLook === "string" ? looks.find((l) => l.name.toLowerCase() === raw.targetLook!.toString().toLowerCase().trim()) : undefined;
-    const aiTarget = named && nameScore(text, named.name) > 0 ? named : undefined;
+    // The planner may only pick a look the owner's words actually refer to (name, style label or position).
+    const mentioned = new Set(findLookRefs(text, looks).map((m) => m.id));
+    if (focusedId && /\b(?:this|current)\s+(?:one|look|design|version)\b/i.test(text)) mentioned.add(focusedId);
+    const aiTarget = named && mentioned.has(named.id) ? named : undefined;
+    const lender = typeof raw.borrowFrom === "string" ? looks.find((l) => l.name.toLowerCase() === String(raw.borrowFrom).toLowerCase().trim()) : undefined;
+    const aiAssets = (Array.isArray(raw.borrow) ? raw.borrow : []).filter((a): a is BorrowAsset => a === "photo" || a === "palette" || a === "fonts");
+    const targetId = rules.targetId ?? aiTarget?.id;
+    const borrow =
+      rules.borrow ??
+      (lender && targetId && lender.id !== targetId && mentioned.has(lender.id) && aiAssets.length ? { fromId: lender.id, assets: [...new Set(aiAssets)] } : undefined);
     const adjustments = cleanAdjustments(raw.adjustments);
     const c = (raw.copy && typeof raw.copy === "object" ? raw.copy : {}) as Record<string, unknown>;
     const clip = (v: unknown, n: number) => (typeof v === "string" ? v.replace(/\s+/g, " ").trim().slice(0, n) : "");
     const copy = { headline: clip(c.headline, 120) || undefined, lead: clip(c.lead, 300) || undefined };
     const photo = clip(raw.photo, 80) || undefined;
     return {
-      targetId: rules.targetId ?? aiTarget?.id,
+      targetId,
       how: rules.how ?? (aiTarget ? `named “${aiTarget.name}” (AI)` : undefined),
       adjustments: adjustments.length ? adjustments : rules.adjustments,
       copy: copy.headline || copy.lead ? copy : undefined,
-      photo,
-      from: adjustments.length || copy.headline || copy.lead || photo ? "AI planner" : "wording",
+      // A borrowed picture comes from the other look, never from a new search.
+      photo: borrow?.assets.includes("photo") ? undefined : photo,
+      borrow,
+      from: adjustments.length || copy.headline || copy.lead || photo || (borrow && !rules.borrow) ? "AI planner" : "wording",
     };
   } catch (error) {
     console.warn("[refine] AI edit planner failed; using the wording rules", error instanceof Error ? error.message.slice(0, 120) : "");
@@ -183,19 +204,27 @@ async function findEditPhoto(site: StoredSite, subject: string, step: number): P
  * Three stored edits of `stored` (as asked, a half step more, a full step more), each a full look the owner
  * can preview and choose. Everything but the requested change is copied as is.
  */
-export async function buildEdits(stored: StoredSite, edit: LookEdit, feedback: string[]): Promise<EditedLook[]> {
+export async function buildEdits(stored: StoredSite, edit: LookEdit, feedback: string[], lender?: StoredSite): Promise<EditedLook[]> {
   const { newPageId, readImage, saveImage, saveSite } = await import("@/lib/pages.server");
   const design = stored.design!;
-  const base: LookTune["base"] = design.tune?.base ?? { palette: stored.palette, motifs: [...design.motifs], name: design.name };
+  const borrowed = lender && edit.borrow ? edit.borrow.assets : [];
+  const lenderName = lender ? (lender.design?.tune?.base.name ?? lender.design?.name ?? lender.name) : "";
+  // Colors borrowed from another look become this look's new base (later tweaks are computed from them).
+  const basePalette = borrowed.includes("palette") && lender ? { ...lender.palette } : (design.tune?.base.palette ?? stored.palette);
+  const base: LookTune["base"] = { ...(design.tune?.base ?? { palette: stored.palette, motifs: [...design.motifs], name: design.name }), palette: basePalette };
   const intensity = edit.adjustments.length > 0;
   const scales = intensity ? variationScales(edit.adjustments) : [1];
+  // The lender's hero photo (bytes + credit), when the owner asked to use its picture here.
+  const lenderHero = borrowed.includes("photo") && lender ? lender.pages.find((p) => p.slug === "home")?.sections?.[0]?.image : undefined;
+  const lenderBytes = lender && lenderHero ? await readImage(lender.id, lenderHero) : undefined;
+  const lenderImage = lender && lenderHero ? lender.images?.[lenderHero] : undefined;
   const home = stored.pages.find((p) => p.slug === "home");
   const heroSection = home?.sections?.[0];
   const photoHero = heroSection?.type === "hero-photo";
   // Where the headline sits over the photo: the left side (cinematic) or the lower part (full-bleed).
   const cinematic = photoHero && design.heroStyle === "cinematic";
   const heroName = heroSection?.image;
-  const heroBytes = heroName ? await readImage(stored.id, heroName) : undefined;
+  const heroBytes = lenderBytes ?? (heroName ? await readImage(stored.id, heroName) : undefined);
   const luma = heroBytes ? heroLuma(heroBytes.bytes, heroBytes.type, cinematic ? { x0: 0, x1: 0.5, y0: 0.2, y1: 0.85 } : { x0: 0, x1: 1, y0: 0.45, y1: 0.95 }) : undefined;
   const out: EditedLook[] = [];
   for (const [step, scale] of scales.entries()) {
@@ -204,7 +233,7 @@ export async function buildEdits(stored: StoredSite, edit: LookEdit, feedback: s
     const levels = addLevels(design.tune?.levels, edit.adjustments, scale);
     const numbers = tuneNumbers(levels);
     const scrimMin = photoHero ? scrimFloor(luma, numbers.brightness, cinematic ? 0.72 : 0.8) : 0;
-    const palette = intensity ? tunePalette(base.palette, levels) : stored.palette;
+    const palette = intensity ? tunePalette(base.palette, levels) : borrowed.includes("palette") ? { ...base.palette } : stored.palette;
     const notes: string[] = [];
     const pages = stored.pages.map((p) => ({ ...p, sections: p.sections?.map((s) => ({ ...s })) }));
     const hero = pages.find((p) => p.slug === "home")?.sections?.[0];
@@ -217,6 +246,18 @@ export async function buildEdits(stored: StoredSite, edit: LookEdit, feedback: s
       notes.push("new intro text");
     }
     const images: Record<string, StoredImage> = { ...(stored.images ?? {}) };
+    if (hero && lenderBytes) {
+      await saveImage(id, "hero", lenderBytes.type, lenderBytes.bytes);
+      images.hero = { ...(lenderImage ?? { source: "photo", alt: "" }), name: "hero", type: lenderBytes.type };
+      hero.image = "hero";
+      notes.push(`photo from “${lenderName}”`);
+    }
+    if (borrowed.includes("palette")) notes.push(`colors from “${lenderName}”`);
+    let fonts = design.fonts;
+    if (borrowed.includes("fonts") && lender?.design) {
+      fonts = { ...lender.design.fonts };
+      notes.push(`fonts from “${lenderName}”`);
+    }
     if (hero && edit.photo) {
       const found = await findEditPhoto(stored, edit.photo, step);
       if (found) {
@@ -227,14 +268,15 @@ export async function buildEdits(stored: StoredSite, edit: LookEdit, feedback: s
       } else notes.push(`couldn't find a photo of “${edit.photo}”, kept the current one`);
     }
     const variant = variantLabel(edit.adjustments, Math.min(step, 2) as 0 | 1 | 2, !intensity ? notes[0] : undefined);
-    const changed = changedLine(edit.adjustments, scale, photoHero, intensity ? notes : notes.slice(1));
+    const changed = changedLine(edit.adjustments, scale, photoHero, notes);
     const tune: LookTune = { levels, base, scrimMin: Math.round(scrimMin * 1000) / 1000, variant, changed };
     const site: StoredSite = {
       ...stored,
       id,
       createdAt: new Date().toISOString(),
       palette,
-      design: { ...design, palette, motifs: (levels["less-busy"] ?? 0) > 0 ? [] : (base.motifs as typeof design.motifs), tune },
+      fonts: borrowed.includes("fonts") ? fonts : stored.fonts,
+      design: { ...design, palette, fonts, motifs: (levels["less-busy"] ?? 0) > 0 ? [] : (base.motifs as typeof design.motifs), tune },
       images,
       pages,
       facts: stored.facts ? { ...stored.facts, feedback } : stored.facts,
@@ -242,7 +284,7 @@ export async function buildEdits(stored: StoredSite, edit: LookEdit, feedback: s
         ? {
             ...stored.trace,
             request: { ...stored.trace.request, feedback },
-            steps: [...stored.trace.steps, { step: `edit of “${base.name}” (${edit.how ?? "named"}; read by ${edit.from})`, ai: edit.from === "AI planner", ownerRequest: true }],
+            steps: [...stored.trace.steps, { step: `edit of “${base.name}” (${edit.how ?? "named"}; read by ${edit.from})${borrowed.length ? ` · borrowed ${borrowed.join(" + ")} from “${lenderName}” (${lender!.id})` : ""}`, ai: edit.from === "AI planner", ownerRequest: true }],
           }
         : stored.trace,
     };
@@ -255,7 +297,7 @@ export async function buildEdits(stored: StoredSite, edit: LookEdit, feedback: s
       measured: { backgroundBefore: relLumOf(base.palette.background), backgroundAfter: relLumOf(palette.background), scrim: n.scrim, brightness: n.brightness },
     });
     console.info(
-      `[refine] edited “${base.name}” (${stored.id} -> ${id}) ${variant}: ${JSON.stringify(levels)} · bg ${base.palette.background}->${palette.background} · scrim ${n.scrim}${scrimMin ? ` (AA floor ${tune.scrimMin}, hero luma p80 ${luma?.toFixed(2)})` : ""} · photo brightness ${n.brightness}`,
+      `[refine] edited “${base.name}” (${stored.id} -> ${id}) ${variant}${borrowed.length ? ` · borrowed ${borrowed.join(" + ")} from “${lenderName}” (${lender!.id})` : ""}: ${JSON.stringify(levels)} · bg ${base.palette.background}->${palette.background} · scrim ${n.scrim}${scrimMin ? ` (AA floor ${tune.scrimMin}, hero luma p80 ${luma?.toFixed(2)})` : ""} · photo brightness ${n.brightness}`,
     );
   }
   return out;
