@@ -6,7 +6,7 @@
  *
  *   node scripts/note-photo-e2e.mjs https://www.morganplumbingokc.com/ live-preview-shots/note-photo-mock
  */
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { chromium } from "playwright";
 
@@ -42,6 +42,7 @@ const cards = await page.locator("[data-look]").evaluateAll((list) =>
     id: card.getAttribute("data-look"),
     name: card.querySelector("h3")?.textContent,
     photos: card.querySelector("[data-look-photos]")?.textContent,
+    layout: card.querySelector("[data-look-layout]")?.textContent,
     trace: card.querySelector("[data-look-trace]")?.textContent?.slice(0, 1500),
   })),
 );
@@ -53,11 +54,34 @@ for (const [i, card] of cards.entries()) {
   await site.screenshot({ path: join(outDir, `02-look-${i + 1}-top.png`) });
   card.heroType = await site.locator("section").first().getAttribute("class").catch(() => null);
   card.credit = await site.locator(".photo-credit").first().innerText().catch(() => null);
+  card.bodyClass = await site.locator("body").getAttribute("class").catch(() => null);
+  card.sections = await site.locator("main section, body > section, section.sec").evaluateAll((els) => els.map((el) => (el.className.match(/s-[a-z-]+/)?.[0] ?? "?") + (el.className.match(/ v-[a-z-]+/)?.[0]?.trim().replace(/^v-/, "/") ?? "")));
+  // Lazy images below the fold load only when scrolled into view.
+  await site.evaluate(async () => {
+    for (let y = 0; y < document.body.scrollHeight; y += 500) {
+      window.scrollTo(0, y);
+      await new Promise((r) => setTimeout(r, 120));
+    }
+    window.scrollTo(0, 0);
+  });
+  await site.waitForLoadState("networkidle");
+  await site.waitForTimeout(600);
+  await site.screenshot({ path: join(outDir, `04-look-${i + 1}-full.png`), fullPage: true });
   if (i === 0 && card.credit) {
     await site.locator(".photo-credit").first().scrollIntoViewIfNeeded();
     await site.screenshot({ path: join(outDir, "03-look-1-footer-credit.png") });
   }
 }
+// Side by side: the three look tops, and the three full pages (below the fold).
+const sideBySide = async (files, name, width) => {
+  const imgs = files.map((f) => `<img src="data:image/png;base64,${readFileSync(join(outDir, f)).toString("base64")}">`).join("");
+  const board = await browser.newPage({ viewport: { width, height: 400 } });
+  await board.setContent(`<style>body{margin:0;display:flex;gap:12px;background:#ddd;align-items:flex-start;padding:12px}img{width:calc((100% - 24px)/3);display:block;box-shadow:0 2px 8px rgba(0,0,0,.25)}</style>${imgs}`);
+  await board.screenshot({ path: join(outDir, name), fullPage: true });
+  await board.close();
+};
+await sideBySide(cards.map((_, i) => `02-look-${i + 1}-top.png`), "05-tops-side-by-side.png", 2400);
+await sideBySide(cards.map((_, i) => `04-look-${i + 1}-full.png`), "06-full-pages-side-by-side.png", 1500);
 const summary = { target, note, formcarryCalls: sent.length, cards };
 writeFileSync(join(outDir, "summary.json"), JSON.stringify(summary, null, 2));
 console.log(JSON.stringify(summary, null, 2));

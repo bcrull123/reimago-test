@@ -136,6 +136,29 @@ Every image prompt also carries the owner's words as "The business owner's reque
 
 It contains no secrets.
 
+### Three looks that really differ
+
+Bob's Pauls Valley run (on a2b92fb) gave three looks that were the same except for the wording. Each one had the same Wikimedia photo as a full-bleed hero, in the same layout. `look-variety.ts` now keeps the looks apart. `directionsFor` runs `diversifyDirections`, so each look gets its own:
+- **hero treatment** (`heroStyle`), chosen by archetype in priority order:
+  - **caption** (editorial / minimal): split hero with the text on a light panel and the photo in a frame with a caption (title and credit);
+  - **cinematic** (dark premium): full-bleed photo with a strong side overlay, a low focal point and a tighter crop;
+  - **collage** (playful / bold / warm): a color-block hero with the photo in a tilted, rounded, duotone frame, a second photo tile and a big stamp.
+- **header:** solid bar, transparent overlay, or centered logo with the menu below. An overlay header with no photo behind it becomes a dark bar.
+- **button shape:** square, outline or pill.
+- **footer:** columns, minimal or statement.
+- **below-the-fold recipe** (`layout`), applied by `arrangeSections` (it adds no new copy or facts):
+  - *editorial*: statement, then a list of services, then the feature section;
+  - *showcase*: feature, then a photo mosaic (gallery) when there are 3 or more photos, then image cards or a bento grid of up to 5 services;
+  - *bold*: a services ticker (marquee), icon tiles, then process.
+
+The AI art director is asked for a different `heroStyle`, header, buttons and footer for each look. If two looks still clash, `diversifyDirections` re-rolls. `lookSignature` and `similarities` compare the hero variant, header, buttons, section sequence and photo treatment. The tests require that the three Pauls Valley looks share none of these. The signature is saved in the preview record as `trace.layout`, and the card shows a "Layout: …" line.
+
+**Several photos of the requested scene.** `findWebPhotos` returns up to 3 matching free-license photos (the site's own match counts first). The best match goes to the cinematic look, the next to the caption look, then the collage look (`photoRank`). With fewer photos than looks:
+- when AI images are on, the extra look gets an AI photo of the scene;
+- otherwise it shows the same photo in its own treatment.
+
+Each look's "Photo:" line and footer credit name its own photo. A photo filed under the town's historic district (title or category) counts as downtown.
+
 ### When the form is sent
 
 **Nothing is sent when the looks appear.** The email, website and note are collected up front and held in memory.
@@ -274,6 +297,7 @@ The old domain step (step 12) is gone. Wizard answers are kept in memory only (s
 - `src/lib/preview/sections.ts`: section types, validation (`normalizeSections`), mock composer, HTML templates.
 - `src/lib/preview/theme.ts`: the design-system CSS. `legacy-theme.ts` keeps old (v2) previews rendering.
 - `src/lib/preview/images.server.ts`: real-photo selection/storage and generated images.
+- `src/lib/preview/look-variety.ts`: makes the three looks different (hero treatment, header, buttons, footer, section recipe), plus the distinctness check.
 - `src/lib/preview/image-prompts.ts`: image prompts (the owner's scene first) and the card's photo line. `web-photo.ts` handles place, scene words, matching, licenses and ranking (pure). `web-photo.server.ts` runs the Openverse and Commons search and the download.
 - `src/lib/preview/critique.server.ts`: screenshot + critique-and-revise.
 - `src/lib/preview/builder.server.ts`: plan, directions, `buildLook`, `finishSite`.
@@ -314,4 +338,4 @@ Set `NOTE` and `FEEDBACK` to change the text it uses.
 
 The last argument picks which look to choose (0–2); `APP_URL` points the script at another port. The e2e scripts intercept Formcarry, so no real lead is sent. The fake AI server deliberately returns an invented phone, email, stats and review so you can see the validators remove them.
 
-`scripts/note-photo-e2e.mjs <url> <outDir>` (`NOTE`, default "use the brick streets") submits the form with a note. It screenshots the cards (photo line and "How your request was used") and each look's top. It also takes a footer shot when there is a photo credit. Each look's hero image, hero type and credit go in `summary.json`. Formcarry is intercepted and nothing is chosen. Example: `NOTE="Use a photo of the downtown brick streets as background" node scripts/note-photo-e2e.mjs https://www.paulsvalley.com/ live-preview-shots/note-photo-paulsvalley-mock`.
+`scripts/note-photo-e2e.mjs <url> <outDir>` (`NOTE`, default "use the brick streets") submits the form with a note. It screenshots the cards (photo line and "How your request was used") and each look's top. It also takes a footer shot when there is a photo credit, plus full-page shots and side-by-side boards of the three look tops (`05-tops-side-by-side.png`) and full pages (`06-full-pages-side-by-side.png`). Each look's hero image, hero type and credit go in `summary.json`. Formcarry is intercepted and nothing is chosen. Example: `NOTE="Use a photo of the downtown brick streets as background" node scripts/note-photo-e2e.mjs https://www.paulsvalley.com/ live-preview-shots/note-photo-paulsvalley-mock`.
