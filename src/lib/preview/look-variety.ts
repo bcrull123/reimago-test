@@ -214,6 +214,7 @@ export function similarities(a: LookSignature, b: LookSignature): string[] {
 
 /** "Layout: full-bleed cinematic hero · transparent header · outline buttons" for the look card (from what was built). */
 export function layoutLine(design: DesignDirection, builtHero?: string): string | undefined {
+  if (design.custom && !design.custom.failed) return `Layout: designed from scratch · concept “${design.custom.brief.concept}”`;
   if (!design.heroStyle) return undefined;
   // A panorama hero is a type hero WITH a photo strip; without a photo it is built as "hero-type/plain".
   const noPhoto = builtHero?.startsWith("hero-type") && builtHero !== "hero-type/panorama";

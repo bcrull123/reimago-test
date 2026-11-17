@@ -4,6 +4,7 @@ import { darkSurface, designClasses, fontsHref, siteCss } from "./theme.ts";
 import { logoTreatment } from "./logo.ts";
 import { legacyCss } from "./legacy-theme.ts";
 import { renderSection, type RenderContext } from "./sections.ts";
+import { customFontsHref, paletteVars, type CustomDesign } from "./custom-design.ts";
 import type { AiDebug, PreviewTrace, DesignDirection, LogoMeta, Section, SiteFacts, SitePalette, SitePlan, StoredImage } from "./types.ts";
 
 export const FORMCARRY_ENDPOINT = "https://formcarry.com/s/NipZS0fF4w4";
@@ -59,6 +60,8 @@ export type StoredSite = {
   trace?: PreviewTrace;
   /** How the scraped logo is shown on light and dark surfaces (see logo.server.ts). */
   logoMeta?: LogoMeta;
+  /** The from-scratch look's homepage (freeform HTML/CSS by Grok, sanitized + validated); other pages use the template. */
+  custom?: CustomDesign;
 };
 
 export type RenderOptions = {
@@ -169,6 +172,10 @@ export function renderSitePage(site: StoredSite, slug: string, options?: RenderO
     ? `MOCK PREVIEW (PREVIEW_MOCK=1): layout and copy were assembled without AI from the scraped facts.`
     : `Preview of a redesign${site.mode === "reimagine" ? ` for ${escapeHtml(site.host)}` : ""}${site.design ? ` · Look: ${escapeHtml(site.design.name)}` : ""}. Built by Reimago. Not the live site.`;
 
+  if (slug === "home" && v3 && site.custom && !site.design?.custom?.failed && !page.pending) {
+    return customDocument(site, site.custom, { ribbon: options?.ribbon === false ? "" : ribbon, logoOn, hasLogo, link, year: new Date(site.createdAt).getFullYear(), options });
+  }
+
   let body: string;
   if (page.pending) body = pendingBody(site, page);
   else if (v3 && page.sections) {
@@ -266,6 +273,42 @@ ${body}
 ${form}
 </main>
 ${footer}
+</body>
+</html>`;
+}
+
+/** The from-scratch homepage: our ribbon, Grok's (sanitized) page, then our legal/photo-credit line. */
+function customDocument(
+  site: StoredSite,
+  custom: CustomDesign,
+  o: { ribbon: string; logoOn: (surface: string) => string; hasLogo: boolean; link: (to: string) => string; year: number; options?: RenderOptions },
+): string {
+  const brand = (surface: "light" | "dark") =>
+    o.hasLogo ? o.logoOn(surface === "dark" ? darkSurface(site.palette) : site.palette.background) : `<span class="wordmark">${escapeHtml(site.name)}</span>`;
+  const body = rewriteTokens(custom.html, site.id, "home", o.options).replace(/@brand:(light|dark)/g, (_, s: "light" | "dark") => brand(s));
+  const css = rewriteTokens(custom.css, site.id, "home", o.options);
+  const fonts = customFontsHref(custom.fonts);
+  return `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>${escapeHtml(site.name)}</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="${escapeHtml(fonts)}">
+<style>*,*::before,*::after{box-sizing:border-box}html,body{margin:0;overflow-x:hidden}img,svg{max-width:100%}body{font-family:var(--font-body);background:var(--background);color:var(--text)}
+${paletteVars(site.palette, custom.fonts)}
+.logo{display:inline-block}.logo img{display:block;height:46px;width:auto;max-width:200px;object-fit:contain}.logo.multiply img{mix-blend-mode:multiply}.logo.knockout-white img{filter:brightness(0) invert(1)}.logo.knockout-black img{filter:brightness(0)}.logo.plate{background:var(--plate);padding:7px 14px;border-radius:12px;box-shadow:0 1px 2px rgba(0,0,0,.18),0 6px 18px -8px rgba(0,0,0,.35)}.logo.plate img{height:36px;max-width:180px}.wordmark{font-family:var(--font-heading);font-weight:700;font-size:1.3rem;letter-spacing:-.01em}
+</style>
+<style>${css}</style>
+<style>.preview-ribbon{position:relative;z-index:2147483000;background:#111;color:#fff;font:600 12px/1.4 system-ui,sans-serif;text-align:center;padding:6px 10px}.rx-legal{display:flex;flex-wrap:wrap;gap:.4rem 1.2rem;justify-content:center;padding:14px 16px;background:#111;color:#e8e8e8;font:12px/1.5 system-ui,sans-serif}.rx-legal a{color:#fff}.rx-legal .photo-credit{opacity:.85}</style>
+</head>
+<body class="custom-look">
+${o.ribbon ? `<div class="preview-ribbon">${o.ribbon}</div>` : ""}
+${body}
+<div class="rx-legal"><span>© ${o.year} ${escapeHtml(site.name)}</span>${photoCredit(site)}<span>Preview by Reimago · designed from scratch (“${escapeHtml(custom.brief.concept)}”)</span></div>
 </body>
 </html>`;
 }

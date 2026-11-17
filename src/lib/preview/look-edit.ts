@@ -149,7 +149,10 @@ export function cleanAdjustments(raw: unknown): Adjustment[] {
 
 // ------------------------------------------------------------------------------------------- which look
 
-export type LookRef = { id: string; name: string; archetype: Archetype; index: number; background?: string; primary?: string };
+export type LookRef = { id: string; name: string; archetype: Archetype; index: number; background?: string; primary?: string; custom?: boolean };
+
+/** "the custom one", "custom design", "the from-scratch one", "bespoke": the from-scratch look. */
+const CUSTOM_LABEL = /\bcustom(?:[\s-]*design)?(?:'?s)?\b|\bfrom[\s-]*scratch\b|\bbespoke\b/g;
 
 const STOP = new Set(["the", "and", "a", "an", "of", "look", "one", "with", "&"]);
 const norm = (s: string) => s.toLowerCase().replace(/[’']/g, "'").replace(/[^a-z0-9&' ]+/g, " ").replace(/\s+/g, " ").trim();
@@ -274,7 +277,8 @@ export function findLookRefs(text: string, looks: LookRef[]): LookMention[] {
   }
   // Style labels.
   const byArchetype = (a: Archetype) => {
-    const hit = looks.filter((l) => l.archetype === a);
+    // The from-scratch look keeps a template archetype for its sub-pages, but is never "the playful one".
+    const hit = looks.filter((l) => l.archetype === a && !l.custom);
     return hit.length === 1 ? hit[0] : undefined;
   };
   for (const [archetype, pattern] of LABELS) {
@@ -284,6 +288,13 @@ export function findLookRefs(text: string, looks: LookRef[]): LookMention[] {
       if (archetype === "editorial" && !/^edit(?:orial|oral|orail|orial|torial|orials?|oral's)/.test(m[0]) && lev(m[0].replace(/'?s$/, ""), "editorial") > 1) continue;
       if (archetype === "playful" && lev(m[0].replace(/'?s$/, ""), "playful") > 1) continue;
       add(byArchetype(archetype), `style “${archetype}”`, at, at + m[0].length - (m[0].startsWith("the ") ? 4 : 0));
+    }
+  }
+  const custom = looks.filter((l) => l.custom);
+  if (custom.length === 1) {
+    for (const m of t.matchAll(CUSTOM_LABEL)) {
+      if (ADJECTIVAL.test(t.slice(0, m.index!)) && !/^\s*(?:one|look|version|design|option|card)\b/.test(t.slice(m.index! + m[0].length))) continue;
+      add(custom[0], "the custom (from-scratch) look", m.index!, m.index! + m[0].length);
     }
   }
   let pos = 0;
@@ -383,7 +394,7 @@ export function findTargetLook(text: string, looks: LookRef[], focusedId?: strin
     }
     for (const [pattern, archetypes] of ARCHETYPE_WORDS) {
       if (!pattern.test(match[1]!) && !pattern.test(word)) continue;
-      const hit = looks.filter((l) => archetypes.includes(l.archetype));
+      const hit = looks.filter((l) => archetypes.includes(l.archetype) && !l.custom);
       if (hit.length === 1) return { id: hit[0]!.id, how: `the ${match[1]} one` };
     }
     const hue = COLOR_HUES[word];

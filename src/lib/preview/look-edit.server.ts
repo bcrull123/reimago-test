@@ -40,6 +40,7 @@ export function lookRefs(sites: StoredSite[]): LookRef[] {
     index: s.lookIndex ?? i,
     background: s.palette.background,
     primary: s.palette.primary,
+    custom: Boolean(s.custom && !s.design?.custom?.failed) || undefined,
   }));
 }
 
@@ -76,7 +77,7 @@ export async function planEdit(text: string, looks: LookRef[], focusedId: string
         {
           role: "system",
           content: `You are editing ONE existing website look from the owner's feedback. The owner sees these looks (left to right):
-${looks.map((l, i) => `${i + 1}. "${l.name}" (${l.archetype}${l.id === focusedId ? ", currently previewed" : ""})`).join("\n")}
+${looks.map((l, i) => `${i + 1}. "${l.name}" (${l.custom ? "designed from scratch; the owner may call it “the custom one”" : l.archetype}${l.id === focusedId ? ", currently previewed" : ""})`).join("\n")}
 Return ONLY JSON: {"targetLook": exact look name or null, "adjustments": [{"type": one of lighten|darken|more-contrast|less-contrast|saturate|desaturate|warmer|cooler|bigger-text|smaller-text|more-space|less-space|more-color|less-busy, "amount": "slight"|"medium"|"strong"}], "copy": {"headline"?: string, "lead"?: string} or null, "photo": string or null, "borrowFrom": exact look name or null, "borrow": subset of ["photo","palette","fonts"]}
 Rules:
 - targetLook only when the feedback names or clearly points at one look (its name, its style such as "Dark Premium" or "editorial", "the second one", "the dark one", "this one" = the currently previewed look). Otherwise null.
@@ -213,7 +214,8 @@ export async function buildEdits(stored: StoredSite, edit: LookEdit, feedback: s
   const basePalette = borrowed.includes("palette") && lender ? { ...lender.palette } : (design.tune?.base.palette ?? stored.palette);
   const base: LookTune["base"] = { ...(design.tune?.base ?? { palette: stored.palette, motifs: [...design.motifs], name: design.name }), palette: basePalette };
   const intensity = edit.adjustments.length > 0;
-  const scales = intensity ? variationScales(edit.adjustments) : [1];
+  // The from-scratch look is edited once, in place, by Grok (no three variations: each would be a full AI call).
+  const scales = intensity ? (stored.custom ? [variationScales(edit.adjustments)[0]] : variationScales(edit.adjustments)) : [1];
   // The lender's hero photo (bytes + credit), when the owner asked to use its picture here.
   const lenderHero = borrowed.includes("photo") && lender ? lender.pages.find((p) => p.slug === "home")?.sections?.[0]?.image : undefined;
   const lenderBytes = lender && lenderHero ? await readImage(lender.id, lenderHero) : undefined;
@@ -288,12 +290,22 @@ export async function buildEdits(stored: StoredSite, edit: LookEdit, feedback: s
           }
         : stored.trace,
     };
+    if (stored.custom && !design.custom?.failed) {
+      const { editCustom } = await import("./custom-design.server.ts");
+      const { aiAvailable, isMockMode } = await import("@/lib/ai-provider.server");
+      const request = feedback.at(-1) ?? "";
+      const done = await editCustom(stored, palette, request, edit.adjustments.map((a) => `${a.type} (${a.amount})`), aiAvailable() && !isMockMode());
+      site.custom = done.design;
+      site.palette = done.palette;
+      site.design = { ...site.design!, palette: done.palette };
+      tune.changed = `${changed} · ${done.how}`;
+    }
     await saveSite(site);
     const n = tuneNumbers(levels, tune.scrimMin);
     out.push({
       site,
       variant,
-      changed,
+      changed: tune.changed ?? changed,
       measured: { backgroundBefore: relLumOf(base.palette.background), backgroundAfter: relLumOf(palette.background), scrim: n.scrim, brightness: n.brightness },
     });
     console.info(
