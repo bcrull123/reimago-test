@@ -18,7 +18,7 @@ import { googleQueries, normalizeImages, rejectReason, scoreGoogleImage, type Go
 import { placeOf } from "./web-photo.ts";
 import { businessKind, isCivic } from "./image-prompts.ts";
 import type { Archetype, SiteFacts } from "./types.ts";
-import { assignHeroes, heroScore, withDuplicateSigns, type HeroCandidate, type HeroPick } from "./hero-pick.ts";
+import { assignHeroes, hamming, heroScore, withDuplicateSigns, type HeroCandidate, type HeroPick } from "./hero-pick.ts";
 
 type Fetcher = (url: string) => Promise<Photo | null | undefined>;
 
@@ -170,7 +170,7 @@ export async function searchGooglePhotos(
   const place = placeOf(facts);
   const trade = businessKind(facts);
   const kind = isCivic(facts) ? "downtown" : /^(other|local business)$/i.test(trade) ? facts.services[0] || "" : trade;
-  const queries = proactive?.length ? proactive.slice(0, 3) : googleQueries(scene, place, kind);
+  const queries = proactive?.length ? proactive.slice(0, 5) : googleQueries(scene, place, kind);
   const rejected: Record<string, number> = {};
   const seen = new Map<string, { img: GoogleImage; q: string }>();
   if (proactive?.length) {
@@ -283,8 +283,19 @@ export type PlannedPhotos = {
 };
 
 /** Stable 16-hex key for a site + its planner queries (the prefetch is stored under it, server-side only). */
-export function plannedKey(facts: Pick<SiteFacts, "sourceUrl" | "name">, queries: string[]): string {
-  return createHash("sha256").update(`${facts.sourceUrl}|${facts.name}|${queries.join("|").toLowerCase()}`).digest("hex").slice(0, 16);
+export function plannedKey(facts: Pick<SiteFacts, "sourceUrl" | "name">, queries: string[], avoid?: PhotoAvoid): string {
+  const extra = avoid && (avoid.keys.length || avoid.hashes.length) ? `|avoid:${[...avoid.keys, ...avoid.hashes].sort().join(",")}` : "";
+  return createHash("sha256").update(`${facts.sourceUrl}|${facts.name}|${queries.join("|").toLowerCase()}${extra}`).digest("hex").slice(0, 16);
+}
+
+/** Photos shown in earlier rounds of the session (SitePlan.avoidPhotos). */
+export type PhotoAvoid = { keys: string[]; hashes: string[] };
+
+/** Was this photo (by URL / source page, or by its perceptual hash) already shown in an earlier round? */
+export function shownBefore(avoid: PhotoAvoid | undefined, urls: (string | undefined)[], hash: string | undefined): boolean {
+  if (!avoid) return false;
+  if (urls.some((u) => u && avoid.keys.includes(u))) return true;
+  return hash ? avoid.hashes.some((h) => hamming(h, hash) <= 10) : false;
 }
 
 /**
@@ -297,7 +308,7 @@ export async function prefetchPlannedPhotos(
   queries: string[],
   useVision: boolean,
   deadline: number,
-  opts: { archetypes?: Promise<(Archetype | undefined)[] | undefined>; site?: boolean } = {},
+  opts: { archetypes?: Promise<(Archetype | undefined)[] | undefined>; site?: boolean; avoid?: PhotoAvoid } = {},
 ): Promise<PlannedPhotos | undefined> {
   if (!photoSearchEnabled() || !queries.length) return undefined;
   const { measurePhoto, siteHeroCandidates } = await import("@/lib/preview/hero-pick.server");
@@ -318,9 +329,11 @@ export async function prefetchPlannedPhotos(
       stats: m?.stats,
       hash: m?.hash,
       relevance: p.relevance ?? 1,
+      shownBefore: shownBefore(opts.avoid, [p.temp.imageUrl, p.temp.sourcePage], m?.hash) || undefined,
     };
     return { temp: p.temp, width: p.photo.width, height: p.photo.height, candidate };
   });
+  for (const c of site) if (shownBefore(opts.avoid, [c.id], c.hash)) c.shownBefore = true;
   // The looks' archetypes (from the directions step, running alongside) let each photo suit its look's mood.
   const archetypes = ((await opts.archetypes?.catch(() => undefined)) ?? [undefined, undefined, undefined]).slice(0, 3);
   const all = [...photos.map((p) => p.candidate!), ...site];
@@ -337,12 +350,12 @@ export async function prefetchPlannedPhotos(
   };
   console.info(`[photo-search] proactive ${JSON.stringify(found.queries)}: ${found.seen} results, ${planned.photos.length} usable (${found.ranking ?? "score"})${Object.keys(found.rejected).length ? `; skipped ${JSON.stringify(found.rejected)}` : ""}; ${site.length} site photo${site.length === 1 ? "" : "s"} competing`);
   for (const c of withDuplicateSigns(all.map(heroScore)).sort((a, b) => b.score - a.score)) {
-    console.info(`[photo-search]   candidate ${c.source} score ${c.score}${c.sign ? " SIGN" : ""} subject "${c.subject || "?"}" “${(c.visionSubject ? `${c.visionSubject} / ` : "") + c.text.slice(0, 60)}”${c.stats ? ` brightness ${c.stats.mean} contrast ${c.stats.contrast}` : ""}`);
+    console.info(`[photo-search]   candidate ${c.source} score ${c.score}${c.sign ? " SIGN" : ""}${c.shownBefore ? " SHOWN-BEFORE" : ""} subject "${c.subject || "?"}" “${(c.visionSubject ? `${c.visionSubject} / ` : "") + c.text.slice(0, 60)}”${c.stats ? ` brightness ${c.stats.mean} contrast ${c.stats.contrast}` : ""}`);
   }
   for (const p of picks) console.info(`[photo-search] pick look ${p.index + 1}${archetypes[p.index] ? ` (${archetypes[p.index]})` : ""}: ${p.source} “${all.find((c) => c.id === p.id)?.text.slice(0, 60)}” · ${p.reason}`);
   try {
     const { saveImage } = await import("@/lib/pages.server");
-    await saveImage(plannedKey(facts, queries), "photo-search", "application/json", Buffer.from(JSON.stringify(planned)));
+    await saveImage(plannedKey(facts, queries, opts.avoid), "photo-search", "application/json", Buffer.from(JSON.stringify(planned)));
   } catch {
     // In-memory cache still serves this instance.
   }
@@ -350,11 +363,11 @@ export async function prefetchPlannedPhotos(
 }
 
 /** The stored proactive ranking for this site + queries; searched now if the plan step's prefetch isn't there. */
-export async function plannedPhotos(facts: SiteFacts, queries: string[], useVision: boolean, deadline: number): Promise<PlannedPhotos | undefined> {
+export async function plannedPhotos(facts: SiteFacts, queries: string[], useVision: boolean, deadline: number, avoid?: PhotoAvoid): Promise<PlannedPhotos | undefined> {
   if (!photoSearchEnabled() || !queries.length) return undefined;
   try {
     const { readImage } = await import("@/lib/pages.server");
-    const stored = await readImage(plannedKey(facts, queries), "photo-search");
+    const stored = await readImage(plannedKey(facts, queries, avoid), "photo-search");
     if (stored?.type === "application/json") {
       const data = JSON.parse(stored.bytes.toString("utf8")) as PlannedPhotos;
       if (Array.isArray(data.photos) && Date.now() - Date.parse(data.at) < 6 * 3_600_000) return data;
@@ -362,5 +375,5 @@ export async function plannedPhotos(facts: SiteFacts, queries: string[], useVisi
   } catch {
     // fall through to a fresh (cached) search
   }
-  return prefetchPlannedPhotos(facts, queries, useVision, deadline);
+  return prefetchPlannedPhotos(facts, queries, useVision, deadline, { avoid });
 }

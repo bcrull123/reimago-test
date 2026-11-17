@@ -13,6 +13,7 @@
 import { aiAvailable, aiFallbackModel, aiModel, chatJson, isMockMode } from "@/lib/ai-provider.server";
 import { BODY_FONTS, HEADING_FONTS, defaultPalette, hashString, safeFont, safePalette } from "@/lib/preview/theme";
 import { ARCHETYPES, type DesignDirection, type PlanPage, type PlanSection, type Section, type SiteFacts, type SitePlan, type StoredImage, type AiDebug } from "@/lib/preview/types";
+import { lookName } from "@/lib/preview/archetype-label";
 import { PRESETS, archetypesFor, mockDirections, normalizeDirection, HEADING_FONTS as DISPLAY_FONTS, BODY_FONTS as TEXT_FONTS } from "@/lib/preview/design";
 import { SECTION_GUIDE, checkSections, composeImages, composeMockPage, corpusFor, type NormalizeContext } from "@/lib/preview/sections";
 import { redact } from "@/lib/ai-json";
@@ -25,7 +26,8 @@ import { arrangeSections, diversifyDirections, lookSignature, photoRank } from "
 import { findWebPhotos, webPhotosEnabled } from "@/lib/preview/web-photo.server";
 import type { Photo } from "@/lib/preview/images.server";
 import { imagePrompt, isCivic, sceneFor } from "@/lib/preview/image-prompts";
-import type { Archetype, ImageTrace, PreviewTrace } from "@/lib/preview/types";
+import type { Archetype, ImageTrace, PreviewTrace, PreviousRound } from "@/lib/preview/types";
+import { fromOklch, oklch, toOklab } from "@/lib/preview/look-edit";
 
 /** The owner's note + feedback rounds as a high-priority block at the end of a system prompt. */
 function requestBlock(facts: SiteFacts): string {
@@ -140,6 +142,15 @@ function mockPlan(facts: SiteFacts, variation: number): SitePlan {
   };
 }
 
+/** Earlier rounds' photo keys / hashes, as passed back by the browser (only ever used to skip photos). */
+function cleanAvoid(raw: unknown): SitePlan["avoidPhotos"] {
+  if (!raw || typeof raw !== "object") return undefined;
+  const r = raw as { keys?: unknown; hashes?: unknown };
+  const keys = (Array.isArray(r.keys) ? r.keys : []).filter((k): k is string => typeof k === "string" && /^https?:\/\//.test(k) && k.length < 600).slice(0, 40);
+  const hashes = (Array.isArray(r.hashes) ? r.hashes : []).filter((h): h is string => typeof h === "string" && /^[0-9a-f]{16}$/.test(h)).slice(0, 40);
+  return keys.length || hashes.length ? { keys, hashes } : undefined;
+}
+
 export function normalizePlan(raw: unknown, facts: SiteFacts, variation: number): SitePlan {
   const fallback = mockPlan(facts, variation);
   if (!raw || typeof raw !== "object") return fallback;
@@ -192,6 +203,7 @@ export function normalizePlan(raw: unknown, facts: SiteFacts, variation: number)
     photoSubject: cleanSubject(r.photoSubject ?? r.photo_subject) || undefined,
     photoIntent: ((v) => (v === "keep" || v === "find" || v === "none" ? v : undefined))(String(r.photoIntent ?? r.photo_intent ?? "").toLowerCase().trim()),
     imageQueries: ((q) => (q.length ? q : fallback.imageQueries))(cleanImageQueries(r.imageQueries ?? r.image_queries)),
+    avoidPhotos: cleanAvoid(r.avoidPhotos),
   };
 }
 
@@ -211,7 +223,23 @@ export async function prefetchForPlan(rawFacts: SiteFacts, plan: SitePlan, deadl
   const facts = withPlanSubject(rawFacts, plan);
   if (!photoSearchEnabled() || requestedPhoto(facts).intent !== "none" || !plan.imageQueries?.length) return undefined;
   const { prefetchPlannedPhotos } = await import("@/lib/preview/google-photo.server");
-  return prefetchPlannedPhotos(facts, plan.imageQueries, !isMockMode() && aiAvailable(), deadline, { archetypes, site: !wantsNewPhotos(facts) }).catch(() => undefined);
+  return prefetchPlannedPhotos(facts, proactiveQueries(facts, plan), !isMockMode() && aiAvailable(), deadline, { archetypes, site: !wantsNewPhotos(facts), avoid: plan.avoidPhotos }).catch(() => undefined);
+}
+
+/**
+ * The planner's queries, plus (in a regenerated round) two more scenes of the same town — courthouse, landmark,
+ * aerial view, park, depot, festival — so the new round has fresh photos to choose from.
+ */
+export function proactiveQueries(facts: SiteFacts, plan: Pick<SitePlan, "imageQueries" | "avoidPhotos">): string[] {
+  const base = plan.imageQueries ?? [];
+  const avoid = plan.avoidPhotos;
+  const town = placeOf(facts);
+  if (!avoid || !town?.city || !base.some((q) => q.toLowerCase().includes(town.city.toLowerCase()))) return base;
+  const at = `${town.city}${town.state ? ` ${town.state}` : ""}`;
+  const pool = [`${at} courthouse`, `${at} landmark`, `${at} aerial view`, `${at} park`, `${town.city} depot museum`, `${at} festival downtown`];
+  const fresh = pool.filter((q) => !base.some((b) => b.toLowerCase() === q.toLowerCase()));
+  const start = (avoid.keys.length + avoid.hashes.length) % fresh.length;
+  return [...base.slice(0, 3), fresh[start]!, fresh[(start + 1) % fresh.length]!];
 }
 
 export async function planSite(facts: SiteFacts, variation = 0): Promise<{ plan: SitePlan; note?: string }> {
@@ -265,20 +293,61 @@ const ARCHETYPE_GUIDE = `Archetypes (each look must use a different one):
 - "warm-craft": earthy warm palette, tactile textures, stamp badges, approachable serif + clean sans`;
 
 /** Three looks that differ in more than wording: hero treatment, header, buttons, footer and section order (look-variety.ts). */
-export async function directionsFor(facts: SiteFacts, variation = 0): Promise<{ directions: DesignDirection[]; note?: string; mock: boolean }> {
-  const result = await rawDirections(facts, variation);
-  return { ...result, directions: diversifyDirections(result.directions) };
+export async function directionsFor(
+  facts: SiteFacts,
+  variation = 0,
+  opts: { seed?: number; previous?: PreviousRound } = {},
+): Promise<{ directions: DesignDirection[]; note?: string; mock: boolean }> {
+  const result = await rawDirections(facts, variation, opts);
+  const prev = opts.previous;
+  let directions = result.directions;
+  if (prev?.names.length) directions = directions.map((d) => freshenDirection(d, prev));
+  // One name per look: its style ("Dark Premium"), the same on the card, the banner and in refine requests.
+  directions = directions.map((d) => ({ ...d, name: lookName(d.archetype) }));
+  directions = diversifyDirections(directions, opts.seed ?? 0, prev?.heroStyles ?? []);
+  console.info(`[looks] round${prev?.names.length ? " (regenerated)" : ""}: ${directions.map((d) => `“${d.name}” ${d.archetype}/${d.heroStyle}`).join(" · ")}${prev?.names.length ? ` · previous round: ${prev.names.map((n, i) => `“${n}” ${prev.archetypes[i] ?? ""}/${prev.heroStyles[i] ?? ""}`).join(" · ")}` : ""}`);
+  return { ...result, directions };
 }
 
-async function rawDirections(facts: SiteFacts, variation = 0): Promise<{ directions: DesignDirection[]; note?: string; mock: boolean }> {
+/** A regenerated look must not come back with (nearly) the same palette. */
+function freshenDirection(d: DesignDirection, prev: PreviousRound): DesignDirection {
+  let out = d;
+  const near = prev.palettes.some((p) => colorDistance(p.primary, d.palette.primary) < 0.09 && colorDistance(p.background, d.palette.background) < 0.06);
+  if (near) {
+    const turn = (hex: string, deg: number) => {
+      const c = oklch(hex);
+      return c.c < 0.03 ? hex : fromOklch(c.l, c.c, (c.h + deg) % 360);
+    };
+    const palette = { ...d.palette, primary: turn(d.palette.primary, 55), accent: turn(d.palette.accent, 55) };
+    out = { ...out, palette };
+  }
+  return out;
+}
+
+function colorDistance(a: string, b: string): number {
+  try {
+    const x = toOklab(a);
+    const y = toOklab(b);
+    return Math.hypot(x[0] - y[0], x[1] - y[1], x[2] - y[2]);
+  } catch {
+    return 1;
+  }
+}
+
+async function rawDirections(facts: SiteFacts, variation = 0, opts: { seed?: number; previous?: PreviousRound } = {}): Promise<{ directions: DesignDirection[]; note?: string; mock: boolean }> {
+  const avoid = { seed: opts.seed, archetypes: opts.previous?.archetypes, names: opts.previous?.names };
   if (isMockMode() || !aiAvailable()) {
     return {
-      directions: mockDirections(facts, variation),
+      directions: mockDirections(facts, variation, avoid),
       mock: true,
       note: isMockMode() ? "Mock mode (PREVIEW_MOCK=1): looks were picked from presets." : "AI is not configured, so looks were picked from presets.",
     };
   }
-  const suggested = archetypesFor(facts, variation);
+  const suggested = archetypesFor(facts, variation, avoid);
+  const prev = opts.previous;
+  const previousBlock = prev?.names.length
+    ? `\n- The owner already saw (and asked to change) these looks: ${prev.names.map((n, i) => `"${n}" (${prev.archetypes[i] ?? "?"}, ${prev.heroStyles[i] ?? "?"} hero, ${prev.palettes[i]?.primary ?? ""} on ${prev.palettes[i]?.background ?? ""})`).join("; ")}. This round must look VISIBLY different: mostly different archetypes, different hero treatments, clearly different palettes and type. Keep honoring the owner's note and feedback.`
+    : "";
   try {
     const raw = await chatJson<{ looks?: unknown[] }>({
       temperature: variation ? 0.95 : 0.85,
@@ -289,7 +358,7 @@ async function rawDirections(facts: SiteFacts, variation = 0): Promise<{ directi
           role: "system",
           content: `You are an award-winning creative director. Propose THREE bold, distinctive, clearly different design directions ("looks") for this business's new website. Avoid generic template looks: each must have a strong concept a client would remember.
 Return ONLY JSON: {"looks": [{
- "name": evocative 1-3 word concept name,
+ "name": the archetype in plain words (the look is shown under its style name only),
  "mood": 1-2 sentences on how the site should feel,
  "rationale": 1 sentence on why it fits this business and its customers,
  "archetype": one of ${JSON.stringify(ARCHETYPES)},
@@ -300,7 +369,7 @@ Return ONLY JSON: {"looks": [{
  "featureScene": what a second, supporting photograph shows, concretely (same rules),
  "motifs": 1-3 of ["grain","thin-rules","oversized-numbers","diagonal-cuts","soft-blobs","underline-marks","grid-lines","glow","outlined-type","stamp-badges"],
  "radius": "sharp"|"soft"|"round", "buttons": "pill"|"square"|"outline",
- "heroStyle": "caption" (split hero: text on a light panel, photo with a caption) | "cinematic" (full-bleed photo, strong overlay) | "collage" (photo in a tilted rounded frame on color blocks, with a stamp) — each look a DIFFERENT one,
+ "heroStyle": "caption" (split hero: text on a light panel, photo with a caption) | "cinematic" (full-bleed photo, strong side overlay) | "collage" (photo in a tilted rounded frame on color blocks, with a stamp) | "poster" (full-bleed photo, giant centered headline at the bottom) | "panorama" (big type first, a wide panoramic photo strip under it) | "framed" (large photo left, copy on a card overlapping it) — each look a DIFFERENT one, and don't default to the obvious one for the archetype,
  "hero": "split"|"photo"|"type", "header": "light"|"dark"|"overlay"|"center" (overlay only with hero "photo"; center = centered logo), "footer": "columns"|"minimal"|"statement",
  "headline": a bold hero headline, max 9 words, may emphasize ONE word with *asterisks*
 }]}
@@ -312,7 +381,7 @@ Rules:
 - Headlines must not invent facts: no years, awards, prices, guarantees, statistics, or claims not in the facts.
 - Photos: if the owner's request names a scene, subject or place (e.g. "use the brick streets"), EVERY look's "heroSubject" must depict exactly that as the main subject (styled for the look), not generic tools or equipment of the trade. Use "featureScene" for a second, related scene.
 - The three looks must differ in layout, not just wording and colors: different "heroStyle", "header", "buttons" and "footer" for each look. When the owner asks for a photo or background, honor it in each look in a different way (e.g. editorial split with a captioned photo, cinematic full-bleed, playful framed collage), and vary the camera angle / framing in "heroSubject".
-- Respect the owner's requested changes and style notes when present: requested colors go into the palettes, requested moods/styles shape the archetypes and fonts, and feedback on earlier looks means these three must be clearly different from what they rejected.${variation ? `\n- This is attempt ${variation + 1}: go somewhere new compared with an obvious first attempt.` : ""}${requestBlock(facts)}`,
+- Respect the owner's requested changes and style notes when present: requested colors go into the palettes, requested moods/styles shape the archetypes and fonts, and feedback on earlier looks means these three must be clearly different from what they rejected.${variation ? `\n- This is attempt ${variation + 1}: go somewhere new compared with an obvious first attempt.` : ""}${previousBlock}${requestBlock(facts)}`,
         },
         { role: "user", content: JSON.stringify(factsForPrompt(facts)) },
       ],
@@ -329,7 +398,7 @@ Rules:
       }
       used.add(directions[i]!.archetype);
     }
-    const fallback = mockDirections(facts, variation);
+    const fallback = mockDirections(facts, variation, avoid);
     while (directions.length < 3) {
       const next = fallback.find((d) => !used.has(d.archetype)) ?? fallback[directions.length]!;
       used.add(next.archetype);
@@ -338,7 +407,7 @@ Rules:
     return { directions, mock: false };
   } catch (error) {
     console.error("[preview] directions failed", error instanceof Error ? error.message : error);
-    return { directions: mockDirections(facts, variation), mock: true, note: `The AI art director failed (${reasonOf(error)}), so looks were picked from presets.` };
+    return { directions: mockDirections(facts, variation, avoid), mock: true, note: `The AI art director failed (${reasonOf(error)}), so looks were picked from presets.` };
   }
 }
 
@@ -656,7 +725,7 @@ export async function buildLook(
   const photoDeadline = stepStart + Math.max(10_000, Math.min(40_000, budget - 25_000));
   const pre =
     !asked0 && !keepSubject && photoSearchEnabled() && plan.imageQueries?.length
-      ? await (await import("@/lib/preview/google-photo.server")).plannedPhotos(facts, plan.imageQueries, useAi, photoDeadline).catch(() => undefined)
+      ? await (await import("@/lib/preview/google-photo.server")).plannedPhotos(facts, proactiveQueries(facts, plan), useAi, photoDeadline, plan.avoidPhotos).catch(() => undefined)
       : undefined;
   const autoScene = !pre?.photos.length && !asked0 && !keepSubject && !wantsNewPhotos(facts) && town?.city && (!bestOwn || bestOwn.score <= 0 || !heroWorthy(bestOwn.photo)) && civic ? `downtown ${town.city}` : undefined;
   const scene = asked0 ?? autoScene;
@@ -700,7 +769,7 @@ export async function buildLook(
   const weakHero = process.env.PHOTO_SEARCH_WEAK_HEROES === "1" && !scene && !kept && Boolean(photos[0]) && (photos[0]!.width < 1600 || (bestOwn?.score ?? 0) <= 0);
   let googleHero: string | undefined;
   let proactiveOwn: string | undefined;
-  const heroAspect = design.heroStyle ? (design.heroStyle === "cinematic" ? "16:9" : "4:3") : design.hero === "split" ? "4:3" : "16:9";
+  const heroAspect = design.heroStyle ? (["cinematic", "poster", "panorama"].includes(design.heroStyle) ? "16:9" : "4:3") : design.hero === "split" ? "4:3" : "16:9";
   if (scene) {
     // The owner named what the hero should show. Order: one of the site's own photos that shows it (alt text,
     // title or file name) -> a free-license web photo of it near the business -> an AI photo of it. Never just
@@ -723,19 +792,35 @@ export async function buildLook(
         }
       }
       // Google Images (via Serper, when configured) before the free-license sites: temporary preview photos.
-      if (real.length < 3 && photoSearchEnabled()) {
-        const google = await findGooglePhotos(scene, facts, useAi, photoDeadline, 3);
-        for (const g of google.photos.slice(0, 3 - real.length)) real.push({ photo: g.photo, source: "web", alt: g.temp.title, credit: googleCredit(g.temp), temp: g.temp });
+      // A regenerated round looks further down the results, so it can skip the photos earlier rounds showed.
+      const avoid = plan.avoidPhotos;
+      const want = avoid ? 6 : 3;
+      if (real.length < want && photoSearchEnabled()) {
+        const google = await findGooglePhotos(scene, facts, useAi, photoDeadline, want);
+        for (const g of google.photos.slice(0, want - real.length)) real.push({ photo: g.photo, source: "web", alt: g.temp.title, credit: googleCredit(g.temp), temp: g.temp });
         entry.search = googleSearchNote(google);
       } else if (!photoSearchEnabled()) {
         entry.search = "Google Images: off on this server (no SERPER_API_KEY or photo-search proxy)";
       }
-      if (real.length < 3 && webPhotosEnabled()) {
-        const web = await findWebPhotos(scene, place, 8_000, 3 - real.length).catch(() => []);
+      if (real.length < want && webPhotosEnabled()) {
+        const web = await findWebPhotos(scene, place, 8_000, want - real.length).catch(() => []);
         entry.search = `${entry.search ? `${entry.search} · ` : ""}web search ${webQueries(scene, place).map((x) => `“${x.q}”`).join(" / ")} (Openverse, Wikimedia Commons; CC0 / public domain / CC BY / CC BY-SA): ${web.length ? `${web.length} matching photo${web.length > 1 ? "s" : ""}` : "no matching photo"}`;
         for (const w of web) real.push({ photo: w.photo, source: "web", alt: w.credit.title, credit: w.credit });
       }
       if (!real.length) return false;
+      if (avoid) {
+        const { measurePhoto } = await import("@/lib/preview/hero-pick.server");
+        const { shownBefore } = await import("@/lib/preview/google-photo.server");
+        const seen = real.map((r) => shownBefore(avoid, [r.temp?.imageUrl, r.temp?.sourcePage, r.credit.sourceUrl], measurePhoto(r.photo.bytes, r.photo.type)?.hash));
+        const fresh = real.filter((_, i) => !seen[i]);
+        const skipped = real.length - fresh.length;
+        if (skipped && fresh.length) {
+          // New photos first; the ones shown before only when there aren't enough new ones.
+          real.splice(0, real.length, ...fresh, ...real.filter((_, i) => seen[i]));
+          entry.search = `${entry.search ?? ""}${entry.search ? " · " : ""}${skipped} photo${skipped > 1 ? "s" : ""} shown in an earlier round moved to the back`;
+          console.info(`[photo] look ${index + 1}: ${skipped} photo${skipped > 1 ? "s" : ""} shown in an earlier round moved behind ${fresh.length} new one${fresh.length > 1 ? "s" : ""}`);
+        }
+      }
       const rank = photoRank(design, index);
       let pick = real[rank];
       if (!pick) {

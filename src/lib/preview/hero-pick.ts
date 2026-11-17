@@ -173,6 +173,8 @@ export type HeroCandidate = {
   hash?: string;
   /** Search / page relevance, 0 (none) … 3 (best). */
   relevance: number;
+  /** Already the hero of a look in an earlier round of this session (a new round should show something new). */
+  shownBefore?: boolean;
 };
 
 export type Scored = HeroCandidate & { score: number; subject: string; sign: boolean; why: string[] };
@@ -194,6 +196,7 @@ export function heroScore(c: HeroCandidate): Scored {
   const scene = new Set((words.match(SCENE_GOOD) ?? []).map((w) => w.toLowerCase())).size;
   add(Math.min(3, scene) * 1.2, "street/building/landmark scene");
   add(sign ? -5 : 0, "sign, plaque or text");
+  add(c.shownBefore ? -8 : 0, "shown in an earlier round");
   const ratio = c.width / Math.max(1, c.height);
   add(ratio >= 1.3 && ratio <= 2.1 ? 1 : ratio < 1.15 ? -1.5 : 0, ratio >= 1.3 && ratio <= 2.1 ? "wide" : "not wide");
   add(c.width >= 1600 ? 0.5 : 0, "large");

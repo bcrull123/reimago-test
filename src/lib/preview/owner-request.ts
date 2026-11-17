@@ -158,11 +158,18 @@ const DESIGN_WORD =
   /^(colou?rs?|navy|gold|red|blue|green|orange|yellow|purple|pink|black|white|gr[ae]y|brown|teal|tan|cream|font|fonts|type|typography|style|styles|layout|section|sections|button|buttons|text|copy|wording|headline|headlines|logo|menu|darker|lighter|dark|light|bold|bolder|playful|modern|minimal|premium|warm|cozy|clean|simple|bigger|smaller|larger|spacing|space|reviews?|testimonials?|faq|gallery|steps|how|works|phone|number|email|address|hours|contact|form|look|feel|vibe|theme|scheme|palette|accent|accents|shade|shades|tone|tones|it|this|that|everything|site|website|page|pages|please|something|stuff|better|nicer|pretty|more|less|bit|lot|one|ones|thing|things|photo|photos|picture|pictures|image|images|pic|pics|background|backgrounds|hero|backdrop|banner|header|top|instead|too|also|here|there|and|or|with|the|a|an|of|in|on|for|to|as|at|my|our|some|use|using|put|add|show|make|want|like|same|current|existing|original|exact|professional|friendly|fun|elegant|sleek|short|simple|consistent|keep|retain|preserve|lose|leave|stay|way|is|was|now|everything|all|look)$/;
 
 /** A real subject has at least one word that is not about colors/fonts/layout ("the red bricks" yes, "red and gold" no). */
+/** Words that never make a photo subject on their own ("show me something different", "use another one"). */
+const VAGUE_WORD = /^(?:something|anything|everything|nothing|different|else|new|newer|other|another|more|less|options?|ideas?|looks?|ones?|them|these|those|this|that|again|instead|please|stuff|things?|better|fresh|variety|versions?|designs?|choices?)$/;
+
+/** Talk about the looks themselves ("use editorials picture on dark premium"): an edit of a look, not a photo subject. */
+const LOOK_TALK = /\b(?:editorials?|editorial's|dark[\s-]*premium|premium's|playful(?:'s)?|warm[\s-]*craft|minimal[\s-]*luxury|bold[\s-]*photo|(?:first|second|third|middle|last)\s+(?:one|look)(?:'s)?)\b/i;
+
 function isSubject(scene: string): boolean {
+  if (LOOK_TALK.test(scene)) return false;
   return scene
     .toLowerCase()
     .split(/[^a-z']+/)
-    .some((w) => w.length > 2 && !DESIGN_WORD.test(w));
+    .some((w) => w.length > 2 && !DESIGN_WORD.test(w) && !VAGUE_WORD.test(w));
 }
 
 const PICTURE = String.raw`(?:photos?|pictures?|pics?|images?|shots?|photographs?|backgrounds?|backdrops?|hero(?:\s+(?:image|photo|picture|background))?|header\s+(?:image|photo))`;
