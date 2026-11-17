@@ -15,6 +15,7 @@ import { Route as PrivacyRouteImport } from './routes/privacy'
 import { Route as SaveRouteImport } from './routes/save'
 import { Route as TermsRouteImport } from './routes/terms'
 import { Route as ThanksRouteImport } from './routes/thanks'
+import { Route as ApiPhotoSearchRouteImport } from './routes/api.photo-search'
 import { Route as MadeIdRouteImport } from './routes/made.$id'
 import { Route as MadeIdSlugRouteImport } from './routes/made.$id.$slug'
 import { Route as MadeIdImgNameRouteImport } from './routes/made.$id.img.$name'
@@ -49,6 +50,11 @@ const ThanksRoute = ThanksRouteImport.update({
   path: '/thanks',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ApiPhotoSearchRoute = ApiPhotoSearchRouteImport.update({
+  id: '/api/photo-search',
+  path: '/api/photo-search',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const MadeIdRoute = MadeIdRouteImport.update({
   id: '/made/$id',
   path: '/made/$id',
@@ -72,6 +78,7 @@ export interface FileRoutesByFullPath {
   '/save': typeof SaveRoute
   '/terms': typeof TermsRoute
   '/thanks': typeof ThanksRoute
+  '/api/photo-search': typeof ApiPhotoSearchRoute
   '/made/$id': typeof MadeIdRouteWithChildren
   '/made/$id/$slug': typeof MadeIdSlugRoute
   '/made/$id/img/$name': typeof MadeIdImgNameRoute
@@ -83,6 +90,7 @@ export interface FileRoutesByTo {
   '/save': typeof SaveRoute
   '/terms': typeof TermsRoute
   '/thanks': typeof ThanksRoute
+  '/api/photo-search': typeof ApiPhotoSearchRoute
   '/made/$id': typeof MadeIdRouteWithChildren
   '/made/$id/$slug': typeof MadeIdSlugRoute
   '/made/$id/img/$name': typeof MadeIdImgNameRoute
@@ -95,6 +103,7 @@ export interface FileRoutesById {
   '/save': typeof SaveRoute
   '/terms': typeof TermsRoute
   '/thanks': typeof ThanksRoute
+  '/api/photo-search': typeof ApiPhotoSearchRoute
   '/made/$id': typeof MadeIdRouteWithChildren
   '/made/$id/$slug': typeof MadeIdSlugRoute
   '/made/$id/img/$name': typeof MadeIdImgNameRoute
@@ -108,6 +117,7 @@ export interface FileRouteTypes {
     | '/save'
     | '/terms'
     | '/thanks'
+    | '/api/photo-search'
     | '/made/$id'
     | '/made/$id/$slug'
     | '/made/$id/img/$name'
@@ -119,6 +129,7 @@ export interface FileRouteTypes {
     | '/save'
     | '/terms'
     | '/thanks'
+    | '/api/photo-search'
     | '/made/$id'
     | '/made/$id/$slug'
     | '/made/$id/img/$name'
@@ -130,6 +141,7 @@ export interface FileRouteTypes {
     | '/save'
     | '/terms'
     | '/thanks'
+    | '/api/photo-search'
     | '/made/$id'
     | '/made/$id/$slug'
     | '/made/$id/img/$name'
@@ -142,6 +154,7 @@ export interface RootRouteChildren {
   SaveRoute: typeof SaveRoute
   TermsRoute: typeof TermsRoute
   ThanksRoute: typeof ThanksRoute
+  ApiPhotoSearchRoute: typeof ApiPhotoSearchRoute
   MadeIdRoute: typeof MadeIdRouteWithChildren
 }
 
@@ -189,6 +202,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ThanksRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/photo-search': {
+      id: '/api/photo-search'
+      path: '/api/photo-search'
+      fullPath: '/api/photo-search'
+      preLoaderRoute: typeof ApiPhotoSearchRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/made/$id': {
       id: '/made/$id'
       path: '/made/$id'
@@ -233,6 +253,7 @@ const rootRouteChildren: RootRouteChildren = {
   SaveRoute: SaveRoute,
   TermsRoute: TermsRoute,
   ThanksRoute: ThanksRoute,
+  ApiPhotoSearchRoute: ApiPhotoSearchRoute,
   MadeIdRoute: MadeIdRouteWithChildren,
 }
 export const routeTree = rootRouteImport

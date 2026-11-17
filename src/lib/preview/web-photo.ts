@@ -15,7 +15,7 @@ export type PhotoCredit = {
   licenseUrl: string;
   /** Page the photo came from (its Commons/Flickr page, or the business's own page). */
   sourceUrl: string;
-  provider: "Openverse" | "Wikimedia Commons" | "your site";
+  provider: "Openverse" | "Wikimedia Commons" | "your site" | "Google Images";
 };
 
 export type WebPhotoCandidate = PhotoCredit & {
