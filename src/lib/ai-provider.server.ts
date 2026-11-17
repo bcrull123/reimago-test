@@ -216,19 +216,31 @@ export const IMAGE_GUARD =
  * the site record; we never hotlink expiring provider URLs). Returns undefined on
  * any failure so callers fall back to real photos or placeholders.
  */
-export async function generateImage(options: { prompt: string; aspect: "16:9" | "4:3" | "1:1" | "3:4"; timeoutMs?: number }): Promise<GeneratedImage | undefined> {
+export async function generateImage(options: {
+  prompt: string;
+  aspect: "16:9" | "4:3" | "1:1" | "3:4";
+  timeoutMs?: number;
+  /** false = no "photograph only, no text" guard (a homepage design mockup has real words in it). Default true. */
+  guard?: boolean;
+  /** xAI only: edit from this public image (the site's logo, like the original Imagine flow); falls back to a plain generation. */
+  sourceImageUrl?: string;
+  /** xAI resolution ("1k" default, "2k"). */
+  resolution?: string;
+}): Promise<GeneratedImage | undefined> {
   const provider = imageProvider();
   if (provider === "none" || !options.prompt.trim()) return undefined;
   const config = IMAGE_ENDPOINTS[provider];
   const apiKey = env(config.key);
   if (!apiKey) return undefined;
   const base = env("IMAGE_BASE_URL");
-  const endpoint = base ? `${base.replace(/\/+$/, "")}/images/generations` : config.url;
+  const editing = provider === "xai" && Boolean(options.sourceImageUrl && /^https:\/\//.test(options.sourceImageUrl));
+  const path = editing ? "images/edits" : "images/generations";
+  const endpoint = base ? `${base.replace(/\/+$/, "")}/${path}` : editing ? config.url.replace(/images\/generations$/, "images/edits") : config.url;
   const model = env("IMAGE_MODEL") ?? config.model;
-  const prompt = `${options.prompt.trim()} ${IMAGE_GUARD}`.slice(0, 3800);
+  const prompt = (options.guard === false ? options.prompt.trim() : `${options.prompt.trim()} ${IMAGE_GUARD}`).slice(0, 3800);
   const body =
     provider === "xai"
-      ? { model, prompt, aspect_ratio: options.aspect, resolution: "1k", quality: "low", response_format: "b64_json", n: 1 }
+      ? { model, prompt, ...(editing ? { image: { url: options.sourceImageUrl, type: "image_url" } } : {}), aspect_ratio: options.aspect, resolution: options.resolution ?? "1k", quality: "low", response_format: "b64_json", n: 1 }
       : {
           model,
           prompt,
@@ -244,8 +256,9 @@ export async function generateImage(options: { prompt: string; aspect: "16:9" | 
       signal: AbortSignal.timeout(options.timeoutMs ?? 45_000),
     });
     if (!response.ok) {
-      console.error(`[image:${provider}]`, response.status, (await response.text().catch(() => "")).slice(0, 300));
-      return undefined;
+      console.error(`[image:${provider}]${editing ? " edit" : ""}`, response.status, (await response.text().catch(() => "")).slice(0, 300));
+      // The logo edit was refused (unreachable logo, unsupported image): a plain generation instead.
+      return editing ? generateImage({ ...options, sourceImageUrl: undefined }) : undefined;
     }
     const json = (await response.json()) as { data?: { b64_json?: string; url?: string }[] };
     const item = json.data?.[0];
@@ -265,6 +278,14 @@ export async function generateImage(options: { prompt: string; aspect: "16:9" | 
     console.error(`[image:${provider}] failed`, error instanceof Error ? error.message : error);
     return undefined;
   }
+}
+
+/** The Imagine model and endpoint actually used (for logs; no secrets). */
+export function imageModelInfo(): { provider: ImageProvider; model: string; endpoint: string } {
+  const provider = imageProvider();
+  if (provider === "none") return { provider, model: "", endpoint: "" };
+  const base = env("IMAGE_BASE_URL");
+  return { provider, model: env("IMAGE_MODEL") ?? IMAGE_ENDPOINTS[provider].model, endpoint: base ? `${base.replace(/\/+$/, "")}/images/generations` : IMAGE_ENDPOINTS[provider].url };
 }
 
 export function sniffImageType(bytes: Buffer): string {

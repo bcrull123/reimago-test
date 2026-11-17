@@ -894,6 +894,15 @@ export async function buildLook(
     trace.images.push(entry);
     // The quality gate (hero-brief.ts / rateHeroes): a photo that failed it is never a fallback for this look.
     const failed = new Set(pre.bar?.failed ?? []);
+    // Remember each site photo's gate verdict and what it shows: the Custom Design gets only the ones that passed.
+    if (pre.bar)
+      for (const [i, p] of scored.slice(0, 5).entries()) {
+        const im = images[`photo-${i + 1}`];
+        if (!im) continue;
+        im.gate = failed.has(p.photo.url) ? "failed" : pre.bar.passed.includes(p.photo.url) ? "passed" : undefined;
+        const what = describe(p.photo.url);
+        if (what !== "your homepage") im.shows = what;
+      }
     // Nothing passed the gate for this look: an AI photo of a good scene beats an unappealing real one.
     if (mine && failed.has(mine.id) && imagesEnabled()) first = undefined;
     const urlOf = (o: (typeof pool)[number]) => ("g" in o ? o.g.temp.imageUrl : (scored[Number(o.own.slice(6)) - 1]?.photo.url ?? ""));

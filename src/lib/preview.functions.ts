@@ -179,6 +179,42 @@ export const previewLook = createServerFn({ method: "POST" })
  * the homepage as freeform HTML/CSS (validated, one repair pass). On failure the template homepage stays and the
  * card says why. Its own request, so it has its own time budget.
  */
+/**
+ * The Custom Design look, step 1 of 2: Grok Imagine draws the homepage design mockup (the designer), from the
+ * creative brief, the real content and the look's chosen photos. Its own request (≤60 s for the image).
+ */
+export const previewImagine = createServerFn({ method: "POST" })
+  .validator((input: { id?: string }) => {
+    const id = typeof input?.id === "string" ? input.id.trim() : "";
+    if (!/^[a-f0-9]{16}$/.test(id)) throw new Error("That look was not found. Run the site again.");
+    return { id };
+  })
+  .handler(async ({ data }): Promise<PreviewStepResult<{ mockupUrl?: string; note?: string }>> => {
+    if (await limited("imagine", 30)) return { ok: false, error: "Too many previews from this network in the last hour. Try again shortly." };
+    try {
+      const { readSite, saveSite } = await import("./pages.server");
+      const site = await readSite(data.id);
+      if (!site || site.version !== 3 || !site.design?.custom) return { ok: false, error: "That look was not found on this server. Run the site again." };
+      const { imagineMockup, customStepBudgetMs, prepareCustomPhotos } = await import("./preview/custom-design.server");
+      // The template's hero (the business's own photo first) becomes the custom page's @img:hero.
+      if (await prepareCustomPhotos(site)) await saveSite(site);
+      const made = await imagineMockup(site, Date.now() + Math.min(customStepBudgetMs(), 75_000));
+      if (!made.mockup) return { ok: true, note: made.reason };
+      site.customMockup = made.mockup;
+      await saveSite(site);
+      const { publicBase } = await import("./publish.server");
+      return { ok: true, mockupUrl: `${publicBase()}/made/${data.id}/img/mockup` };
+    } catch (error) {
+      console.error("[imagine] step failed", error instanceof Error ? error.message : error);
+      return { ok: true, note: "Grok Imagine failed this time" };
+    }
+  });
+
+/**
+ * The Custom Design look, step 2 of 2: Grok builds the homepage (from the Imagine mockup when there is one, else
+ * from the text brief), with checks, contrast auto-fix and one repair pass. Fallback chain: mockup build -> text-brief
+ * design (when time is left) -> the template homepage.
+ */
 export const previewCustom = createServerFn({ method: "POST" })
   .validator((input: { id?: string }) => {
     const id = typeof input?.id === "string" ? input.id.trim() : "";
@@ -188,20 +224,48 @@ export const previewCustom = createServerFn({ method: "POST" })
   .handler(async ({ data }): Promise<PreviewStepResult<{ custom: NonNullable<LookInfo["custom"]>; name: string; layout?: string }>> => {
     if (await limited("custom", 30)) return { ok: false, error: "Too many previews from this network in the last hour. Try again shortly." };
     try {
-      const { readSite, saveSite } = await import("./pages.server");
+      const { readSite, saveSite, readImage } = await import("./pages.server");
       const site = await readSite(data.id);
       if (!site || site.version !== 3 || !site.design?.custom) return { ok: false, error: "That look was not found on this server. Run the site again." };
-      const { designCustom } = await import("./preview/custom-design.server");
-      const { stepBudgetMs } = await import("./preview/builder.server");
+      const { designCustom, customStepBudgetMs, prepareCustomPhotos } = await import("./preview/custom-design.server");
+      await prepareCustomPhotos(site);
       const { lookName } = await import("./preview/archetype-label");
       const { layoutLine } = await import("./preview/look-variety");
       const { customLayoutLine } = await import("./preview/custom-design");
+      const { publicBase } = await import("./publish.server");
       const brief = site.design.custom.brief;
-      const made = await designCustom(site, Date.now() + stepBudgetMs());
+      const deadline = Date.now() + customStepBudgetMs();
+      const stored = site.customMockup ? await readImage(data.id, "mockup").catch(() => undefined) : undefined;
+      const mockupUrl = stored ? `${publicBase()}/made/${data.id}/img/mockup` : undefined;
+      let made = await designCustom(site, deadline, stored && site.customMockup ? { mockup: site.customMockup, bytes: stored.bytes } : undefined);
+      let imagineNote: string | undefined;
+      if (!made.design && stored) {
+        // The mockup build broke: the text-brief design next, when there is time; else the template.
+        imagineNote = `the build from the Imagine mockup failed (${(made.reason ?? "").slice(0, 120)})`;
+        if (deadline - Date.now() > 60_000) {
+          console.info(`[design] ${imagineNote}; trying the text-brief design`);
+          made = await designCustom(site, deadline);
+        } else console.info(`[design] ${imagineNote}; no time left for the text-brief design`);
+      } else if (!site.customMockup) imagineNote = "no Imagine mockup this time; designed from the text brief";
       if (made.design) {
         site.custom = made.design;
         await saveSite(site);
-        return { ok: true, name: site.design.name, layout: customLayoutLine(brief), custom: { concept: brief.concept, status: made.design.status, stripped: made.design.stripped.slice(0, 8), repaired: made.design.repaired?.slice(0, 6) } };
+        const d = made.design;
+        return {
+          ok: true,
+          name: site.design.name,
+          layout: customLayoutLine(brief),
+          custom: {
+            concept: brief.concept,
+            status: d.status,
+            stripped: d.stripped.slice(0, 8),
+            repaired: d.repaired?.slice(0, 6),
+            source: d.source,
+            mockupUrl: d.source === "imagine" ? mockupUrl : undefined,
+            autofixed: d.autofixed?.length || undefined,
+            imagineNote: d.source === "imagine" ? undefined : imagineNote,
+          },
+        };
       }
       // Fallback: the template homepage, under its style's name (one name per look).
       const name = lookName(site.design.archetype);
@@ -210,7 +274,7 @@ export const previewCustom = createServerFn({ method: "POST" })
       site.design = { ...site.design, name, custom: { ...site.design.custom, failed: made.reason ?? "failed" } };
       await saveSite(site);
       console.info(`[design] fallback: look ${(site.lookIndex ?? 2) + 1} shows its template homepage as “${name}” (${made.reason})`);
-      return { ok: true, name, layout: layoutLine(site.design, site.trace?.layout?.hero), custom: { concept: brief.concept, status: "fallback", note: `The from-scratch design (“${brief.concept}”) didn't pass our checks (${shortReason}), so this card shows the ${name} template look.` } };
+      return { ok: true, name, layout: layoutLine(site.design, site.trace?.layout?.hero), custom: { concept: brief.concept, status: "fallback", mockupUrl, note: `The from-scratch design (“${brief.concept}”) had a structural problem our checks couldn't fix (${shortReason}), so this card shows the ${name} template look.` } };
     } catch (error) {
       console.error("[design] custom step failed", error instanceof Error ? error.message : error);
       return { ok: false, error: error instanceof Error ? error.message : "The custom design could not be built." };
@@ -284,7 +348,16 @@ export const previewRefine = createServerFn({ method: "POST" })
           request: data.text,
           photos: photosLine(site.trace, photos),
           layout: site.custom && !design.custom?.failed ? customLayoutLine(site.custom.brief) : layoutLine(design, site.trace?.layout?.hero),
-          custom: site.custom && !design.custom?.failed ? { concept: site.custom.brief.concept, status: site.custom.status } : undefined,
+          custom:
+            site.custom && !design.custom?.failed
+              ? {
+                  concept: site.custom.brief.concept,
+                  status: site.custom.status,
+                  source: site.custom.source,
+                  mockupUrl: site.custom.source === "imagine" && site.customMockup ? `${publicBase()}/made/${site.id}/img/mockup` : undefined,
+                  mockupStale: Boolean(site.custom.mockup?.stale) || undefined,
+                }
+              : undefined,
           trace: site.trace,
           edit: { variant: e.variant, changed: e.changed, from: target.id, how: edit.how ?? "" },
         };
