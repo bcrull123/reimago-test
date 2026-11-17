@@ -179,14 +179,12 @@ export function LooksPicker({
                         </li>
                       ))}
                     </ul>
-                    {look.trace.images.map((image) => (
-                      <p key={image.name} className="mt-1 break-words">
+                    {look.trace.images.map((image, i) => (
+                      <p key={`${image.name}-${i}`} className="mt-1 break-words">
                         <strong>{image.name}</strong> ({image.status}
                         {image.source ? `, from ${image.source}` : ""}){image.search ? ` · ${image.search}` : ""}
                         {image.credit && image.credit.provider !== "your site" ? ` · ${image.credit.title} by ${image.credit.author || "unknown"} (${image.credit.license}) ${image.credit.sourceUrl}` : ""}
-                        {" · AI image prompt: "}
-                        {image.prompt.slice(0, 400)}
-                        {image.prompt.length > 400 ? "…" : ""}
+                        {image.prompt ? ` · AI image prompt: ${image.prompt.slice(0, 400)}${image.prompt.length > 400 ? "…" : ""}` : ""}
                       </p>
                     ))}
                   </details>

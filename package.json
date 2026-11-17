@@ -16,7 +16,7 @@
     "preview:stop": "node scripts/preview.mjs stop",
     "typecheck": "tsc --noEmit",
     "check:auth": "node scripts/check-auth-invariant.mjs",
-    "test": "node --test 'scripts/**/*.test.mjs' && node --experimental-strip-types --test src/lib/app-data/app-data.test.ts src/lib/app-data/readiness-schedule.test.ts src/lib/auth/gate-identity.test.ts src/lib/auth/sign-in-gate.test.ts src/lib/preview-path-prefix.test.ts src/lib/preview/preview.test.ts src/lib/preview/creative.test.ts src/lib/preview/logo.test.ts src/lib/domain-name.test.ts src/lib/preview/sections-shapes.test.ts src/lib/preview/owner-request.test.ts src/lib/preview/image-prompts.test.ts src/lib/preview/web-photo.test.ts src/lib/preview/look-variety.test.ts src/lib/preview/photo-subject.test.ts",
+    "test": "node --test 'scripts/**/*.test.mjs' && node --experimental-strip-types --test src/lib/app-data/app-data.test.ts src/lib/app-data/readiness-schedule.test.ts src/lib/auth/gate-identity.test.ts src/lib/auth/sign-in-gate.test.ts src/lib/preview-path-prefix.test.ts src/lib/preview/preview.test.ts src/lib/preview/creative.test.ts src/lib/preview/logo.test.ts src/lib/domain-name.test.ts src/lib/preview/sections-shapes.test.ts src/lib/preview/owner-request.test.ts src/lib/preview/image-prompts.test.ts src/lib/preview/web-photo.test.ts src/lib/preview/look-variety.test.ts src/lib/preview/photo-subject.test.ts src/lib/preview/keep-art.test.ts",
     "lint": "eslint .",
     "format": "prettier --write ."
   },

@@ -13,13 +13,15 @@ export const Route = createFileRoute("/made/$id/img/$name")({
         const { readImage } = await import("@/lib/pages.server");
         const name = String(params.name ?? "").toLowerCase();
         const image = await readImage(String(params.id ?? ""), name);
-        if (!image || !/^image\/(jpeg|png|webp|gif)$/.test(image.type)) return new Response("Not found.", { status: 404 });
+        // SVG too: kept owner art ("Keep the rocket") can be an SVG drawing. It is sanitized before it is stored
+        // (site-art.ts sanitizeSvg) and served with a CSP that blocks scripts and outside loads if opened directly.
+        if (!image || !/^image\/(jpeg|png|webp|gif|svg\+xml)$/.test(image.type)) return new Response("Not found.", { status: 404 });
         return new Response(new Uint8Array(image.bytes), {
           headers: {
             "content-type": image.type,
             "cache-control": "public, max-age=86400, immutable",
             "x-content-type-options": "nosniff",
-            "content-security-policy": "default-src 'none'",
+            "content-security-policy": image.type === "image/svg+xml" ? "default-src 'none'; style-src 'unsafe-inline'" : "default-src 'none'",
           },
         });
       },
