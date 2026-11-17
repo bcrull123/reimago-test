@@ -47,6 +47,8 @@ export const notifyReplyWebhook = createServerFn({ method: "POST" })
       change_requests: data.changeRequests.map((text, i) => `${i + 1}. ${text}`).join("\n"),
       picture_url: picture ? `${publicBase()}/made/${data.id}/img/capture` : "",
       picture_error: picture ? "" : data.pictureError || "No picture was stored for this look.",
+      // The Custom Design look: the Grok Imagine mockup it was built from (empty for template looks).
+      design_mockup_url: site.custom?.mockup && !site.design?.custom?.failed ? `${publicBase()}/made/${data.id}/img/mockup` : "",
       submitted_at: new Date().toISOString(),
     });
     return { ok: result.sent, status: result.status };

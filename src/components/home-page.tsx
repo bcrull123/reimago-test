@@ -4,7 +4,7 @@ import { ArrowRight } from "lucide-react";
 import { SiteShell, Wordmark } from "@/components/site-shell";
 import { CreateSiteWizard, type CreateBrief, type CreateFiles } from "@/components/create-site-wizard";
 import { checkDomainName, handOffToCursor } from "@/lib/reimagine.functions";
-import { cursorStatus, previewCustom, previewDirections, previewFinish, previewFromBrief, previewLook, previewRead, previewRefine, previewRetryAi, savePreviewPicture } from "@/lib/preview.functions";
+import { cursorStatus, previewCustom, previewDirections, previewImagine, previewFinish, previewFromBrief, previewLook, previewRead, previewRefine, previewRetryAi, savePreviewPicture } from "@/lib/preview.functions";
 import { capturePreviewPicture, pictureFileName } from "@/lib/preview-picture";
 import { notifyReplyWebhook } from "@/lib/reply-webhook.functions";
 import { LivePreview } from "@/components/live-preview";
@@ -133,6 +133,7 @@ async function submitFormcarry(fields: {
   chosenLook?: string;
   changeRequests?: string[];
   picture?: PictureFields;
+  designMockupUrl?: string;
 }): Promise<void> {
   const domain = bareDomain(fields.website);
   const data = new FormData();
@@ -145,6 +146,8 @@ async function submitFormcarry(fields: {
   data.append("chosen_look", fields.chosenLook ?? "");
   data.append("change_requests", changeRequestsText(fields.changeRequests));
   appendPicture(data, fields.picture);
+  // The Custom Design look's Grok Imagine mockup (the picture stays the built page's screenshot).
+  if (fields.designMockupUrl) data.append("design_mockup_url", fields.designMockupUrl);
 
   const response = await fetch(FORMCARRY, {
     method: "POST",
@@ -314,6 +317,8 @@ export function HomePage() {
         const built = await previewLook({ data: { facts: nextFacts, plan: planned.plan, direction, index, variation: nextVariation } });
         // The from-scratch look: its template build first (images, sub-pages, the fallback), then Grok's own design.
         if (!built.ok || !direction.custom) return built;
+        // Grok Imagine designs it first (the mockup), then Grok builds the page to match (or from the text brief).
+        await previewImagine({ data: { id: built.look.id } }).catch(() => undefined);
         const custom = await previewCustom({ data: { id: built.look.id } }).catch(() => undefined);
         if (!custom?.ok) return { ...built, look: { ...built.look, custom: { concept: direction.custom.brief.concept, status: "fallback" as const, note: "The from-scratch design could not be built this time, so this card shows a template look." } } };
         return { ...built, look: { ...built.look, name: custom.name, layout: custom.layout ?? built.look.layout, custom: custom.custom, rev: (built.look.rev ?? 0) + 1 } };
@@ -421,7 +426,7 @@ export function HomePage() {
       }).catch(() => undefined);
       try {
         if (form.kind === "reimagine") {
-          await submitFormcarry({ email: form.email, website: form.website, note: form.note, gotcha: form.gotcha, previewUrl, previewPages, chosenLook: chosenLookName, changeRequests: feedback, picture });
+          await submitFormcarry({ email: form.email, website: form.website, note: form.note, gotcha: form.gotcha, previewUrl, previewPages, chosenLook: chosenLookName, changeRequests: feedback, picture, designMockupUrl: look.custom?.mockupUrl });
         } else {
           await submitCreateBrief(form.email, form.gotcha, form.brief, form.files, { previewUrl, previewPages, chosenLook: chosenLookName, changeRequests: feedback, picture });
         }

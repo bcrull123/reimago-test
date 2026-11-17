@@ -4,7 +4,7 @@ import type { LookInfo } from "@/lib/preview/types";
 
 
 /** A live, scaled-down homepage thumbnail (sandboxed, not interactive). */
-function Thumb({ look }: { look: LookInfo }) {
+function Thumb({ look, mini = false }: { look: LookInfo; mini?: boolean }) {
   const box = useRef<HTMLDivElement>(null);
   const [scale, setScale] = useState(0.27);
   useEffect(() => {
@@ -15,7 +15,7 @@ function Thumb({ look }: { look: LookInfo }) {
     return () => observer.disconnect();
   }, []);
   return (
-    <div ref={box} className="relative aspect-[16/11] overflow-hidden rounded-t-2xl bg-[#e9e9ec]">
+    <div ref={box} className={`relative overflow-hidden bg-[#e9e9ec] ${mini ? "aspect-[16/9] rounded-md border border-border" : "aspect-[16/11] rounded-t-2xl"}`}>
       <iframe
         key={look.rev ?? 0}
         src={look.rev ? `${look.url}?v=${look.rev}` : look.url}
@@ -27,6 +27,26 @@ function Thumb({ look }: { look: LookInfo }) {
         className="pointer-events-none absolute left-0 top-0 h-[880px] w-[1280px] origin-top-left border-0 bg-white"
         style={{ transform: `scale(${scale})` }}
       />
+    </div>
+  );
+}
+
+/** The Custom Design card: Grok Imagine's design mockup next to the page Grok built from it (to judge fidelity). */
+function DesignVsBuilt({ look }: { look: LookInfo }) {
+  const url = look.custom?.mockupUrl;
+  if (!url) return null;
+  return (
+    <div className="grid grid-cols-2 gap-2" data-look-mockup={url}>
+      <figure className="m-0">
+        <a href={url} target="_blank" rel="noreferrer" className="block" aria-label="Open the Grok Imagine design mockup full size">
+          <img src={url} alt={`Grok Imagine design mockup for ${look.name}`} className="aspect-[16/9] w-full rounded-md border border-border object-cover object-top" loading="lazy" />
+        </a>
+        <figcaption className="mt-1 text-[10px] leading-tight text-muted">Design · Grok Imagine{look.custom?.mockupStale ? " (before your edit)" : ""}</figcaption>
+      </figure>
+      <figure className="m-0">
+        <Thumb look={look} mini />
+        <figcaption className="mt-1 text-[10px] leading-tight text-muted">Built page · Grok</figcaption>
+      </figure>
     </div>
   );
 }
@@ -205,11 +225,12 @@ export function LooksPicker({
                     {look.layout}
                   </p>
                 ) : null}
+                {look.custom && look.custom.status !== "fallback" ? <DesignVsBuilt look={look} /> : null}
                 {look.custom ? (
-                  <p className={`text-[11px] leading-snug ${look.custom.status === "fallback" ? "text-amber-800" : "text-muted"}`} data-look-custom={look.custom.status}>
+                  <p className={`text-[11px] leading-snug ${look.custom.status === "fallback" ? "text-amber-800" : "text-muted"}`} data-look-custom={look.custom.status} data-look-custom-source={look.custom.source ?? ""}>
                     {look.custom.status === "fallback"
                       ? look.custom.note
-                      : `Designed from scratch by Grok: “${look.custom.concept}”${look.custom.status === "repaired" ? " (fixed after our checks)" : ""}.`}
+                      : `${look.custom.source === "imagine" ? "Designed by Grok Imagine, built by Grok" : "Designed from scratch by Grok"}: “${look.custom.concept}”${look.custom.status === "repaired" ? " (fixed after our checks)" : ""}${look.custom.autofixed ? ` · ${look.custom.autofixed} color${look.custom.autofixed === 1 ? "" : "s"} adjusted for readability` : ""}.${look.custom.imagineNote ? ` (${look.custom.imagineNote})` : ""}`}
                   </p>
                 ) : null}
                 {look.trace && (look.trace.request.note || look.trace.request.feedback.length) ? (

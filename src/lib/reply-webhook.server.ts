@@ -26,6 +26,8 @@ export type ReplyPayload = {
   change_requests: string;
   picture_url: string;
   picture_error: string;
+  /** The Custom Design look's Grok Imagine design mockup ("" for template looks). */
+  design_mockup_url?: string;
   submitted_at: string;
 };
 
