@@ -253,6 +253,10 @@ p{margin:0 0 1em}
 .s-hero-type.v-panorama .lead{margin-bottom:0}
 .s-hero-type.v-panorama .strip{margin-top:clamp(1.5rem,3vw,2.4rem);margin-left:calc(50% - 50vw);margin-right:calc(50% - 50vw)}
 .s-hero-type.v-panorama .strip .media{aspect-ratio:21/7;border-radius:0;box-shadow:none}
+.s-hero-type.v-panorama.x-cutout .strip{background:linear-gradient(100deg,color-mix(in srgb,var(--accent) 30%,var(--bg)) 0%,color-mix(in srgb,var(--primary) 26%,var(--bg)) 100%);padding:clamp(1rem,2.5vw,2rem) 0;overflow:hidden}
+.s-hero-type.v-panorama.x-cutout .strip .media{aspect-ratio:auto;background:none;display:flex;justify-content:center}
+.s-hero-type.v-panorama.x-cutout .strip .media::after{display:none}
+.s-hero-type.v-panorama.x-cutout .strip .media img{width:auto;max-width:min(92vw,980px);height:auto;max-height:min(46vh,420px);object-fit:contain;filter:drop-shadow(0 22px 36px rgba(0,0,0,.28))}
 .s-hero-split.v-framed .grid{grid-template-columns:1.3fr .7fr;gap:0}
 .s-hero-split.v-framed .frame{order:-1;margin:0}
 .s-hero-split.v-framed .frame::before{display:none}

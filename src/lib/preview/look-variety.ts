@@ -142,9 +142,18 @@ export function arrangeSections(sections: Section[], design: DesignDirection, av
     } else if (cutout) {
       // Kept illustration / transparent art: shown whole on a color panel in every treatment (a full-bleed crop
       // or a duotone would ruin a drawing). Cinematic: dark stage with a glow; caption: light panel; collage: brand.
-      const cut = style === "poster" ? "cinematic" : style === "panorama" || style === "framed" ? "caption" : style;
-      const tone = cut === "cinematic" ? "dark" : cut === "collage" ? "brand" : "light";
-      out[0] = { ...first, type: "hero-split", variant: cut, tone, fit: "cutout", reverse: false, items: cut === "collage" ? [] : first.items };
+      // Each look composes it differently (Bob, round 2: "include a rocket" made every look a rocket on a panel):
+      // poster = dark stage, art right; cinematic = dark stage, art left; panorama = giant headline over a wide
+      // color band with the art whole in it; framed = light panel, art left; caption = light panel, art right;
+      // collage = brand color.
+      if (style === "panorama") {
+        out[0] = { ...first, type: "hero-type", variant: "panorama", tone: "light", image, fit: "cutout" };
+      } else {
+        const cut = style === "poster" || style === "cinematic" ? "cinematic" : style === "framed" || style === "caption" ? "caption" : style;
+        const tone = cut === "cinematic" ? "dark" : cut === "collage" ? "brand" : "light";
+        const reverse = style === "cinematic" || style === "framed";
+        out[0] = { ...first, type: "hero-split", variant: cut, tone, fit: "cutout", reverse, items: cut === "collage" ? [] : first.items };
+      }
     } else if (style === "cinematic" || style === "poster") {
       out[0] = { ...first, type: "hero-photo", variant: style, tone: "dark" };
     } else if (style === "panorama") {
@@ -217,10 +226,10 @@ export function layoutLine(design: DesignDirection, builtHero?: string): string 
   if (design.custom && !design.custom.failed) return `Layout: designed from scratch · concept “${design.custom.brief.concept}”`;
   if (!design.heroStyle) return undefined;
   // A panorama hero is a type hero WITH a photo strip; without a photo it is built as "hero-type/plain".
-  const noPhoto = builtHero?.startsWith("hero-type") && builtHero !== "hero-type/panorama";
+  const noPhoto = builtHero?.startsWith("hero-type") && builtHero !== "hero-type/panorama" && builtHero !== "hero-type/panorama/cutout";
   const cutout = builtHero?.endsWith("/cutout");
   const hero = cutout
-    ? { caption: "split hero with your art shown whole on a light panel", cinematic: "dark stage hero with your art shown whole", collage: "color-block hero with your art shown whole", poster: "dark stage hero with your art shown whole", panorama: "split hero with your art shown whole on a light panel", framed: "split hero with your art shown whole on a light panel" }[design.heroStyle]
+    ? { caption: "split hero with your art shown whole on a light panel (art right)", cinematic: "dark stage hero with your art shown whole (art left)", collage: "color-block hero with your art shown whole", poster: "dark stage hero with your art shown whole (art right)", panorama: "giant headline over a color band with your art shown whole", framed: "light panel hero with your art shown whole (art left)" }[design.heroStyle]
     : noPhoto
     ? { caption: "type-only hero on a light panel (no photo)", cinematic: "dark type-only hero (no photo)", collage: "color-block type hero (no photo)", poster: "dark poster type hero (no photo)", panorama: "big type hero (no photo)", framed: "type-only hero on a tinted panel (no photo)" }[design.heroStyle]
     : { caption: "split hero with a captioned photo", cinematic: "full-bleed cinematic hero", collage: "collage hero with a tilted duotone photo", poster: "full-bleed poster hero with a centered headline", panorama: "big-type hero over a panoramic photo strip", framed: "framed photo hero with an overlapping copy card" }[design.heroStyle];

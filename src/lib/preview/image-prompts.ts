@@ -139,7 +139,7 @@ export function photosLine(trace: PreviewTrace | undefined, ownPhotos: number): 
   if (!hero) return `Photos: ${own}${scene ? "" : " (the note didn't name a photo subject)"}`;
   const what = scene ? `“${scene}”` : `“${hero.scene.slice(0, 60)}”`;
   if (hero.status === "preview photo (Google Images)") return TEMP_PHOTO_LINE;
-  if (hero.status === "your site's photo") return `Photo: your site's photo of ${what}${hero.credit?.title ? ` (“${hero.credit.title.slice(0, 50)}”)` : ""}`;
+  if (hero.status === "your site's photo") return `Photo: your site's own photo of ${what}${hero.credit?.title ? ` (“${hero.credit.title.slice(0, 50)}”)` : ""}`;
   if (hero.status === "web photo" && hero.credit) return `Photo: ${creditLine(hero.credit)}`;
   if (hero.status === "generated") return `AI photo of ${what}${scene ? " (no matching photo on your site or free photo sites)" : ""}`;
   if (hero.status === "failed") return `Photos: no photo of ${what} found and generating one failed, so the hero has ${scene ? "a plain background" : ownPhotos ? "your site's photo" : "a placeholder"}`;

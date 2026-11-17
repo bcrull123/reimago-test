@@ -135,4 +135,17 @@ describe("the card and the hero", () => {
       assert.match(layoutLine(design, `hero-split/${heroStyle}/cutout`)!, /your art shown whole/);
     }
   });
+  it("with a note request the two template looks compose the art differently (not two rockets on a panel)", () => {
+    const hero: Section = { type: "hero-split", tone: "light", heading: "Hi", image: "hero" };
+    const shape = (heroStyle: string) => {
+      const design = { heroStyle, layout: "editorial", header: "light", buttons: "square", footer: "minimal" } as unknown as DesignDirection;
+      const [first] = arrangeSections([hero, { type: "faq", tone: "light" }], design, ["hero", "photo-1"], [], true);
+      assert.equal(first!.fit, "cutout");
+      return `${first!.type}/${first!.variant}/${first!.tone}/${first!.reverse ? "left" : "right"}`;
+    };
+    // Every pair of hero styles the round can hand the two template looks ends up composed differently.
+    const styles = ["poster", "cinematic", "panorama", "framed", "caption", "collage"];
+    for (const a of styles) for (const b of styles) if (a !== b) assert.notEqual(shape(a), shape(b), `${a} vs ${b}`);
+    assert.equal(shape("panorama"), "hero-type/panorama/light/right");
+  });
 });
