@@ -45,3 +45,22 @@ describe("watermarked stock is rejected everywhere", () => {
     assert.equal(passesBar(heroScore(cand({ source: "site", appeal: 9, watermark: true }))), false);
   });
 });
+
+describe("the site's signature graphic (bob.me's rocket) is a site asset", () => {
+  it("finds a big transparent illustration, not the logo or icons", async () => {
+    const { signatureCandidates, isSignatureArt } = await import("./site-art.ts");
+    const art = [
+      { url: "https://bob.me/logo.png", label: "bob.me logo", kind: "img" as const, page: "https://bob.me/", home: true },
+      { url: "https://bob.me/icons/facebook.png", label: "facebook icon", kind: "img" as const, page: "https://bob.me/", home: true },
+      { url: "https://bob.me/rocket.png", label: "Blast off rocket transparent bg", kind: "img" as const, page: "https://bob.me/", home: true, width: 440, height: 360 },
+      { url: "https://bob.me/tiny.png", label: "sparkle", kind: "img" as const, page: "https://bob.me/", home: true, width: 32, height: 32 },
+    ];
+    const c = signatureCandidates(art, "https://bob.me/logo.png");
+    assert.equal(c[0]!.url, "https://bob.me/rocket.png");
+    assert.ok(!c.some((a) => /logo|facebook|tiny/.test(a.url)));
+    assert.ok(isSignatureArt({ cutout: true, width: 440, height: 360, type: "image/png" }));
+    assert.ok(!isSignatureArt({ cutout: false, width: 1600, height: 900, type: "image/jpeg" }), "a photo is not a signature graphic");
+    assert.ok(!isSignatureArt({ cutout: true, width: 120, height: 120, type: "image/png" }), "too small (an icon)");
+    assert.ok(!isSignatureArt({ cutout: true, width: 1800, height: 300, type: "image/png" }), "a banner strip");
+  });
+});

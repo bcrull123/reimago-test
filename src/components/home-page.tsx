@@ -321,7 +321,8 @@ export function HomePage() {
         await previewImagine({ data: { id: built.look.id } }).catch(() => undefined);
         const custom = await previewCustom({ data: { id: built.look.id } }).catch(() => undefined);
         if (!custom?.ok) return { ...built, look: { ...built.look, custom: { concept: direction.custom.brief.concept, status: "fallback" as const, note: "The from-scratch design could not be built this time, so this card shows a template look." } } };
-        return { ...built, look: { ...built.look, name: custom.name, layout: custom.layout ?? built.look.layout, custom: custom.custom, rev: (built.look.rev ?? 0) + 1 } };
+        // The custom page's own picture line (Imagine art / the site's signature graphic) replaces the template step's.
+        return { ...built, look: { ...built.look, name: custom.name, layout: custom.layout ?? built.look.layout, photos: custom.custom.photoLine ?? built.look.photos, custom: custom.custom, rev: (built.look.rev ?? 0) + 1 } };
       }),
     );
     const made: LookInfo[] = [];

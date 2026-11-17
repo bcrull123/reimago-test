@@ -264,6 +264,8 @@ export const previewCustom = createServerFn({ method: "POST" })
             mockupUrl: d.source === "imagine" ? mockupUrl : undefined,
             autofixed: d.autofixed?.length || undefined,
             imagineNote: d.source === "imagine" ? undefined : imagineNote,
+            photoLine: d.photoLine,
+            fidelity: d.fidelity,
           },
         };
       }

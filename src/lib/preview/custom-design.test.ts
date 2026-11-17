@@ -181,10 +181,41 @@ describe("Imagine first, then Grok builds", () => {
     const { mockupBuildPrompt, MOCKUP_MARKER } = await import("./custom-design.ts");
     const p = mockupBuildPrompt(cctx, brief);
     assert.ok(p.system.startsWith(MOCKUP_MARKER));
-    assert.match(p.system, /REAL photos given/);
+    assert.match(p.system, /REAL files given/);
+    assert.match(p.system, /region by region/);
+    assert.match(mockupBuildPrompt(cctx, brief, "Colors sampled from the mockup's pixels (match them): hero area #101820 (dark)").system, /hero area #101820/);
     assert.match(p.system, /never try to reproduce photo pixels/);
     assert.match(p.system, /Technical contract/);
     assert.match(p.system, /"assets"/);
     assert.match(p.user, /the business's own photo/);
+  });
+});
+
+describe("mockup fidelity (render-free)", () => {
+  // A 100x100 RGBA mockup: dark navy header + hero, an orange band at the bottom.
+  const W = 100, H = 100;
+  const px = new Uint8Array(W * H * 4);
+  for (let y = 0; y < H; y += 1)
+    for (let x = 0; x < W; x += 1) {
+      const i = (y * W + x) * 4;
+      const [r, g, b] = y >= 75 ? [255, 90, 54] : [11, 16, 38];
+      px[i] = r; px[i + 1] = g; px[i + 2] = b; px[i + 3] = 255;
+    }
+  it("samples the mockup's bands and main colors from its pixels", async () => {
+    const { mockupColors, mockupColorsText } = await import("./custom-design.ts");
+    const m = mockupColors(px, W, H);
+    assert.deepEqual(m.bands.map((b) => b.tone), ["dark", "dark", "mid"]);
+    assert.ok(m.palette.length >= 2);
+    assert.match(mockupColorsText(m), /hero area #0[0-9a-f]{5} \(dark\)/);
+  });
+  it("a page that follows the mockup scores high; a plain white one scores low and says what differs", async () => {
+    const { mockupColors, fidelityScore } = await import("./custom-design.ts");
+    const m = mockupColors(px, W, H);
+    const html = `<header class="top"></header><main><section class="hero"></section><section class="band"></section></main><footer></footer>`;
+    const good = fidelityScore(m, html, `body{background:#0b1026;color:#fff}.band{background:#ff5a36;color:#000}`, palette);
+    const plain = fidelityScore(m, html, `body{background:#ffffff;color:#111}.hero{background:#ffffff}.band{background:#f4f4f4}`, { ...palette, background: "#ffffff", surface: "#f4f4f4", primary: "#222222", accent: "#444444" });
+    assert.ok(good.score >= 80, `good ${good.score}`);
+    assert.ok(plain.score < 60, `plain ${plain.score}`);
+    assert.ok(plain.diff.some((d) => /hero area is dark/.test(d)));
   });
 });
