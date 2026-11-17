@@ -7,6 +7,8 @@
  *      now with Editorial's hero photo; the other two cards are untouched (same ids, same renders);
  *   3. "Make Dark Premium lighter so you can see the image better." -> ONLY Dark Premium changes again, in place,
  *      with 3 lighter variations (chips) and a "Changed:" line; the others untouched;
+ *   3b. when round 1 has the from-scratch "Custom Design" card: "Make the custom one darker" (CUSTOM_EDIT) -> only that
+ *      card changes, in place, still from scratch, with a darker page;
  *   4. refine with no look named (ROUND2, default "Show me something different") -> 3 NEW looks that must differ
  *      visibly from round 1 (styles / names, hero treatments, hero photos), not a reshuffle.
  * Screenshots every step plus before/after boards; measures luminance (WCAG relative luminance, CIE L*).
@@ -28,6 +30,7 @@ const note = process.env.NOTE ?? "use a photo of downtown pauls valley with the 
 const round2 = process.env.ROUND2 ?? "Show me something different";
 const borrowText = process.env.BORROW ?? "Use editorials picture on dark premium";
 const lightenText = process.env.LIGHTEN ?? "Make Dark Premium lighter so you can see the image better.";
+const customText = process.env.CUSTOM_EDIT ?? "Make the custom one darker";
 mkdirSync(outDir, { recursive: true });
 
 const browser = await chromium.launch({ executablePath: process.env.CHROME_PATH || undefined });
@@ -107,7 +110,7 @@ async function shootLook(id, prefix) {
   });
   await site.waitForLoadState("networkidle");
   await site.waitForTimeout(600);
-  const heroHeight = await site.locator("main section").first().evaluate((el) => el.getBoundingClientRect().bottom + window.scrollY);
+  const heroHeight = await site.locator("main section, section").first().evaluate((el) => el.getBoundingClientRect().bottom + window.scrollY);
   const full = await site.screenshot({ path: join(outDir, `${prefix}-full.png`), fullPage: true });
   const info = await site.evaluate(() => ({
     bg: getComputedStyle(document.body).backgroundColor,
@@ -118,6 +121,7 @@ async function shootLook(id, prefix) {
     heroImg: document.querySelector("main section img")?.src,
     heroClass: document.querySelector("main section")?.className,
     ribbon: document.querySelector(".preview-ribbon")?.textContent?.trim(),
+    custom: document.body.classList.contains("custom-look"),
   }));
   const heroHash = info.heroImg ? createHash("sha256").update(await (await site.request.get(info.heroImg)).body()).digest("hex").slice(0, 16) : null;
   await site.close();
@@ -194,8 +198,25 @@ await page.locator("[data-look]").first().scrollIntoViewIfNeeded();
 await page.screenshot({ path: join(outDir, "05-variation-chip-cards.png") });
 await sideBySide([`03-borrow-look-${at3 + 1}-top.png`, `04-lighten-look-${at3 + 1}-top.png`], "04-lighten-before-after.png", 2200, ["Dark Premium before", `After: ${round4[at3].title}`]);
 await sideBySide(round4.map((c, i) => (i === at3 ? `04-lighten-look-${i + 1}-top.png` : c.id === round1[i].id ? `01-round1-look-${i + 1}-top.png` : `03-borrow-look-${i + 1}-top.png`)), "04-lighten-all-three.png", 2400, round4.map((c) => c.title));
+// ---- Step 3b: "Make the custom one darker" -> only the from-scratch card changes, in place, still from scratch.
+let afterCustom = afterChip;
+const atC = afterChip.findIndex((c) => c.name === "Custom Design");
+if (atC >= 0) {
+  afterChip[atC].look = await shootLook(afterChip[atC].id, `05-custom-before-${atC + 1}`);
+  await refine(customText, (ids) => ids[atC] !== afterChip[atC].id && ids.filter((id, i) => id !== afterChip[i]?.id).length === 1);
+  await page.locator("[data-refine-round]").scrollIntoViewIfNeeded();
+  await page.screenshot({ path: join(outDir, "05b-custom-edit-cards.png") });
+  afterCustom = await readCards();
+  const editedLook = await shootLook(afterCustom[atC].id, `05b-custom-after-${atC + 1}`);
+  check(afterCustom.every((c, i) => (i === atC ? c.id !== afterChip[i].id : c.id === afterChip[i].id)), `custom edit: only the Custom Design card changed`);
+  check(afterCustom[atC].name === "Custom Design", `custom edit: same name (${afterCustom[atC].title})`);
+  check(afterChip[atC].look.custom && editedLook.custom, `custom edit: still the from-scratch page (${afterChip[atC].look.custom} -> ${editedLook.custom})`);
+  check(editedLook.wholePage.relLum < afterChip[atC].look.wholePage.relLum, `custom edit: darker page (${afterChip[atC].look.wholePage.relLum} -> ${editedLook.wholePage.relLum})`);
+  check(/^Changed:/i.test(afterCustom[atC].changed ?? ""), `custom edit: ${afterCustom[atC].changed}`);
+  await sideBySide([`05-custom-before-${atC + 1}-top.png`, `05b-custom-after-${atC + 1}-top.png`], "05b-custom-before-after.png", 2200, ["Custom Design before", `After: ${customText}`]);
+} else console.log("(no Custom Design card in round 1: custom edit step skipped)");
 // ---- Step 4: no look named -> three new looks, visibly different from what is on screen (and round 1).
-await refine(round2, (ids) => !ids.some((id) => round4.some((c) => c.id === id)));
+await refine(round2, (ids) => !ids.some((id) => afterCustom.some((c) => c.id === id)));
 await page.locator("[data-look]").first().scrollIntoViewIfNeeded();
 await page.screenshot({ path: join(outDir, "06-regenerated-cards.png") });
 const round2Cards = await readCards();

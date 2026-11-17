@@ -237,6 +237,56 @@ Bob's round 1 on paulsvalley.com showed the airport, a library interior and a mu
 
 **Hero layouts fixed**: the big-type (panorama) headline had an invisible word ("ADVENTURE, FUN, AND … PRIDE"): the outlined accent word used a transparent fill with a `currentColor` stroke, so it drew nothing. It now has a 30% accent fill and a stroke in the text color (white on photo heroes). The panorama's photo strip had a reveal-on-scroll class and too much height above it, so it didn't show in the first screen or in thumbnails. It has no reveal class now, a smaller headline (max 5rem, 20ch) and a 21:7 strip. Checked at 1280x800 and 1024x640 for panorama, poster and framed with Editorial, Dark Premium and Playful.
 
+### Custom Design: one look designed from scratch (round 5)
+
+Bob on bob.me (round 5): "These are basically the same as the other sites. We need to add something more creative." So, as the owner asked, there is **one** look per round that Grok designs from scratch. The other two stay template looks so you can compare. It is always the **third card**, named **"Custom Design"**.
+
+- **Creative brief** (`creativeBrief`, `custom-design.server.ts`): it runs in parallel inside `previewDirections` (30s cap). Grok writes the concept, a visual metaphor, mood, composition, typography (two Google Fonts), motion (CSS only) and a palette. If the call fails or times out, `fallbackBrief` picks a concept by business type: town "Front Porch", restaurant "The Long Table", trades "Blueprint", startup community "The Launchpad", other "Signature". Fonts outside the curated list are swapped for curated ones. The third direction becomes the custom direction (`asCustomDirection`). Its sub-pages, and the fallback homepage, use the template archetype with the brief's colors and fonts.
+- **The page** (`designCustom`): a separate server call `previewCustom`, chained after that look's template build in `home-page.tsx`. It has its own step budget. Grok writes the full homepage as freeform HTML + CSS (draft cap 75s, 16k tokens). It gets the real content (name, tagline, services, phone, pages, CTA, the look's quality-gated photos as `@img:` tokens, and the keep flag). Inline SVG and CSS art are encouraged when the photos are weak.
+- **Guardrails** (`custom-design.ts`, pure):
+  - `sanitizeCustomHtml` / `sanitizeCss` remove scripts, `on*` handlers, forms and iframes, external images, links and fonts, `@import`, `@font-face`, `expression()` and `javascript:`. Off-site links become the CTA page. Only the business's own tel/mailto and https social links survive.
+  - The preview CSP (`script-src 'none'`) still applies.
+  - `validateCustom` checks:
+    - the name/logo is there;
+    - the header nav links every page;
+    - a CTA sits in the hero;
+    - there is a tel link, exactly one h1, ≥3 sections, a footer, and enough text;
+    - keep → the kept picture is shown whole;
+    - an `@media` rule, and no fixed width over 600px outside media queries;
+    - WCAG AA contrast per CSS rule (same-rule color/background 4.5:1; colors on an ancestor rule's background 3:1; the palette's text on background/surface 4.5:1).
+  - `render.ts` adds the preview ribbon and the legal/photo-credit line ("Preview by Reimago · designed from scratch (“concept”)"), and it places the logo with the same per-surface treatment as the templates (`@brand:light|dark`).
+- **One repair pass, then fallback**: when a check fails, Grok gets the problem list once (`REPAIR`). If the page still fails, or the draft times out or errors, the card shows the template homepage under its style name (e.g. "Playful"), with an amber note on the card. The page is never blank and never broken.
+- **Render check**: there is no browser render check on the server (Vercel has no Chrome); the server runs the static checks above. `scripts/custom-look-check.mjs <base> <id> <outDir>` is the real browser check for tests. At 1280 and 390 it checks: non-blank, no horizontal overflow, no unresolved tokens or broken images, ribbon and legal line, no scripts, one h1, CTA in the hero, and per-element contrast. It writes `custom-{1280,390}-top.png` and `custom-check.json`.
+- **Refine**: "make the custom one darker" (also "custom design", "from-scratch", "bespoke") targets only that card. The palette is retuned deterministically first, then Grok edits the page's HTML/CSS (`editCustom`, `EDIT`). The edit is checked like the draft; if it fails, the retuned colors alone are kept. The card keeps its name ("Custom Design · darker"). A refine with no look named makes a new round, again with one Custom Design.
+- **Keep**: "keep the rocket" stays site-only (no web search and no AI image), and the custom page must show `@img:hero` whole.
+- **Card line**: `Designed from scratch by Grok: “concept”` and `(fixed after our checks)` after a repair. Layout line: `Layout: designed from scratch · concept “X” · metaphor`.
+- **Logs**:
+  - `[design] brief (category: kind) by Grok|fallback in Ns: “concept” · metaphor · fonts A / B · #primary on #background`
+  - `[design] look 3 is the from-scratch “Custom Design”: …`
+  - `[design] “X” draft: N chars html + M chars css in Ns`
+  - `[design] checks “X”: pass | N problem(s): … · sanitized: …`
+  - `[design] repair pass: …`, `[design] checks after repair: …`
+  - `[design] “X” ready (ok|repaired) in Ns · … · images …`, or `[design] fallback: look 3 shows its template homepage as “Playful” (reason)`
+  - `[design] edit “…” by Grok in Ns: html+css · background A -> B`
+- **Off switch**: `PREVIEW_CUSTOM_LOOK=0` (then three template looks as before). Mock mode has no custom look.
+
+### Wolf River Bob fix (relevance is business fit, not a shared word)
+
+On bob.me, both Dark Premium and Bold Photo showed Wikimedia's "Wolf River Bob 10-1974" (an old cowboy). Root cause:
+1. The scraped "services" were merch and page furniture ("Bob.me Golf Hat", "Specs", "Report"), so the business kind became "Bob.me Golf Hat" and the category was "general".
+2. The free-license fallback query became "bob golf hat" (a brand word plus merch). Wikimedia and Openverse answer that with people named Bob in hats.
+3. The vision rating judged photos against "Bob.me Golf Hat", so a man in a hat looked on-topic. When unrated, the general brief's keyword fallback only rejected logos and signs.
+4. With few passing photos, the "reuse a passing photo" rule put it on two looks.
+
+Fixes:
+- `realServices` drops merch, page furniture and "brand + product" items.
+- A **startup-community** category (founders, entrepreneurs, coworking) has its own scenes.
+- `briefQueries` strips brand and name words, and the brief text no longer contains the business name.
+- `brandOnlyMatch` flags a candidate whose title only shares a word with the name as OFF-TOPIC.
+- Every non-town brief rejects vintage, archival, 19xx and portrait-of-an-unrelated-person titles.
+- The rating prompt says "judge BUSINESS FIT first; a photo that only shares a word with the business NAME, a vintage/archival photo, or a portrait of an unrelated person rates 1-3".
+- `passesBar` now needs appeal ≥7 **and** not off-topic, and an unrated free-license (web) photo never passes.
+
 ### Editing one look from feedback ("Make Dark Premium lighter", "Use editorials picture on dark premium")
 
 When the refine feedback names a look, that look is EDITED in place instead of making three new ones (`previewRefine`, `look-edit.ts`, `look-edit.server.ts`). **Only that card changes**: same place, same name. The other two cards stay exactly as they were (same ids, same renders). The banner reads "Edited Dark Premium only, as you asked (round n of 5) … The other looks are unchanged."
@@ -474,6 +524,7 @@ The old domain step (step 12) is gone. Wizard answers are kept in memory only (s
 | **`PHOTO_SEARCH_RATE_PER_MINUTE`** / **`PHOTO_SEARCH_RATE_PER_HOUR`** | no | Master endpoint limits per caller IP (defaults 30 / 300). |
 | **`SERPER_BASE_URL`** | no | Tests only: point Serper calls at a mock (`http://localhost:9997`; plain http is allowed for localhost only). Default `https://google.serper.dev`. |
 | **`PREVIEW_WEB_PHOTOS`** | no | `0` turns off the free-license web photo search (Openverse, Wikimedia Commons) used when the owner's note asks for a photo of something. On by default, also in mock mode. |
+| **`PREVIEW_CUSTOM_LOOK`** | no | `0` turns off the from-scratch "Custom Design" look (third card); on by default when AI is available. |
 | `PREVIEW_STORE_DIR` | no | File storage folder when there is no `DATABASE_URL` (default: OS temp dir). |
 | `CURSOR_API_KEY` | no | When set, "Send to Cursor" starts a Cursor agent with the preview links; otherwise the button downloads a brief. |
 
@@ -493,6 +544,7 @@ The old domain step (step 12) is gone. Wizard answers are kept in memory only (s
 - `src/lib/preview.functions.ts`: server functions `previewRead`, `previewFromBrief`, `previewDirections`, `previewLook`, `previewFinish`.
 - `src/lib/preview/photo-queries.ts`: the planner's proactive Google Images queries (clean + no-AI defaults). `hero-brief.ts` (pure: business type -> what a good hero is, off-topic words, search scenes, the generic low-quality list). `hero-pick.ts` (pure: quality bar, pixel stats, perceptual hash, sign/subject words, hero score, mood fit, the three-look assignment) and `hero-pick.server.ts` (decoding photos, the site's photos as candidates).
 - `src/lib/preview/look-edit.ts` (pure: which look, which tweaks, OKLCH palette tuning with AA, CSS, labels) and `look-edit.server.ts` (Grok edit planner, photo luma, building the edited looks).
+- `src/lib/preview/custom-design.ts` (pure: brief fallback, prompts, HTML/CSS sanitizer, `validateCustom` checks, palette vars) and `custom-design.server.ts` (`creativeBrief`, `designCustom` draft → checks → one repair → fallback, `editCustom`). `render.ts` `customDocument` serves the custom homepage.
 - `src/components/looks-picker.tsx`, `live-preview.tsx`, `home-page.tsx`: UI.
 - Routes:
   - `made.$id.ts` and `made.$id.$slug.ts` serve the pages; unfinished looks are sent `no-cache`;
@@ -544,3 +596,5 @@ It exits 1 on any failed check, writes before/after boards (`03-borrow-before-af
 Round 1 photos: run the app with the mock Serper and the fake AI server, then `SERVER_LOG=<dev log> EXPECT_DISTINCT_HEROES=1 NOTE="" node scripts/note-photo-e2e.mjs https://www.paulsvalley.com/ live-preview-shots/round1-photos`. The mock's round-1 fixtures for the three town queries mix three welcome signs (one of them the same picture at another size, titled "gateway"), a dim park, the historic district, a downtown night street, a brick main street, the depot and the water tower. The check passes when the three heroes are different pictures with three different subjects and none is a sign. Unit tests: `src/lib/preview/hero-pick.test.ts`.
 
 Quality gate (business types): the mock's Pauls Valley pool also has a gravel lot / RV park ranked first by Google, and the live paulsvalley.com site photos include the airport and a library interior. Plumber queries (plumb/bathroom/technician/home) get a van, a pipe diagram, a finished bathroom and a renovated kitchen. Restaurant queries (restaurant/dining/dish/cafe/food) get two menu boards, a dining room and two plated dishes. The fake AI answers the "Rate EVERY photo as a homepage hero" call from the titles (bad words 3, good 8-9, otherwise 5; `FAKE_RATING=none` gives no answer). Run with `FAKE_BOB_ROUND1=1` on the fake AI, then `SERVER_LOG=<dev log> NOTE="" node scripts/note-photo-e2e.mjs <url> <outDir>` for https://www.paulsvalley.com/ (add `EXPECT_DISTINCT_HEROES=1`), https://www.morganplumbingokc.com/ and https://www.cafe501.com/. Unit tests: `src/lib/preview/hero-brief.test.ts`.
+
+Custom Design (from scratch): the fake AI answers the brief, design, repair and edit calls (`scripts/fake-custom-design.mjs`: a realistic page with SVG art per concept). `FAKE_CUSTOM=broken` returns a broken first draft (header nav missing pages, a script, external image/link, onclick, low contrast, a 1400px width) that the repair pass fixes. `FAKE_CUSTOM=broken-always` keeps it broken, so the card falls back to the template. `FAKE_CUSTOM=slow` sleeps 180s, so the draft times out and falls back. After a round, run `CHROME_PATH=… node scripts/custom-look-check.mjs http://localhost:8080 <third card id> <outDir>`. `scripts/refine-edit-e2e.mjs` adds a "Make the custom one darker" step (`CUSTOM_EDIT`) when a Custom Design card exists. Unit tests: `src/lib/preview/custom-design.test.ts` (also the Wolf River Bob regression).
