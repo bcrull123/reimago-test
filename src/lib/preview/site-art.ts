@@ -239,3 +239,32 @@ export function sanitizeSvg(markup: string): string | undefined {
   if (!/\sxmlns=/.test(svg.slice(0, 300))) svg = svg.replace(/^<svg\b/i, '<svg xmlns="http://www.w3.org/2000/svg"');
   return svg;
 }
+
+/** Words that mark small UI pictures, not a brand's signature graphic. */
+const NOT_SIGNATURE = /\b(?:icons?|favicon|logos?|badges?|buttons?|arrows?|chevron|avatar|gravatar|headshot|portrait|profile|sponsors?|partners?|payment|visa|mastercard|paypal|social|facebook|instagram|twitter|linkedin|youtube|tiktok|spinner|loader|placeholder|pixel|tracking|qr)\b/i;
+
+/**
+ * Candidates for the site's signature brand graphic (a mascot, an illustration like bob.me's rocket): pictures in
+ * the page (not the logo, the share image or small UI icons), homepage first, then the largest declared size.
+ * Whether one really is a cutout illustration is decided after loading it (transparent PNG/WebP or SVG, ≥200px).
+ */
+export function signatureCandidates(art: SiteArt[], logo?: string, max = 6): SiteArt[] {
+  const area = (a: SiteArt) => (a.width ?? 0) * (a.height ?? 0);
+  return art
+    .filter((a) => a.kind === "img" || a.kind === "picture" || a.kind === "svg" || a.kind === "css")
+    .filter((a) => a.url !== logo && !NOT_SIGNATURE.test(`${a.label} ${a.url.split(/[?#]/)[0]}`))
+    .filter((a) => !(a.width && a.width < 200) && !(a.height && a.height < 200))
+    .sort((x, y) => Number(y.home) - Number(x.home) || area(y) - area(x))
+    .slice(0, max);
+}
+
+/** A loaded picture is a signature graphic: a cutout (transparent / drawn) at least 200px each way, not a banner strip. */
+export function isSignatureArt(file: { cutout: boolean; width?: number; height?: number; type: string }): boolean {
+  if (!file.cutout) return false;
+  if (!/^image\/(png|webp|svg\+xml|gif)$/.test(file.type)) return false;
+  const w = file.width ?? 0;
+  const h = file.height ?? 0;
+  if (file.type !== "image/svg+xml" && (w < 200 || h < 200)) return false;
+  if (w && h && (w / h > 3 || h / w > 3)) return false;
+  return true;
+}

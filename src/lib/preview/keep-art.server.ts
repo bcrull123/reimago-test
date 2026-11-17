@@ -8,7 +8,7 @@
 import { aiModel, chatJson, sniffImageType } from "@/lib/ai-provider.server";
 import { fetchLogoFile, imageSize } from "@/lib/preview/images.server";
 import { analyzeLogo } from "@/lib/preview/logo";
-import { matchSiteArt, sanitizeSvg, visionCandidates, type SiteArt } from "@/lib/preview/site-art";
+import { isSignatureArt, matchSiteArt, sanitizeSvg, signatureCandidates, visionCandidates, type SiteArt } from "@/lib/preview/site-art";
 import type { SiteFacts } from "@/lib/preview/types";
 
 export type KeptArt = {
@@ -125,5 +125,28 @@ export function keepFromSite(subject: string, facts: SiteFacts, useVision: boole
   const result = find(subject, facts, useVision, deadline).catch(() => ({ looked: 0, how: "error" }) as KeepResult);
   cache.set(key, { at: Date.now(), result });
   if (cache.size > 100) cache.delete(cache.keys().next().value!);
+  return result;
+}
+
+const signatureCache = new Map<string, { at: number; result: Promise<KeptArt | undefined> }>();
+
+/**
+ * The site's signature brand graphic (a mascot / illustration such as bob.me's "Blast off" rocket), with no note
+ * needed: a transparent PNG/WebP or SVG of at least 200px, placed in the page, not the logo or an icon. Used by the
+ * Custom Design as a site asset for Grok Imagine to design around (and the real file on the built page).
+ */
+export function signatureArt(facts: SiteFacts): Promise<KeptArt | undefined> {
+  const key = facts.sourceUrl;
+  const hit = signatureCache.get(key);
+  if (hit && Date.now() - hit.at < 10 * 60_000) return hit.result;
+  const result = (async () => {
+    for (const art of signatureCandidates(artOf(facts), facts.logo)) {
+      const file = await load(art).catch(() => undefined);
+      if (file && isSignatureArt(file)) return { ...file, art, how: `the site's signature graphic: “${art.label.slice(0, 60)}”` };
+    }
+    return undefined;
+  })().catch(() => undefined);
+  signatureCache.set(key, { at: Date.now(), result });
+  if (signatureCache.size > 100) signatureCache.delete(signatureCache.keys().next().value!);
   return result;
 }

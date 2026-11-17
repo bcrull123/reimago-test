@@ -224,6 +224,12 @@ export async function generateImage(options: {
   guard?: boolean;
   /** xAI only: edit from this public image (the site's logo, like the original Imagine flow); falls back to a plain generation. */
   sourceImageUrl?: string;
+  /**
+   * xAI only: reference images (https URLs or data: URIs of PNG/JPEG/WebP, at most 5 per the API) for
+   * /images/edits — the site's own logo, brand art and photos for Imagine to recompose. Falls back to a plain
+   * generation when the edit is refused.
+   */
+  sourceImages?: string[];
   /** xAI resolution ("1k" default, "2k"). */
   resolution?: string;
 }): Promise<GeneratedImage | undefined> {
@@ -233,14 +239,17 @@ export async function generateImage(options: {
   const apiKey = env(config.key);
   if (!apiKey) return undefined;
   const base = env("IMAGE_BASE_URL");
-  const editing = provider === "xai" && Boolean(options.sourceImageUrl && /^https:\/\//.test(options.sourceImageUrl));
+  const sources = [...(options.sourceImageUrl ? [options.sourceImageUrl] : []), ...(options.sourceImages ?? [])]
+    .filter((u) => /^https:\/\//.test(u) || /^data:image\/(png|jpeg|webp);base64,/.test(u))
+    .slice(0, 5);
+  const editing = provider === "xai" && sources.length > 0;
   const path = editing ? "images/edits" : "images/generations";
   const endpoint = base ? `${base.replace(/\/+$/, "")}/${path}` : editing ? config.url.replace(/images\/generations$/, "images/edits") : config.url;
   const model = env("IMAGE_MODEL") ?? config.model;
   const prompt = (options.guard === false ? options.prompt.trim() : `${options.prompt.trim()} ${IMAGE_GUARD}`).slice(0, 3800);
   const body =
     provider === "xai"
-      ? { model, prompt, ...(editing ? { image: { url: options.sourceImageUrl, type: "image_url" } } : {}), aspect_ratio: options.aspect, resolution: options.resolution ?? "1k", quality: "low", response_format: "b64_json", n: 1 }
+      ? { model, prompt, ...(editing ? (sources.length === 1 ? { image: { url: sources[0], type: "image_url" } } : { images: sources.map((url) => ({ url, type: "image_url" })) }) : {}), aspect_ratio: options.aspect, resolution: options.resolution ?? "1k", quality: "low", response_format: "b64_json", n: 1 }
       : {
           model,
           prompt,
@@ -258,7 +267,7 @@ export async function generateImage(options: {
     if (!response.ok) {
       console.error(`[image:${provider}]${editing ? " edit" : ""}`, response.status, (await response.text().catch(() => "")).slice(0, 300));
       // The logo edit was refused (unreachable logo, unsupported image): a plain generation instead.
-      return editing ? generateImage({ ...options, sourceImageUrl: undefined }) : undefined;
+      return editing ? generateImage({ ...options, sourceImageUrl: undefined, sourceImages: undefined }) : undefined;
     }
     const json = (await response.json()) as { data?: { b64_json?: string; url?: string }[] };
     const item = json.data?.[0];
