@@ -737,7 +737,8 @@ export function renderSection(section: Section, ctx: RenderContext): string {
       }</div><div class="wrap"><div class="hero-copy">${section.eyebrow ? `<span class="eyebrow">${esc(section.eyebrow)}</span>` : ""}<h1>${rich(section.heading || ctx.name)}</h1>${paragraphs(section.text, "lead")}${actions(section, ctx)}</div></div></section>`;
     case "hero-type":
       return `${open}<div class="wrap"><div class="hero-copy">${section.eyebrow ? `<span class="eyebrow">${esc(section.eyebrow)}</span>` : ""}<h1>${rich(section.heading || ctx.name)}</h1><div class="row"><div>${paragraphs(section.text, "lead")}</div>${actions(section, ctx)}</div></div>${
-        section.image ? `<div class="strip rv">${media(section.image, ctx)}</div>` : ""
+        // No reveal animation on the hero strip: it must show in the first screen (and in sandboxed thumbnails).
+        section.image ? `<div class="strip">${media(section.image, ctx)}</div>` : ""
       }</div></section>`;
     case "page-hero":
       return `${open}<div class="wrap${section.image ? " grid" : ""}"><div class="hero-copy">${section.eyebrow ? `<span class="eyebrow">${esc(section.eyebrow)}</span>` : ""}<h1>${rich(section.heading || ctx.name)}</h1>${paragraphs(section.text, "lead")}${actions(section, ctx)}</div>${

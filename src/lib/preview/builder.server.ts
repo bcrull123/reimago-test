@@ -14,6 +14,7 @@ import { aiAvailable, aiFallbackModel, aiModel, chatJson, isMockMode } from "@/l
 import { BODY_FONTS, HEADING_FONTS, defaultPalette, hashString, safeFont, safePalette } from "@/lib/preview/theme";
 import { ARCHETYPES, type DesignDirection, type PlanPage, type PlanSection, type Section, type SiteFacts, type SitePlan, type StoredImage, type AiDebug } from "@/lib/preview/types";
 import { lookName } from "@/lib/preview/archetype-label";
+import { briefQueries, heroBrief } from "@/lib/preview/hero-brief";
 import { PRESETS, archetypesFor, mockDirections, normalizeDirection, HEADING_FONTS as DISPLAY_FONTS, BODY_FONTS as TEXT_FONTS } from "@/lib/preview/design";
 import { SECTION_GUIDE, checkSections, composeImages, composeMockPage, corpusFor, type NormalizeContext } from "@/lib/preview/sections";
 import { redact } from "@/lib/ai-json";
@@ -227,19 +228,19 @@ export async function prefetchForPlan(rawFacts: SiteFacts, plan: SitePlan, deadl
 }
 
 /**
- * The planner's queries, plus (in a regenerated round) two more scenes of the same town — courthouse, landmark,
- * aerial view, park, depot, festival — so the new round has fresh photos to choose from.
+ * The planner's queries plus two more from the business type's brief (hero-brief.ts: a town -> its downtown
+ * historic main street, landmark, aerial view…; a restaurant -> plated dishes, its dining room; a plumber ->
+ * finished work, a technician at work…), so the quality gate has good photos to choose from. A regenerated round
+ * rotates to other scenes.
  */
 export function proactiveQueries(facts: SiteFacts, plan: Pick<SitePlan, "imageQueries" | "avoidPhotos">): string[] {
-  const base = plan.imageQueries ?? [];
+  const base = (plan.imageQueries ?? []).slice(0, 3);
+  if (!base.length) return base;
+  const extra = briefQueries(facts, heroBrief(facts)).filter((q) => !base.some((b) => b.toLowerCase() === q.toLowerCase()));
+  if (!extra.length) return base;
   const avoid = plan.avoidPhotos;
-  const town = placeOf(facts);
-  if (!avoid || !town?.city || !base.some((q) => q.toLowerCase().includes(town.city.toLowerCase()))) return base;
-  const at = `${town.city}${town.state ? ` ${town.state}` : ""}`;
-  const pool = [`${at} courthouse`, `${at} landmark`, `${at} aerial view`, `${at} park`, `${town.city} depot museum`, `${at} festival downtown`];
-  const fresh = pool.filter((q) => !base.some((b) => b.toLowerCase() === q.toLowerCase()));
-  const start = (avoid.keys.length + avoid.hashes.length) % fresh.length;
-  return [...base.slice(0, 3), fresh[start]!, fresh[(start + 1) % fresh.length]!];
+  const start = avoid ? (avoid.keys.length + avoid.hashes.length) % extra.length : 0;
+  return [...new Set([...base, extra[start]!, extra[(start + 1) % extra.length]!])];
 }
 
 export async function planSite(facts: SiteFacts, variation = 0): Promise<{ plan: SitePlan; note?: string }> {
@@ -630,7 +631,7 @@ function logHeroChoice(index: number, look: string, heroImage: string | undefine
   ]
     .filter(Boolean)
     .join(" · ");
-  console.info(`[photo] look ${index + 1} "${look}": hero = ${source}${why ? ` · ${why.slice(0, 600)}` : ""}`);
+  console.info(`[photo] look ${index + 1} "${look}": hero = ${source}${why ? ` · ${why.slice(0, 1400)}` : ""}`);
 }
 
 /** The credit shape for a temporary Google Images photo (shown as "preview only" on the card and footer). */
@@ -868,11 +869,14 @@ export async function buildLook(
     // three archetypes; recomputed the same way (without moods) when it didn't.
     const { assignHeroes } = await import("@/lib/preview/hero-pick");
     const stored = pre.assign && pre.assign.archetypes[index] === design.archetype ? pre.assign.picks : undefined;
-    const cands = [...pre.photos.flatMap((p) => (p.candidate ? [p.candidate] : [])), ...(freshPhotos ? [] : (pre.site ?? []))];
+    const cands = [...pre.photos.flatMap((p) => (p.candidate ? [p.candidate] : [])), ...(freshPhotos ? [] : (pre.site ?? [])), ...(pre.web ?? []).map((w) => w.candidate)];
     const mine = (stored ?? (cands.length ? assignHeroes(cands, [undefined, undefined, undefined]) : [])).find((p) => p.index === index);
-    type Option = { own: string; score: number; what: string } | { g: (typeof pre.photos)[number] } | { siteUrl: string; what: string };
+    type Option = { own: string; score: number; what: string } | { g: (typeof pre.photos)[number] } | { siteUrl: string; what: string } | { w: NonNullable<typeof pre.web>[number] };
     let first: Option | undefined;
-    if (mine?.source === "google") {
+    if (mine?.source === "web") {
+      const w = pre.web?.find((p) => p.candidate.id === mine.id);
+      if (w) first = { w };
+    } else if (mine?.source === "google") {
       const g = pre.photos.find((p) => p.temp.imageUrl === mine.id);
       if (g) first = { g };
     } else if (mine?.source === "site") {
@@ -885,10 +889,16 @@ export async function buildLook(
       scene: pre.queries.join(" / "),
       prompt: "",
       status: "not generated (mock mode / images off)",
-      search: `Google Images (proactive, from the plan) ${pre.queries.map((q) => `“${q}”`).join(" / ")}: ${pre.seen} results, ${pre.photos.length} usable${pre.ranking ? ` · ${pre.ranking}` : ""}${Object.keys(pre.rejected).length ? ` (skipped ${Object.entries(pre.rejected).map(([w, n]) => `${n} ${w}`).join(", ")})` : ""} · ${strong.length} strong site photo${strong.length === 1 ? "" : "s"}`,
+      search: `Google Images (proactive, from the plan) ${pre.queries.map((q) => `“${q}”`).join(" / ")}: ${pre.seen} results, ${pre.photos.length} usable${pre.ranking ? ` · ${pre.ranking}` : ""}${pre.bar ? ` · quality gate (${pre.bar.brief}; ${pre.bar.rated ? "vision-rated" : "rules"}): ${pre.bar.passed.length} passed, ${pre.bar.failed.length} failed` : ""}${Object.keys(pre.rejected).length ? ` (skipped ${Object.entries(pre.rejected).map(([w, n]) => `${n} ${w}`).join(", ")})` : ""} · ${strong.length} strong site photo${strong.length === 1 ? "" : "s"}`,
     };
     trace.images.push(entry);
-    const order: Option[] = [...(first ? [first] : []), ...pool.slice(rank), ...pool.slice(0, rank)];
+    // The quality gate (hero-brief.ts / rateHeroes): a photo that failed it is never a fallback for this look.
+    const failed = new Set(pre.bar?.failed ?? []);
+    // Nothing passed the gate for this look: an AI photo of a good scene beats an unappealing real one.
+    if (mine && failed.has(mine.id) && imagesEnabled()) first = undefined;
+    const urlOf = (o: (typeof pool)[number]) => ("g" in o ? o.g.temp.imageUrl : (scored[Number(o.own.slice(6)) - 1]?.photo.url ?? ""));
+    const passing = pool.filter((o) => !failed.has(urlOf(o)));
+    const order: Option[] = [...(first ? [first] : []), ...passing.slice(rank), ...passing.slice(0, rank)];
     const picked = (option: Option) => (option === first && mine ? ` · picked for this look: ${mine.reason}` : first ? " · (assigned photo unavailable; next in the pool)" : "");
     const choose = async (): Promise<boolean> => {
       for (const option of order) {
@@ -898,6 +908,14 @@ export async function buildLook(
           await saveImage(id, "hero", photo.type, photo.bytes);
           images.hero = { name: "hero", type: photo.type, source: "photo", alt: facts.name, width: photo.width, height: photo.height };
           Object.assign(entry, { status: "your site's photo", source: "your site", scene: option.what, search: `${entry.search}${picked(option)}` } satisfies Partial<ImageTrace>);
+          return true;
+        }
+        if ("w" in option) {
+          const photo = await fetchPhoto(option.w.url);
+          if (!photo || photo.width < 1000) continue;
+          await saveImage(id, "hero", photo.type, photo.bytes);
+          images.hero = { name: "hero", type: photo.type, source: "web", alt: option.w.credit.title, width: photo.width, height: photo.height, credit: option.w.credit };
+          Object.assign(entry, { status: "web photo", source: "web search", credit: option.w.credit, scene: option.w.credit.title, search: `${entry.search}${picked(option)}` } satisfies Partial<ImageTrace>);
           return true;
         }
         if ("own" in option) {
