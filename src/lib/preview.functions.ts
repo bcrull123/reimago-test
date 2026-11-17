@@ -81,7 +81,9 @@ export const previewDirections = createServerFn({ method: "POST" })
       const planP = planSite(data.facts, data.variation);
       const looksP = directionsFor(data.facts, data.variation);
       // Proactive photo search (Serper) starts as soon as the plan's imageQueries exist, alongside the looks.
-      const prefetchP = planP.then((p) => prefetchForPlan(data.facts, p.plan, started + Math.max(20_000, stepBudgetMs() - 15_000)));
+      // It also waits for the looks' archetypes, so each look's photo can suit its mood (dark premium: night, …).
+      const archetypesP = looksP.then((l) => l.directions.map((d) => d.archetype)).catch(() => undefined);
+      const prefetchP = planP.then((p) => prefetchForPlan(data.facts, p.plan, started + Math.max(20_000, stepBudgetMs() - 15_000), archetypesP));
       const [planned, looks] = await Promise.all([planP, looksP]);
       // Give a running search a few more seconds to finish and store its ranking (each look can redo it if not).
       await Promise.race([prefetchP, new Promise((r) => setTimeout(r, Math.max(0, Math.min(12_000, started + stepBudgetMs() - 10_000 - Date.now()))))]);

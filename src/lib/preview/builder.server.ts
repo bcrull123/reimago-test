@@ -25,7 +25,7 @@ import { arrangeSections, diversifyDirections, lookSignature, photoRank } from "
 import { findWebPhotos, webPhotosEnabled } from "@/lib/preview/web-photo.server";
 import type { Photo } from "@/lib/preview/images.server";
 import { imagePrompt, isCivic, sceneFor } from "@/lib/preview/image-prompts";
-import type { ImageTrace, PreviewTrace } from "@/lib/preview/types";
+import type { Archetype, ImageTrace, PreviewTrace } from "@/lib/preview/types";
 
 /** The owner's note + feedback rounds as a high-priority block at the end of a system prompt. */
 function requestBlock(facts: SiteFacts): string {
@@ -207,11 +207,11 @@ export function withPlanSubject(facts: SiteFacts, plan: SitePlan): SiteFacts {
  * nothing), the planner's imageQueries are searched right after the plan, while the looks are being designed.
  * Each look build then reads the stored ranking (plannedPhotos). Returns undefined when it doesn't apply.
  */
-export async function prefetchForPlan(rawFacts: SiteFacts, plan: SitePlan, deadline: number) {
+export async function prefetchForPlan(rawFacts: SiteFacts, plan: SitePlan, deadline: number, archetypes?: Promise<(Archetype | undefined)[] | undefined>) {
   const facts = withPlanSubject(rawFacts, plan);
   if (!photoSearchEnabled() || requestedPhoto(facts).intent !== "none" || !plan.imageQueries?.length) return undefined;
   const { prefetchPlannedPhotos } = await import("@/lib/preview/google-photo.server");
-  return prefetchPlannedPhotos(facts, plan.imageQueries, !isMockMode() && aiAvailable(), deadline).catch(() => undefined);
+  return prefetchPlannedPhotos(facts, plan.imageQueries, !isMockMode() && aiAvailable(), deadline, { archetypes, site: !wantsNewPhotos(facts) }).catch(() => undefined);
 }
 
 export async function planSite(facts: SiteFacts, variation = 0): Promise<{ plan: SitePlan; note?: string }> {
@@ -234,7 +234,7 @@ Return ONLY one JSON object, no markdown:
 {"tagline": string, "summary": string (1-2 sentences: what the current site does poorly and what the new site fixes), "changes": [3 short strings],
  "photoSubject": string (what the owner's request asks to SHOW in the hero/background photo, in 2-6 plain words with the place if known, e.g. "red brick streets downtown"; "" when the request names no photo subject — colors, fonts and layout wishes are not photo subjects),
  "photoIntent": "keep" | "find" | "none" ("keep" when the owner wants to keep or reuse a picture that is already on their site — "keep the rocket", "don't lose our mascot", "use the same truck photo", "our storefront"; "find" when they want a photo of something new to be found or made — "a picture of the red bricks"; "none" when photoSubject is ""),
- "imageQueries": [2-3 strings] (Google Images searches for real photos that would make a strong website hero for THIS business and place, even when the owner asked for nothing: concrete, photographable, with the town and state when known, e.g. a small-town city site -> "downtown Pauls Valley Oklahoma brick streets", "Pauls Valley Oklahoma landmark"; a plumber -> "plumber truck Oklahoma City", "plumber at work". No logos, no people's names, no search operators),
+ "imageQueries": [2-3 strings] (Google Images searches for real photos that make THIS place or business look its best as a wide website hero, even when the owner asked for nothing. Search for the best-looking SCENES, not the name: a town or city -> its downtown, main street, historic district, best-known landmark, courthouse, skyline or an aerial view, e.g. "downtown Pauls Valley Oklahoma", "Pauls Valley historic district", "Pauls Valley Oklahoma main street"; a business -> its work, product, storefront or team in its setting, e.g. a plumber -> "plumber fixing pipes under sink", "plumbing van Oklahoma City"; a bakery -> "fresh bread bakery counter", a restaurant -> its signature dish or dining room. Never queries that return signs, welcome signs, city-limit signs, logos, seals, maps or text (no "welcome to X", no bare name searches). Concrete and photographable, with the town and state when known; no people's names, no search operators),
  "cta": {"label": string (max 24 chars), "slug": page slug},
  "pages": [{"slug": "home"|lowercase-hyphenated, "title": string, "navLabel": string (max 18 chars), "purpose": string, "sections": [{"kind": "hero|services|about|testimonials|gallery|faq|hours|cta|text|team|pricing|contact-info", "heading": string, "brief": string}]}]}
 Rules:
@@ -778,6 +778,22 @@ export async function buildLook(
       ? [...google, ...strong, ...weak]
       : [...strong.slice(0, 1), ...google, ...strong.slice(1), ...weak];
     const rank = photoRank(design, index);
+    // The round's assignment (hero-pick.ts): one photo per look, no two of the same subject, each suiting its look's
+    // mood, site photos only where they beat Google on the same score. Made once by the plan step when it knew the
+    // three archetypes; recomputed the same way (without moods) when it didn't.
+    const { assignHeroes } = await import("@/lib/preview/hero-pick");
+    const stored = pre.assign && pre.assign.archetypes[index] === design.archetype ? pre.assign.picks : undefined;
+    const cands = [...pre.photos.flatMap((p) => (p.candidate ? [p.candidate] : [])), ...(freshPhotos ? [] : (pre.site ?? []))];
+    const mine = (stored ?? (cands.length ? assignHeroes(cands, [undefined, undefined, undefined]) : [])).find((p) => p.index === index);
+    type Option = { own: string; score: number; what: string } | { g: (typeof pre.photos)[number] } | { siteUrl: string; what: string };
+    let first: Option | undefined;
+    if (mine?.source === "google") {
+      const g = pre.photos.find((p) => p.temp.imageUrl === mine.id);
+      if (g) first = { g };
+    } else if (mine?.source === "site") {
+      const at = scored.slice(0, 5).findIndex((p) => p.photo.url === mine.id);
+      first = at >= 0 && images[`photo-${at + 1}`] ? { own: `photo-${at + 1}`, score: scored[at]!.score, what: describe(mine.id) } : { siteUrl: mine.id, what: describe(mine.id) };
+    }
     const entry: ImageTrace = {
       name: "hero",
       slot: "hero",
@@ -787,19 +803,28 @@ export async function buildLook(
       search: `Google Images (proactive, from the plan) ${pre.queries.map((q) => `“${q}”`).join(" / ")}: ${pre.seen} results, ${pre.photos.length} usable${pre.ranking ? ` · ${pre.ranking}` : ""}${Object.keys(pre.rejected).length ? ` (skipped ${Object.entries(pre.rejected).map(([w, n]) => `${n} ${w}`).join(", ")})` : ""} · ${strong.length} strong site photo${strong.length === 1 ? "" : "s"}`,
     };
     trace.images.push(entry);
-    const order = [...pool.slice(rank), ...pool.slice(0, rank)];
+    const order: Option[] = [...(first ? [first] : []), ...pool.slice(rank), ...pool.slice(0, rank)];
+    const picked = (option: Option) => (option === first && mine ? ` · picked for this look: ${mine.reason}` : first ? " · (assigned photo unavailable; next in the pool)" : "");
     const choose = async (): Promise<boolean> => {
       for (const option of order) {
+        if ("siteUrl" in option) {
+          const photo = await fetchPhoto(option.siteUrl);
+          if (!photo || photo.width < 1000) continue;
+          await saveImage(id, "hero", photo.type, photo.bytes);
+          images.hero = { name: "hero", type: photo.type, source: "photo", alt: facts.name, width: photo.width, height: photo.height };
+          Object.assign(entry, { status: "your site's photo", source: "your site", scene: option.what, search: `${entry.search}${picked(option)}` } satisfies Partial<ImageTrace>);
+          return true;
+        }
         if ("own" in option) {
           proactiveOwn = option.own;
-          Object.assign(entry, { status: "your site's photo", source: "your site", scene: option.what, search: `${entry.search} · chose your site's photo (relevance ${option.score})` } satisfies Partial<ImageTrace>);
+          Object.assign(entry, { status: "your site's photo", source: "your site", scene: option.what, search: `${entry.search} · chose your site's photo${picked(option) || ` (relevance ${option.score})`}` } satisfies Partial<ImageTrace>);
           return true;
         }
         const photo = await fetchPhoto(option.g.temp.imageUrl);
         if (!photo || photo.width < 1000) continue;
         await saveImage(id, "hero", photo.type, photo.bytes);
         images.hero = { name: "hero", type: photo.type, source: "web", alt: option.g.temp.title, width: photo.width, height: photo.height, credit: googleCredit(option.g.temp), temporary: option.g.temp };
-        Object.assign(entry, { status: "preview photo (Google Images)", source: "web search", credit: googleCredit(option.g.temp), scene: option.g.temp.query } satisfies Partial<ImageTrace>);
+        Object.assign(entry, { status: "preview photo (Google Images)", source: "web search", credit: googleCredit(option.g.temp), scene: option.g.temp.query, search: `${entry.search}${picked(option)}` } satisfies Partial<ImageTrace>);
         googleHero = option.g.temp.query;
         return true;
       }
