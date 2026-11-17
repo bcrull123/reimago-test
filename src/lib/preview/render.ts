@@ -4,7 +4,7 @@ import { darkSurface, designClasses, fontsHref, siteCss } from "./theme.ts";
 import { logoTreatment } from "./logo.ts";
 import { legacyCss } from "./legacy-theme.ts";
 import { renderSection, type RenderContext } from "./sections.ts";
-import type { AiDebug, DesignDirection, LogoMeta, Section, SiteFacts, SitePalette, SitePlan, StoredImage } from "./types.ts";
+import type { AiDebug, PreviewTrace, DesignDirection, LogoMeta, Section, SiteFacts, SitePalette, SitePlan, StoredImage } from "./types.ts";
 
 export const FORMCARRY_ENDPOINT = "https://formcarry.com/s/NipZS0fF4w4";
 
@@ -55,6 +55,8 @@ export type StoredSite = {
   aiErrors?: Record<string, string>;
   /** Why AI sections were dropped, with a short masked raw sample (debugging real-model output). */
   aiDebug?: Record<string, AiDebug>;
+  /** Which AI steps got the owner's request and which image prompts were used (debugging "it ignored my note"). */
+  trace?: PreviewTrace;
   /** How the scraped logo is shown on light and dark surfaces (see logo.server.ts). */
   logoMeta?: LogoMeta;
 };
@@ -236,6 +238,9 @@ export function renderSitePage(site: StoredSite, slug: string, options?: RenderO
     </div><div class="legal"><span>© ${year} ${escapeHtml(site.name)}</span><span>Preview by Reimago</span></div></div></footer>`;
   }
 
+  // Free-license web photos need their credit (title, author, license link) wherever they appear.
+  footer = footer.replace("<span>Preview by Reimago</span>", `${photoCredit(site)}<span>Preview by Reimago</span>`);
+
   return `<!doctype html>
 <html lang="en">
 <head>
@@ -263,3 +268,22 @@ ${footer}
 /** CSP for preview pages: no scripts at all, fonts from Google, images from this site or https, form posts only to Formcarry. */
 export const PREVIEW_CSP =
   "default-src 'none'; style-src 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com data:; img-src 'self' https: data:; base-uri 'none'; form-action https://formcarry.com; script-src 'none'";
+
+const httpLink = (url: string) => (/^https?:\/\//i.test(url) ? escapeHtml(url) : "");
+
+/** "Photo: “Pauls Valley Historic District” by X, CC BY-SA 3.0, via Wikimedia Commons" for a web photo in the site. */
+export function photoCredit(site: Pick<StoredSite, "images">): string {
+  const credits = Object.values(site.images ?? {})
+    .filter((i) => i.source === "web" && i.credit)
+    .map((i) => i.credit!);
+  return credits
+    .map((c) => {
+      const source = httpLink(c.sourceUrl);
+      const license = httpLink(c.licenseUrl);
+      const title = escapeHtml(c.title.slice(0, 90));
+      return `<span class="photo-credit">Photo: ${source ? `<a href="${source}" target="_blank" rel="noopener">“${title}”</a>` : `“${title}”`}${c.author ? ` by ${escapeHtml(c.author.slice(0, 60))}` : ""}, ${
+        license ? `<a href="${license}" target="_blank" rel="noopener">${escapeHtml(c.license)}</a>` : escapeHtml(c.license)
+      }, via ${escapeHtml(c.provider)}</span>`;
+    })
+    .join("");
+}

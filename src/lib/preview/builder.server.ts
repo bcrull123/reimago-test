@@ -16,7 +16,11 @@ import { ARCHETYPES, type DesignDirection, type PlanPage, type PlanSection, type
 import { PRESETS, archetypesFor, mockDirections, normalizeDirection, HEADING_FONTS as DISPLAY_FONTS, BODY_FONTS as TEXT_FONTS } from "@/lib/preview/design";
 import { SECTION_GUIDE, checkSections, composeImages, composeMockPage, corpusFor, type NormalizeContext } from "@/lib/preview/sections";
 import { redact } from "@/lib/ai-json";
-import { ownerRequestRule, ownerRequests } from "@/lib/preview/owner-request";
+import { hasOwnerRequest, ownerRequestRule, ownerRequests, requestedScene, wantsBackground, wantsNewPhotos } from "@/lib/preview/owner-request";
+import { matchScraped, placeOf, webQuery, type PhotoCredit } from "@/lib/preview/web-photo";
+import { findWebPhoto, webPhotosEnabled } from "@/lib/preview/web-photo.server";
+import { imagePrompt, sceneFor } from "@/lib/preview/image-prompts";
+import type { ImageTrace, PreviewTrace } from "@/lib/preview/types";
 
 /** The owner's note + feedback rounds as a high-priority block at the end of a system prompt. */
 function requestBlock(facts: SiteFacts): string {
@@ -256,6 +260,7 @@ Return ONLY JSON: {"looks": [{
  "fonts": {"heading": one of ${JSON.stringify(DISPLAY_FONTS)}, "body": one of ${JSON.stringify(TEXT_FONTS)}},
  "imagery": art direction for photography (light, lens, color grade, subjects) in one sentence,
  "heroSubject": what the hero photograph shows, concretely (no text, signage, logos or brand names in the scene),
+ "featureScene": what a second, supporting photograph shows, concretely (same rules),
  "motifs": 1-3 of ["grain","thin-rules","oversized-numbers","diagonal-cuts","soft-blobs","underline-marks","grid-lines","glow","outlined-type","stamp-badges"],
  "radius": "sharp"|"soft"|"round", "buttons": "pill"|"square"|"outline",
  "hero": "split"|"photo"|"type", "header": "light"|"dark"|"overlay" (overlay only with hero "photo"), "footer": "columns"|"minimal"|"statement",
@@ -267,6 +272,7 @@ Rules:
 - Respect the brand: if brand colors are given, at least one look keeps them prominent, and every look should feel compatible with the logo.
 - If "sites_to_emulate" are given, let at least one look borrow their vibe (palette, type, mood) without copying them.
 - Headlines must not invent facts: no years, awards, prices, guarantees, statistics, or claims not in the facts.
+- Photos: if the owner's request names a scene, subject or place (e.g. "use the brick streets"), EVERY look's "heroSubject" must depict exactly that as the main subject (styled for the look), not generic tools or equipment of the trade. Use "featureScene" for a second, related scene.
 - Respect the owner's requested changes and style notes when present: requested colors go into the palettes, requested moods/styles shape the archetypes and fonts, and feedback on earlier looks means these three must be clearly different from what they rejected.${variation ? `\n- This is attempt ${variation + 1}: go somewhere new compared with an obvious first attempt.` : ""}${requestBlock(facts)}`,
         },
         { role: "user", content: JSON.stringify(factsForPrompt(facts)) },
@@ -274,7 +280,7 @@ Rules:
     });
     const looks = Array.isArray(raw.looks) ? raw.looks.slice(0, 3) : [];
     if (!looks.length) throw new Error("No looks in the answer.");
-    const directions = looks.map((look, i) => normalizeDirection(look, i, facts));
+    const directions: DesignDirection[] = looks.map((look, i) => ({ ...normalizeDirection(look, i, facts), ai: true }));
     // Guarantee three different archetypes.
     const used = new Set<string>();
     for (let i = 0; i < directions.length; i += 1) {
@@ -393,7 +399,7 @@ Content rules:
 }
 
 
-export type SectionsResult = { sections: Section[]; ai: boolean; error?: string; model?: string; seconds?: number; debug?: AiDebug };
+export type SectionsResult = { sections: Section[]; ai: boolean; error?: string; model?: string; seconds?: number; debug?: AiDebug; ownerRequest?: boolean };
 
 /** ~2 KB of the raw AI answer, secrets masked, for the preview record. */
 export function rawSample(raw: unknown, max = 2000): string {
@@ -427,6 +433,8 @@ export async function sectionsFor(
   const ctx = normalizeContext(facts, plan, page.slug, names);
   const fallback = () => composeMockPage(page, facts, plan, design, composeImages(names));
   if (!useAi) return { sections: fallback(), ai: false };
+  // The OWNER'S REQUEST block is in this page's system prompt (see aiSections → requestBlock).
+  const ownerRequest = Boolean(requestBlock(facts));
   const started = Date.now();
   const deadline = started + budgetMs;
   const home = page.slug === "home";
@@ -458,7 +466,7 @@ export async function sectionsFor(
       const min = home ? 3 : 2;
       if (sections.length >= min) {
         if (page.slug === "contact" && !sections.some((s) => s.type === "contact-block")) sections.push({ type: "contact-block", tone: "light", heading: "Get in touch" });
-        return { sections, ai: true, model: attempt.model, seconds: Math.round((Date.now() - started) / 1000), debug };
+        return { sections, ai: true, model: attempt.model, seconds: Math.round((Date.now() - started) / 1000), debug, ownerRequest };
       }
       const why = check.rejected.slice(0, 3).join("; ");
       errors.push(`${attempt.model} answered in ${Math.round((Date.now() - t0) / 1000)}s but only ${check.sections.length} of ${check.total} sections were usable${why ? ` (${why})` : ""}`);
@@ -469,7 +477,7 @@ export async function sectionsFor(
     console.error(`[preview] page ${page.slug}: ${errors.at(-1)}`);
   }
   if (!errors.length) errors.push(`no time left in the ${Math.round(budgetMs / 1000)}s step budget`);
-  return { sections: fallback(), ai: false, error: errors.join("; then "), debug };
+  return { sections: fallback(), ai: false, error: errors.join("; then "), debug, ownerRequest };
 }
 
 /** Point image references at images that really exist (generation can fail): real photos first, else placeholder. */
@@ -488,6 +496,13 @@ function resolveImages(sections: Section[], available: string[]): Section[] {
   }));
 }
 
+/** Put the owner's requested photo in the hero (as a full-bleed background when they said "background"). */
+function heroForRequest(hero: Section, facts: SiteFacts, haveHero: boolean, scene: string | undefined, fresh: boolean): Section {
+  if (!scene && !fresh) return hero;
+  if (haveHero) return { ...hero, image: "hero", type: wantsBackground(facts) ? "hero-photo" : hero.type };
+  return scene ? { ...hero, image: undefined } : hero;
+}
+
 // ---------------------------------------------------------------- build a look (homepage) and finish the chosen one
 
 export function stepBudgetMs(): number {
@@ -503,7 +518,8 @@ export async function buildLook(
   design: DesignDirection,
   index: number,
 ): Promise<{ site: StoredSite; ai: boolean; aiError?: string; aiWarning?: string; generated: number; photos: number }> {
-  const { goodPhotos, heroWorthy, storePhotos, imagesEnabled, imagePrompt, generateAndStore } = await import("@/lib/preview/images.server");
+  const { goodPhotos, heroWorthy, storePhotos, imagesEnabled, generateAndStore, fetchPhoto } = await import("@/lib/preview/images.server");
+  const { saveImage } = await import("@/lib/pages.server");
   const budget = stepBudgetMs();
   const stepStart = Date.now();
   const useAi = !isMockMode() && aiAvailable();
@@ -511,26 +527,77 @@ export async function buildLook(
   const images: Record<string, StoredImage> = await storePhotos(id, photos, facts);
   const pending: ImageInfo[] = [];
   const jobs: Promise<void>[] = [];
-  if (imagesEnabled()) {
-    const wantHero = !heroWorthy(photos[0]);
-    const wantFeature = photos.length < 2;
-    const kind = facts.industry || "the business";
-    if (wantHero) {
-      pending.push({ name: "hero", describe: `generated hero photo: ${design.heroSubject || kind}` });
-      jobs.push(
-        generateAndStore(id, "hero", imagePrompt("hero", facts, design), design.hero === "split" ? "4:3" : "16:9", design.heroSubject || kind, Math.min(50_000, budget - 10_000)).then((img) => {
-          if (img) images.hero = img;
-        }),
-      );
-    }
-    if (wantFeature) {
-      pending.push({ name: "feature", describe: `generated photo of ${kind} work in progress` });
-      jobs.push(
-        generateAndStore(id, "feature", imagePrompt("feature", facts, design), "4:3", `${kind} at work`, Math.min(50_000, budget - 10_000)).then((img) => {
-          if (img) images.feature = img;
-        }),
-      );
-    }
+  // The owner's words decide the photos first: a named scene ("use the brick streets") or feedback about
+  // photos means the hero is generated from that scene, even when the site has a usable photo of its own.
+  const scene = requestedScene(facts);
+  const freshPhotos = wantsNewPhotos(facts);
+  const asked = hasOwnerRequest(facts);
+  const trace: PreviewTrace = {
+    request: { ...ownerRequests(facts), scene },
+    steps: [
+      { step: "plan", ai: !plan.mock, ownerRequest: !plan.mock && asked },
+      { step: "look directions", ai: Boolean(design.ai), ownerRequest: Boolean(design.ai) && asked },
+    ],
+    images: [],
+  };
+  const kind = facts.industry || "the business";
+  const wantImage = (name: string, slot: ImageTrace["slot"], aspect: "16:9" | "4:3", describe: string, before?: () => Promise<boolean>, preset?: ImageTrace) => {
+    const shown = sceneFor(slot, facts, design) || (slot === "hero" ? kind : `${kind} at work`);
+    const prompt = imagePrompt(slot, facts, design);
+    const entry: ImageTrace = preset ?? { name, slot, scene: shown, prompt, status: "not generated (mock mode / images off)" };
+    if (!preset) trace.images.push(entry);
+    if (!imagesEnabled() && !before) return;
+    pending.push({ name, describe });
+    jobs.push(
+      (async () => {
+        // A matching real photo (the site's own, or a free-license web photo) beats an AI one.
+        if (before && (await before())) return;
+        if (!imagesEnabled()) return;
+        entry.status = "failed";
+        entry.source = "AI";
+        const img = await generateAndStore(id, name, prompt, aspect, shown, Math.min(50_000, budget - 10_000));
+        if (!img) return;
+        images[name] = img;
+        entry.status = "generated";
+      })(),
+    );
+  };
+  const heroAspect = design.hero === "split" ? "4:3" : "16:9";
+  if (scene) {
+    // The owner named what the hero should show. Order: one of the site's own photos that shows it (alt text,
+    // title or file name) -> a free-license web photo of it near the business -> an AI photo of it. Never just
+    // the biggest scraped photo.
+    const place = placeOf(facts);
+    const entry: ImageTrace = { name: "hero", slot: "hero", scene, prompt: imagePrompt("hero", facts, design), status: "not generated (mock mode / images off)" };
+    trace.images.push(entry);
+    const findReal = async (): Promise<boolean> => {
+      const labels = facts.imageText ?? {};
+      const own = matchScraped(scene, place, facts.images.map((url) => ({ url, label: labels[url] ?? "" })));
+      if (own) {
+        const photo = await fetchPhoto(own.url);
+        if (photo && photo.width >= 1000 && photo.width / photo.height >= 1.2) {
+          await saveImage(id, "hero", photo.type, photo.bytes);
+          const credit: PhotoCredit = { title: own.label || scene, author: "", license: "", licenseUrl: "", sourceUrl: own.url, provider: "your site" };
+          images.hero = { name: "hero", type: photo.type, source: "photo", alt: own.label || scene, width: photo.width, height: photo.height, credit };
+          Object.assign(entry, { status: "your site's photo", source: "your site", credit } satisfies Partial<ImageTrace>);
+          return true;
+        }
+      }
+      if (!webPhotosEnabled()) return false;
+      const web = await findWebPhoto(scene, place, 8_000).catch(() => undefined);
+      entry.search = `web search “${webQuery(scene, place)}” (Openverse, Wikimedia Commons; CC0 / public domain / CC BY / CC BY-SA): ${web ? "found" : "no matching photo"}`;
+      if (!web) return false;
+      await saveImage(id, "hero", web.photo.type, web.photo.bytes);
+      images.hero = { name: "hero", type: web.photo.type, source: "web", alt: web.credit.title, width: web.photo.width, height: web.photo.height, credit: web.credit };
+      Object.assign(entry, { status: "web photo", source: "web search", credit: web.credit } satisfies Partial<ImageTrace>);
+      return true;
+    };
+    wantImage("hero", "hero", heroAspect, `photo of ${scene}: the owner asked for this, so use it as the hero background image`, findReal, entry);
+  } else if (!heroWorthy(photos[0]) || freshPhotos) {
+    wantImage("hero", "hero", heroAspect, `generated hero photo: ${design.heroSubject || kind}`);
+  }
+  if (photos.length < 2 || freshPhotos) {
+    wantImage("feature", "feature", "4:3", `generated photo: ${design.featureScene || `${kind} work in progress`}`);
   }
   let logoMeta: StoredSite["logoMeta"];
   if (facts.logo) {
@@ -548,6 +615,10 @@ export async function buildLook(
   const [result] = await Promise.all([sectionsFor(home, facts, plan, design, images, pending, useAi, aiBudget), ...jobs]);
   const available = Object.keys(images);
   const sections = resolveImages(result.sections, available);
+  // The requested scene goes in the hero even if the page writer picked one of the site's own photos, and
+  // "as background" means the full-bleed photo hero. With no photo of the scene, no unrelated photo is used.
+  if (sections[0]?.type.startsWith("hero-")) sections[0] = heroForRequest(sections[0], facts, Boolean(images.hero), scene, freshPhotos);
+  trace.steps.push({ step: "homepage sections", ai: result.ai, ownerRequest: Boolean(result.ownerRequest) });
   const pages: StoredPage[] = plan.pages.map((p) =>
     p.slug === "home" ? { slug: p.slug, title: p.title, navLabel: p.navLabel, body: "", sections } : { slug: p.slug, title: p.title, navLabel: p.navLabel, body: "", pending: true },
   );
@@ -581,6 +652,7 @@ export async function buildLook(
     aiErrors: result.error ? { home: result.error } : undefined,
     aiDebug: result.debug ? { home: result.debug } : undefined,
     logoMeta,
+    trace,
   };
   const generated = Object.values(images).filter((i) => i.source === "generated").length;
   const aiWarning = result.ai && result.debug ? skippedNote(result.debug) : undefined;
@@ -590,7 +662,7 @@ export async function buildLook(
 /** Build every remaining page for the chosen look, add service images, and critique/revise the homepage. */
 export async function finishSite(site: StoredSite): Promise<{ site: StoredSite; failed: number; note?: string }> {
   if (!site.facts || !site.plan || !site.design) throw new Error("This preview was made by an older version. Run the site again.");
-  const { imagesEnabled, imagePrompt, generateAndStore } = await import("@/lib/preview/images.server");
+  const { imagesEnabled, generateAndStore } = await import("@/lib/preview/images.server");
   const { polishHome } = await import("@/lib/preview/critique.server");
   const facts = site.facts;
   const plan = site.plan;
@@ -601,14 +673,24 @@ export async function finishSite(site: StoredSite): Promise<{ site: StoredSite; 
   const pending: ImageInfo[] = [];
   const jobs: Promise<void>[] = [];
   const photoCount = Object.values(images).filter((i) => i.name.startsWith("photo-")).length;
-  if (imagesEnabled() && photoCount < 4) {
+  const trace: PreviewTrace = site.trace
+    ? { ...site.trace, steps: [...site.trace.steps], images: [...site.trace.images] }
+    : { request: { ...ownerRequests(facts), scene: requestedScene(facts) }, steps: [], images: [] };
+  if (photoCount < 4) {
     facts.services.slice(0, 3).forEach((service, i) => {
       const name = `service-${i + 1}`;
       if (images[name]) return;
+      const prompt = imagePrompt("service", facts, design, service);
+      const entry: ImageTrace = { name, slot: "service", scene: service, prompt, status: "not generated (mock mode / images off)" };
+      trace.images.push(entry);
+      if (!imagesEnabled()) return;
+      entry.status = "failed";
       pending.push({ name, describe: `generated photo for the service "${service}"` });
       jobs.push(
-        generateAndStore(site.id, name, imagePrompt("service", facts, design, service), "4:3", service, Math.min(50_000, budget - 10_000)).then((img) => {
-          if (img) images[name] = img;
+        generateAndStore(site.id, name, prompt, "4:3", service, Math.min(50_000, budget - 10_000)).then((img) => {
+          if (!img) return;
+          images[name] = img;
+          entry.status = "generated";
         }),
       );
     });
@@ -623,6 +705,7 @@ export async function finishSite(site: StoredSite): Promise<{ site: StoredSite; 
       const planned = plan.pages.find((p) => p.slug === page.slug) ?? { slug: page.slug, title: page.title, navLabel: page.navLabel, purpose: "", sections: [] };
       const result = await sectionsFor(planned, facts, plan, design, images, pending, useAi, budget - (Date.now() - stepStart) - 6_000);
       if (result.debug) aiDebug[page.slug] = result.debug;
+      trace.steps.push({ step: `page ${page.slug}`, ai: result.ai, ownerRequest: Boolean(result.ownerRequest) });
       if (useAi && !result.ai) {
         failed += 1;
         if (result.error) aiErrors[page.slug] = result.error;
@@ -635,12 +718,18 @@ export async function finishSite(site: StoredSite): Promise<{ site: StoredSite; 
   const [built, polished] = await Promise.all([pagesJob, polishJob, ...jobs]);
   const available = Object.keys(images);
   const pages = site.pages.map((page) => {
-    if (page.slug === "home") return { ...page, sections: resolveImages(polished.sections, available), pending: false };
+    if (page.slug === "home") {
+      const home = resolveImages(polished.sections, available);
+      // Keep the owner's requested scene in the hero after the critique pass.
+      if (home[0]?.type.startsWith("hero-")) home[0] = heroForRequest(home[0], facts, Boolean(images.hero), trace.request.scene, wantsNewPhotos(facts));
+      return { ...page, sections: home, pending: false };
+    }
     const done = built.find((b) => b.slug === page.slug);
     return { ...page, sections: resolveImages(done?.sections ?? [], available), pending: false };
   });
   const mergedErrors = { ...(site.aiErrors?.home ? { home: site.aiErrors.home } : {}), ...aiErrors };
-  const next: StoredSite = { ...site, images, pages, finished: true, polish: polished.polish, aiErrors: Object.keys(mergedErrors).length ? mergedErrors : undefined, aiDebug: Object.keys(aiDebug).length ? aiDebug : undefined };
+  trace.steps.push({ step: "homepage critique", ai: polished.polish.method !== "skipped", ownerRequest: polished.polish.method !== "skipped" && hasOwnerRequest(facts) });
+  const next: StoredSite = { ...site, images, pages, finished: true, trace, polish: polished.polish, aiErrors: Object.keys(mergedErrors).length ? mergedErrors : undefined, aiDebug: Object.keys(aiDebug).length ? aiDebug : undefined };
   const first = Object.values(aiErrors)[0];
   const note = failed ? `${failed} of ${todo.length} pages were assembled from the section library because the AI failed${first ? `: ${first}` : ""}. Use "Retry with AI" to try again.` : undefined;
   return { site: next, failed, note };
