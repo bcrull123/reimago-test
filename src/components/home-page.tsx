@@ -6,6 +6,7 @@ import { CreateSiteWizard, type CreateBrief, type CreateFiles } from "@/componen
 import { checkDomainName, handOffToCursor } from "@/lib/reimagine.functions";
 import { cursorStatus, previewDirections, previewFinish, previewFromBrief, previewLook, previewRead, previewRetryAi, savePreviewPicture } from "@/lib/preview.functions";
 import { capturePreviewPicture, pictureFileName } from "@/lib/preview-picture";
+import { notifyReplyWebhook } from "@/lib/reply-webhook.functions";
 import { LivePreview } from "@/components/live-preview";
 import { LooksPicker } from "@/components/looks-picker";
 import { ARCHETYPE_LABEL } from "@/lib/preview/archetype-label";
@@ -392,6 +393,21 @@ export function HomePage() {
       const previewUrl = built?.preview?.url ?? look.url;
       const previewPages = built?.preview?.pages.map((page) => `${page.title}: ${page.url}`) ?? [`${look.name} · Home: ${look.url}`];
       const chosenLookName = `${look.name} (${ARCHETYPE_LABEL[look.archetype] ?? look.archetype})`;
+      // Email Bot's instant reply: the server posts to its webhook (key stays server-side). Not awaited — the
+      // visitor's "check your email" never waits on it; retries reuse the same submission id.
+      void notifyReplyWebhook({
+        data: {
+          id: look.id,
+          email: form.email,
+          website: domain,
+          note: form.kind === "reimagine" ? form.note : form.brief.anything_else,
+          previewUrl,
+          previewPages,
+          chosenLook: chosenLookName,
+          changeRequests: feedback,
+          pictureError: picture.error ?? (picture.url ? "" : "The picture was attached to the form but could not be stored."),
+        },
+      }).catch(() => undefined);
       try {
         if (form.kind === "reimagine") {
           await submitFormcarry({ email: form.email, website: form.website, note: form.note, gotcha: form.gotcha, previewUrl, previewPages, chosenLook: chosenLookName, changeRequests: feedback, picture });
