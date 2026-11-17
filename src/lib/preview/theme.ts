@@ -18,6 +18,7 @@ import {
   safeFont,
 } from "./design.ts";
 import type { DesignDirection, SitePalette } from "./types.ts";
+import { tuneCss } from "./look-edit.ts";
 
 export { BODY_FONTS, HEADING_FONTS, contrast, hashString, isHex, luminance, safeFont };
 
@@ -469,5 +470,6 @@ ${darkTheme ? "body.m-grain::after{mix-blend-mode:screen;opacity:.05}" : ""}
   .carousel{grid-auto-columns:88%}
   .s-hero-photo{min-height:640px}
 }
+${tuneCss(design?.tune)}
 `.trim();
 }

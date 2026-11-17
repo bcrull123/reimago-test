@@ -212,7 +212,7 @@ describe("Serper calls (mock server)", () => {
     assert.equal(t.domain, "page.example");
     assert.equal(t.pickedBy, "score");
     assert.match(t.query, /Pauls Valley Oklahoma/);
-    assert.ok(r.rejected["stock / watermarked"] && r.rejected.broken && r.rejected["too small after download"], JSON.stringify(r.rejected));
+    assert.ok(r.rejected["stock / watermarked"] && r.rejected["broken or blocked download"] && r.rejected["too small after download"], JSON.stringify(r.rejected));
   });
 });
 

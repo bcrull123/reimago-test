@@ -12,6 +12,7 @@
  * share one search and each gets a different photo. Keys are never logged or returned.
  */
 // Relative imports (and lazy server-only ones) so node's test runner can load this file.
+import { createHash } from "node:crypto";
 import type { Photo } from "./images.server.ts";
 import { googleQueries, normalizeImages, rejectReason, scoreGoogleImage, type GoogleImage, type TemporaryPhoto } from "./google-photo.ts";
 import { placeOf } from "./web-photo.ts";
@@ -125,30 +126,60 @@ async function visionRank(subject: string, items: { photo: Photo; img: GoogleIma
   }
 }
 
-const pickCache = new Map<string, { at: number; result: Promise<{ photos: GooglePhoto[]; queries: string[]; seen: number; rejected: Record<string, number> }> }>();
+export type GoogleSearch = {
+  photos: GooglePhoto[];
+  queries: string[];
+  seen: number;
+  rejected: Record<string, number>;
+  /** How the order was decided: "vision", "score", or why vision was not used. */
+  ranking?: string;
+};
 
-/** The uncached search (exported for tests, which pass their own downloader). */
-export async function searchGooglePhotos(scene: string | undefined, facts: SiteFacts, useVision: boolean, deadline: number, max: number, fetcher?: Fetcher) {
+const pickCache = new Map<string, { at: number; result: Promise<GoogleSearch> }>();
+
+/**
+ * The uncached search (exported for tests, which pass their own downloader). With `queries` (the planner's
+ * proactive imageQueries) all of them run in parallel and each result is judged against its own query;
+ * otherwise the queries come from the owner's subject (or the business type in its town).
+ */
+export async function searchGooglePhotos(
+  scene: string | undefined,
+  facts: SiteFacts,
+  useVision: boolean,
+  deadline: number,
+  max: number,
+  fetcher?: Fetcher,
+  proactive?: string[],
+): Promise<GoogleSearch> {
   const fetchPhoto: Fetcher = fetcher ?? (await import("@/lib/preview/images.server")).fetchPhoto;
   const place = placeOf(facts);
   const trade = businessKind(facts);
   const kind = isCivic(facts) ? "downtown" : /^(other|local business)$/i.test(trade) ? facts.services[0] || "" : trade;
-  const queries = googleQueries(scene, place, kind);
+  const queries = proactive?.length ? proactive.slice(0, 3) : googleQueries(scene, place, kind);
   const rejected: Record<string, number> = {};
   const seen = new Map<string, { img: GoogleImage; q: string }>();
-  for (const q of queries) {
-    if (Date.now() > deadline - 2000) break;
-    for (const img of await googleImages(q)) if (!seen.has(img.imageUrl)) seen.set(img.imageUrl, { img, q });
-    // The first query usually suffices; the second only when it found few usable images.
-    if ([...seen.values()].filter((s) => !rejectReason(s.img)).length >= 5) break;
+  if (proactive?.length) {
+    const lists = await Promise.all(queries.map((q) => googleImages(q).then((list) => ({ q, list }))));
+    // Interleave so every query contributes its best results first.
+    for (let i = 0; i < 40; i += 1) for (const { q, list } of lists) if (list[i] && !seen.has(list[i]!.imageUrl)) seen.set(list[i]!.imageUrl, { img: list[i]!, q });
+  } else {
+    for (const q of queries) {
+      if (Date.now() > deadline - 2000) break;
+      for (const img of await googleImages(q)) if (!seen.has(img.imageUrl)) seen.set(img.imageUrl, { img, q });
+      // The first query usually suffices; the second only when it found few usable images.
+      if ([...seen.values()].filter((s) => !rejectReason(s.img)).length >= 5) break;
+    }
   }
-  const label = scene || [kind, place?.city].filter(Boolean).join(" in ");
+  const label = scene || (proactive?.length ? `a strong website hero for ${facts.name || "this business"} (${[kind, place?.city].filter(Boolean).join(", ")}), such as ${queries.map((q) => `"${q}"`).join(" or ")}` : [kind, place?.city].filter(Boolean).join(" in "));
+  // Without a subject, each result is judged against the query that found it.
+  const sceneOf = (q: string) => scene ?? (proactive?.length ? q : undefined);
+  const strict = (img: GoogleImage, q: string) => scoreGoogleImage(img, sceneOf(q), place, kind);
   const candidates = [...seen.values()]
     .map((s) => {
       const why = rejectReason(s.img);
       if (why) rejected[why] = (rejected[why] ?? 0) + 1;
       // With vision, relevance is judged by looking; without it, the title/page must name the subject.
-      return { ...s, score: why ? -1 : useVision ? Math.max(0.1, scoreGoogleImage(s.img, scene, place, kind)) : scoreGoogleImage(s.img, scene, place, kind) };
+      return { ...s, score: why ? -1 : useVision ? Math.max(0.1, strict(s.img, s.q)) : strict(s.img, s.q) };
     })
     .filter((c) => c.score > 0)
     .sort((a, b) => b.score - a.score)
@@ -160,24 +191,30 @@ export async function searchGooglePhotos(scene: string | undefined, facts: SiteF
         if (Date.now() > deadline - 1500) return undefined;
         const photo = await fetchPhoto(c.img.imageUrl);
         if (!photo || photo.width < 1000 || photo.width / photo.height < 1.2) {
-          rejected[photo ? "too small after download" : "broken"] = (rejected[photo ? "too small after download" : "broken"] ?? 0) + 1;
+          const why = photo ? "too small after download" : "broken or blocked download";
+          rejected[why] = (rejected[why] ?? 0) + 1;
           return undefined;
         }
         return { photo, img: c.img, q: c.q };
       }),
     )
   ).filter((x): x is NonNullable<typeof x> => Boolean(x));
-  let order = loaded.map((_, i) => i);
+  const byScore = () => loaded.map((l, i) => ({ i, s: strict(l.img, l.q) })).filter((x) => x.s > 0).sort((a, b) => b.s - a.s).map((x) => x.i);
+  let order = useVision ? loaded.map((_, i) => i) : byScore();
   let pickedBy: TemporaryPhoto["pickedBy"] = "score";
+  let ranking = useVision ? "" : "title/size/aspect score (no AI)";
   if (useVision && loaded.length) {
     const small = loaded.filter((l) => l.photo.bytes.length < 1_800_000);
-    const ranked = await visionRank(label, small, deadline);
-    if (ranked) {
+    const ranked = small.length ? await visionRank(label, small, deadline) : undefined;
+    if (ranked?.length) {
       order = ranked.map((i) => loaded.indexOf(small[i]!));
       pickedBy = "vision";
+      ranking = `Grok vision kept ${ranked.length} of ${small.length}`;
     } else {
-      // Vision unavailable: fall back to the strict title/size/aspect score.
-      order = loaded.map((l, i) => ({ i, s: scoreGoogleImage(l.img, scene, place, kind) })).filter((x) => x.s > 0).sort((a, b) => b.s - a.s).map((x) => x.i);
+      // Vision unavailable, or it turned every candidate down: the strict title/size/aspect score decides
+      // (the title or page must still name the subject), so a picky model can't silently drop Google Images.
+      order = byScore();
+      ranking = ranked ? `Grok vision kept none of ${small.length}; used the title/size score (${order.length} passed)` : `vision unavailable; used the title/size score (${order.length} passed)`;
     }
   }
   const via: TemporaryPhoto["via"] = photoSearchMode()?.mode === "proxy" ? "photo-search proxy" : "Serper";
@@ -185,21 +222,21 @@ export async function searchGooglePhotos(scene: string | undefined, facts: SiteF
     const l = loaded[i]!;
     return {
       photo: l.photo,
-      temp: { provider: "Google Images", via, title: l.img.title || label, imageUrl: l.img.imageUrl, sourcePage: l.img.link, domain: l.img.domain, query: l.q, pickedBy } satisfies TemporaryPhoto,
+      temp: { provider: "Google Images", via, title: l.img.title || l.q, imageUrl: l.img.imageUrl, sourcePage: l.img.link, domain: l.img.domain, query: l.q, pickedBy } satisfies TemporaryPhoto,
     };
   });
-  return { photos, queries, seen: seen.size, rejected };
+  return { photos, queries, seen: seen.size, rejected, ranking };
 }
 
 /**
  * Up to `max` Google Images photos of `scene` (or, without a scene, of the business type in its town), best
  * first. Cached per site + subject so every look of one preview shares the same search and ranking.
  */
-export function findGooglePhotos(scene: string | undefined, facts: SiteFacts, useVision: boolean, deadline: number, max = 3) {
-  const key = `${facts.sourceUrl}|${(scene ?? "").toLowerCase()}|${useVision ? 1 : 0}|${max}`;
+export function findGooglePhotos(scene: string | undefined, facts: SiteFacts, useVision: boolean, deadline: number, max = 3, proactive?: string[]): Promise<GoogleSearch> {
+  const key = `${facts.sourceUrl}|${(scene ?? "").toLowerCase()}|${(proactive ?? []).join("|").toLowerCase()}|${useVision ? 1 : 0}|${max}`;
   const hit = pickCache.get(key);
   if (hit && Date.now() - hit.at < 30 * 60_000) return hit.result;
-  const result = searchGooglePhotos(scene, facts, useVision, deadline, max).catch(() => ({ photos: [] as GooglePhoto[], queries: [] as string[], seen: 0, rejected: {} as Record<string, number> }));
+  const result = searchGooglePhotos(scene, facts, useVision, deadline, max, undefined, proactive).catch((): GoogleSearch => ({ photos: [], queries: [], seen: 0, rejected: {}, ranking: "search failed" }));
   pickCache.set(key, { at: Date.now(), result });
   // A failed or empty search is not remembered past this preview's own looks.
   void result.then((r) => {
@@ -207,4 +244,55 @@ export function findGooglePhotos(scene: string | undefined, facts: SiteFacts, us
   });
   if (pickCache.size > 100) pickCache.delete(pickCache.keys().next().value!);
   return result;
+}
+
+/** A prefetched proactive search, as stored between steps (no image bytes: the chosen one is downloaded again). */
+export type PlannedPhoto = { temp: TemporaryPhoto; width: number; height: number };
+export type PlannedPhotos = { queries: string[]; photos: PlannedPhoto[]; seen: number; rejected: Record<string, number>; ranking?: string; at: string };
+
+/** Stable 16-hex key for a site + its planner queries (the prefetch is stored under it, server-side only). */
+export function plannedKey(facts: Pick<SiteFacts, "sourceUrl" | "name">, queries: string[]): string {
+  return createHash("sha256").update(`${facts.sourceUrl}|${facts.name}|${queries.join("|").toLowerCase()}`).digest("hex").slice(0, 16);
+}
+
+/**
+ * The planner's proactive imageQueries: search them all in parallel, verify and rank the candidates, and keep the
+ * best few. Started by the plan step (so it runs while the looks are being designed) and stored server-side, so
+ * the three look builds (which may run on other server instances) read the same ranking without new searches.
+ */
+export async function prefetchPlannedPhotos(facts: SiteFacts, queries: string[], useVision: boolean, deadline: number): Promise<PlannedPhotos | undefined> {
+  if (!photoSearchEnabled() || !queries.length) return undefined;
+  const found = await findGooglePhotos(undefined, facts, useVision, deadline, 4, queries);
+  const planned: PlannedPhotos = {
+    queries: found.queries,
+    photos: found.photos.map((p) => ({ temp: p.temp, width: p.photo.width, height: p.photo.height })),
+    seen: found.seen,
+    rejected: found.rejected,
+    ranking: found.ranking,
+    at: new Date().toISOString(),
+  };
+  console.info(`[photo-search] proactive ${JSON.stringify(found.queries)}: ${found.seen} results, ${planned.photos.length} usable (${found.ranking ?? "score"})${Object.keys(found.rejected).length ? `; skipped ${JSON.stringify(found.rejected)}` : ""}`);
+  try {
+    const { saveImage } = await import("@/lib/pages.server");
+    await saveImage(plannedKey(facts, queries), "photo-search", "application/json", Buffer.from(JSON.stringify(planned)));
+  } catch {
+    // In-memory cache still serves this instance.
+  }
+  return planned;
+}
+
+/** The stored proactive ranking for this site + queries; searched now if the plan step's prefetch isn't there. */
+export async function plannedPhotos(facts: SiteFacts, queries: string[], useVision: boolean, deadline: number): Promise<PlannedPhotos | undefined> {
+  if (!photoSearchEnabled() || !queries.length) return undefined;
+  try {
+    const { readImage } = await import("@/lib/pages.server");
+    const stored = await readImage(plannedKey(facts, queries), "photo-search");
+    if (stored?.type === "application/json") {
+      const data = JSON.parse(stored.bytes.toString("utf8")) as PlannedPhotos;
+      if (Array.isArray(data.photos) && Date.now() - Date.parse(data.at) < 6 * 3_600_000) return data;
+    }
+  } catch {
+    // fall through to a fresh (cached) search
+  }
+  return prefetchPlannedPhotos(facts, queries, useVision, deadline);
 }

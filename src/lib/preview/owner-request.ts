@@ -241,12 +241,25 @@ export function requestedPhoto(facts: RequestFacts): { subject?: string; intent:
   const words = readPhoto(facts);
   const planned = cleanSubject(facts.photoSubject);
   const plannedIntent = facts.photoIntent === "keep" || facts.photoIntent === "find" ? facts.photoIntent : undefined;
-  if (planned) {
+  // The planner's subject counts only when the owner actually asked for something and it names a thing from their
+  // words. With no note at all the planner sometimes "reads" a subject off the site itself (Pauls Valley round 1:
+  // "keep the pauls valley welcome sign"), and the card then claimed the owner had asked for it.
+  if (planned && plannedFromOwner(facts, planned)) {
     const keep = plannedIntent === "keep" || (words?.intent === "keep" && sameThing(words.subject, planned));
     return { subject: planned, intent: keep ? "keep" : "find", from: "AI planner" };
   }
   if (words) return { ...words, from: "note wording" };
   return { intent: "none" };
+}
+
+/** The planner's photo subject shares a real word (not a design word) with the owner's own note or feedback. */
+export function plannedFromOwner(facts: RequestFacts, planned: string): boolean {
+  const { note, feedback } = ownerRequests(facts);
+  const text = [note, ...feedback].join(" ");
+  if (!text) return false;
+  // Same thing in other words ("the red bricks" -> "red brick streets"), or the owner talks about a picture or
+  // keeping something ("that launch thing up top is great, it stays" -> the planner's "rocket").
+  return sameThing(text, planned) || /\b(keep|keeps|kept|stay|stays|retain|preserve|reuse|same|photos?|pictures?|pics?|images?|backgrounds?|hero|banner|graphics?|art|artwork|drawing|illustration)\b/i.test(text);
 }
 
 function sameThing(a: string, b: string): boolean {
