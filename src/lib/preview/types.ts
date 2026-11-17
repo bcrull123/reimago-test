@@ -1,5 +1,6 @@
 /** Shared (client + server) shapes for the live multi-page preview. */
 import type { PhotoCredit } from "./web-photo.ts";
+import type { SiteArt } from "./site-art.ts";
 
 export type SiteNavLink = { label: string; url: string };
 
@@ -33,6 +34,10 @@ export type SiteFacts = {
   images: string[];
   /** Alt/title text of scraped images, by URL (used to find a photo the owner asked for). */
   imageText?: Record<string, string>;
+  /** Every picture on the site with the words that describe it (see site-art.ts); used to keep the owner's own art. */
+  siteArt?: SiteArt[];
+  /** The AI planner's reading of whether the photo subject is the owner's own ("keep") or one to find. */
+  photoIntent?: "keep" | "find" | "none";
   nav: SiteNavLink[];
   pages: ScrapedPage[];
   social: string[];
@@ -157,6 +162,8 @@ export type Section = {
   call?: boolean;
   align?: "left" | "center";
   reverse?: boolean;
+  /** "cutout": the image is an illustration / transparent art, shown whole on a color panel (no crop, no duotone). */
+  fit?: "cutout";
 };
 
 export type StoredImage = {
@@ -168,6 +175,10 @@ export type StoredImage = {
   credit?: PhotoCredit;
   width?: number;
   height?: number;
+  /** An illustration / transparent PNG / SVG: shown whole on a color panel, never cropped full-bleed or duotoned. */
+  cutout?: boolean;
+  /** Kept from the owner's site because they asked ("Keep the rocket"). */
+  kept?: boolean;
 };
 
 /** One image the build asked for: its prompt and what happened (no secrets; prompts never contain keys). */
@@ -176,7 +187,7 @@ export type ImageTrace = {
   slot: "hero" | "feature" | "service";
   scene: string;
   prompt: string;
-  status: "generated" | "failed" | "not generated (mock mode / images off)" | "your site's photo" | "web photo" | "skipped";
+  status: "generated" | "failed" | "not generated (mock mode / images off)" | "your site's photo" | "web photo" | "skipped" | "kept from your site" | "not found on your site";
   /** How the hero photo was found: the site's own matching photo, a web search, or AI. */
   source?: "your site" | "web search" | "AI";
   /** Web search words and what came back (no secrets). */
@@ -193,6 +204,8 @@ export type PreviewTrace = {
     subjectFrom?: "AI planner" | "note wording";
     /** No subject named and no suitable photo on the site: the hero shows the town instead. */
     autoScene?: string;
+    /** "keep": the subject is the owner's own picture, taken only from their site; "find": search / generate it. */
+    intent?: "keep" | "find";
   };
   steps: { step: string; ai: boolean; ownerRequest: boolean }[];
   images: ImageTrace[];
@@ -294,6 +307,8 @@ export type SitePlan = {
   mock?: boolean;
   /** What the owner asked to see in the hero/background photo, as the AI planner read the note ("red brick streets"). */
   photoSubject?: string;
+  /** "keep": the subject is a picture already on the owner's site (never searched for or generated). */
+  photoIntent?: "keep" | "find" | "none";
 };
 
 export type PreviewPageLink = { slug: string; title: string; url: string };

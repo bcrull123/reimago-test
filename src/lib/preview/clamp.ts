@@ -10,6 +10,33 @@ const https = (value: unknown) => {
   return /^https:\/\/[^\s"'<>]+$/.test(v) ? v : "";
 };
 
+const ART_KINDS = new Set(["img", "picture", "svg", "css", "og", "logo"]);
+
+/** The site's imagery list (see site-art.ts): https URLs or inline SVG ids, short labels, capped inline SVG. */
+function clampSiteArt(value: unknown): SiteFacts["siteArt"] {
+  if (!Array.isArray(value)) return undefined;
+  const out = value
+    .map((v) => (v && typeof v === "object" ? (v as Record<string, unknown>) : {}))
+    .map((r) => {
+      const inline = typeof r.url === "string" && /^inline-svg:[a-z0-9-]{1,20}$/.test(r.url);
+      const svg = inline && typeof r.svg === "string" && /^\s*<svg\b/i.test(r.svg) ? r.svg.slice(0, 40_000) : undefined;
+      const num = (n: unknown) => (typeof n === "number" && Number.isFinite(n) && n > 0 && n < 20_000 ? Math.round(n) : undefined);
+      return {
+        url: inline ? (svg ? (r.url as string) : "") : https(r.url),
+        label: str(r.label, 200),
+        kind: (ART_KINDS.has(String(r.kind)) ? r.kind : "img") as NonNullable<SiteFacts["siteArt"]>[number]["kind"],
+        page: str(r.page, 300),
+        home: r.home === true,
+        width: num(r.width),
+        height: num(r.height),
+        svg,
+      };
+    })
+    .filter((a) => a.url)
+    .slice(0, 60);
+  return out.length ? out : undefined;
+}
+
 export function clampFacts(input: unknown): SiteFacts {
   if (!input || typeof input !== "object") throw new Error("The site facts are missing. Start again.");
   const f = input as Record<string, unknown>;
@@ -41,6 +68,7 @@ export function clampFacts(input: unknown): SiteFacts {
         .filter(([u, t]) => u && t)
         .slice(0, 12),
     ),
+    siteArt: clampSiteArt(f.siteArt),
     nav: (Array.isArray(f.nav) ? f.nav : [])
       .map((n) => ({ label: str((n as Record<string, unknown>)?.label, 40), url: str((n as Record<string, unknown>)?.url, 300) }))
       .filter((n) => n.label)
