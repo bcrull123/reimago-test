@@ -4,7 +4,7 @@ import { darkSurface, designClasses, fontsHref, siteCss } from "./theme.ts";
 import { logoTreatment } from "./logo.ts";
 import { legacyCss } from "./legacy-theme.ts";
 import { renderSection, type RenderContext } from "./sections.ts";
-import { customFontsHref, paletteVars, type CustomDesign } from "./custom-design.ts";
+import { customFontsHref, paletteVars, type CustomDesign, type CustomMockup } from "./custom-design.ts";
 import type { AiDebug, PreviewTrace, DesignDirection, LogoMeta, Section, SiteFacts, SitePalette, SitePlan, StoredImage } from "./types.ts";
 
 export const FORMCARRY_ENDPOINT = "https://formcarry.com/s/NipZS0fF4w4";
@@ -62,6 +62,8 @@ export type StoredSite = {
   logoMeta?: LogoMeta;
   /** The from-scratch look's homepage (freeform HTML/CSS by Grok, sanitized + validated); other pages use the template. */
   custom?: CustomDesign;
+  /** The Custom Design look's Grok Imagine mockup, made by previewImagine and used by previewCustom. */
+  customMockup?: CustomMockup;
 };
 
 export type RenderOptions = {

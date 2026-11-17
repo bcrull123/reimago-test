@@ -188,6 +188,11 @@ export type StoredImage = {
   kept?: boolean;
   /** A Google Images photo shown in the preview only: where it came from, so the build step can replace it. */
   temporary?: TemporaryPhoto;
+  /** The Custom Design's copy of the template's hero photo (e.g. "photo-3"): it is @img:hero on the custom page. */
+  heroOf?: string;
+  /** A site photo's verdict in the round's hero quality gate, and what it shows (the vision caption / alt text). */
+  gate?: "passed" | "failed";
+  shows?: string;
 };
 
 /** One image the build asked for: its prompt and what happened (no secrets; prompts never contain keys). */
@@ -249,7 +254,23 @@ export type LookInfo = {
   /** The AI homepage was used, but some of its sections were dropped (first reasons). */
   aiWarning?: string;
   /** The from-scratch look: its concept, and whether it passed (else the template look is shown and why). */
-  custom?: { concept: string; status: "ok" | "repaired" | "fallback"; note?: string; stripped?: string[]; repaired?: string[] };
+  custom?: {
+    concept: string;
+    status: "ok" | "repaired" | "fallback";
+    note?: string;
+    stripped?: string[];
+    repaired?: string[];
+    /** The Grok Imagine design mockup this page was built from (shown next to the built page on the card). */
+    mockupUrl?: string;
+    /** "imagine" = built from the mockup; "brief" = from the text brief (Imagine failed / off). */
+    source?: "imagine" | "brief";
+    /** Contrast pairs fixed automatically. */
+    autofixed?: number;
+    /** Why Imagine was skipped / failed (the text-brief design was used instead). */
+    imagineNote?: string;
+    /** The mockup shows the design before a later edit ("make it darker"). */
+    mockupStale?: boolean;
+  };
   /** Bumped after "Retry with AI" so thumbnails reload. */
   rev?: number;
   /** An edit of an earlier look ("Night Brick, lighter"): the look's unchanged name is `name`. */

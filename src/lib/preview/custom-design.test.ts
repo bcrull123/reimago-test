@@ -117,3 +117,74 @@ describe("contrast: inherited backgrounds", () => {
     assert.match(problems.join(" "), /\.steps li b: #e8a33d on #f3e6cf/);
   });
 });
+
+describe("contrast: fixed automatically, never a reason to fall back", () => {
+  const pal = { primary: "#e85d04", accent: "#e85d04", background: "#fff8f0", surface: "#ffffff", text: "#1a1a1a", muted: "#555555" };
+  it("Bob's round 2 failure (.cta-nav #ffffff on #e85d04 = 3.50:1) is fixed by darkening the button, same hue", async () => {
+    const { autoFixContrast } = await import("./custom-design.ts");
+    const css = ".cta-nav{background:#e85d04;color:#ffffff;padding:1rem}.btn{background:var(--primary);color:#fff}@media (max-width:720px){.cta-nav{background:#e85d04;color:#fff}}.steps li{background:var(--surface)}.steps li b{color:#ffb38a}";
+    const out = autoFixContrast(css, pal);
+    assert.ok(out.fixes.length >= 3, out.fixes.join(" | "));
+    const problems = validateCustom("<header><nav></nav></header>", out.css, { ...ctx, pages: [], keep: false, heroImage: false, palette: pal });
+    assert.doesNotMatch(problems.join(" "), /contrast/i);
+    const bg = out.css.match(/\.cta-nav\{background:(#[0-9a-f]{6})/)![1]!;
+    assert.notEqual(bg, "#e85d04");
+    // Still orange: red channel dominant, darker.
+    assert.ok(parseInt(bg.slice(1, 3), 16) > parseInt(bg.slice(5, 7), 16));
+    assert.match(out.css, /padding:1rem/);
+  });
+  it("contrast problems are not structural", async () => {
+    const { isStructuralProblem } = await import("./custom-design.ts");
+    assert.equal(isStructuralProblem("Text contrast below WCAG AA: .btn: #ffffff on #e85d04 = 3.50:1 (needs 4.5:1)."), false);
+    assert.equal(isStructuralProblem("There must be a <footer>."), true);
+  });
+});
+
+describe("Imagine first, then Grok builds", () => {
+  const brief = { ...fallbackBrief("startup-community", "Bob.me", palette), headline: "Light the rocket. Build with peers." };
+  const cctx = {
+    name: "Bob.me",
+    tagline: "How to Start your Business",
+    description: "",
+    services: ["Naming", "Domains", "Websites"],
+    phone: "(405) 555-0100",
+    email: "",
+    address: "",
+    hours: [],
+    social: [],
+    pages: [
+      { slug: "home", label: "Home" },
+      { slug: "groups", label: "Groups" },
+      { slug: "contact", label: "Contact" },
+    ],
+    cta: { label: "Get in touch", slug: "contact" },
+    images: [
+      { name: "hero", alt: "founders meetup in our space", kind: "the business's own photo" as const },
+      { name: "photo-1", alt: "our coworking floor", kind: "the business's own photo" as const },
+    ],
+    request: "include a rocket",
+    category: "startup-community",
+    kind: "community for startup founders",
+    hasLogo: true,
+  };
+  it("the mockup prompt has the real name, nav, headline, button, the site's own photos and the owner's request", async () => {
+    const { mockupPrompt } = await import("./custom-design.ts");
+    const p = mockupPrompt(cctx, brief);
+    for (const want of ["Bob.me", "Home, Groups, Contact", "Light the rocket. Build with peers.", "Get in touch", "founders meetup in our space", "the business's real photo", "our coworking floor", "include a rocket", "no watermark"]) assert.ok(p.includes(want), want);
+    assert.ok(p.length <= 3600);
+  });
+  it("keep: the mockup must show the owner's own picture whole", async () => {
+    const { mockupPrompt } = await import("./custom-design.ts");
+    assert.match(mockupPrompt({ ...cctx, keep: "the rocket" }, brief), /owner's own picture: the rocket .*WHOLE/);
+  });
+  it("the vision build prompt asks to match the mockup, use the real photo files and keeps the technical contract", async () => {
+    const { mockupBuildPrompt, MOCKUP_MARKER } = await import("./custom-design.ts");
+    const p = mockupBuildPrompt(cctx, brief);
+    assert.ok(p.system.startsWith(MOCKUP_MARKER));
+    assert.match(p.system, /REAL photos given/);
+    assert.match(p.system, /never try to reproduce photo pixels/);
+    assert.match(p.system, /Technical contract/);
+    assert.match(p.system, /"assets"/);
+    assert.match(p.user, /the business's own photo/);
+  });
+});

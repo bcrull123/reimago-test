@@ -10,7 +10,7 @@
  * validated (business name, nav to every page, CTA links, phone, one h1, content, mobile rules, WCAG AA contrast of
  * the declared color pairs); one repair pass by Grok on failure, then the template look is used instead.
  */
-import { contrast, isHex, readablePalette } from "./design.ts";
+import { contrast, isHex, mix, readablePalette } from "./design.ts";
 import type { SitePalette } from "./types.ts";
 
 export const CUSTOM_NAME = "Custom Design";
@@ -49,6 +49,30 @@ export type CustomDesign = {
   /** Edits applied by targeted refine ("darker"), newest last. */
   edits?: string[];
   ms?: number;
+  /** "imagine": Grok built it from a Grok Imagine design mockup; "brief": from the text brief alone (Imagine failed / off). */
+  source?: "imagine" | "brief";
+  /** The Grok Imagine mockup it was built from (stored as the look's "mockup" image). */
+  mockup?: CustomMockup;
+  /** Extra Grok Imagine art made for decorative areas (stored as "art-1", "art-2"). */
+  assets?: string[];
+  /** Contrast pairs we fixed automatically ("..: background #e85d04 -> #b84a03 (4.6:1)"). */
+  autofixed?: string[];
+};
+
+/** A Grok Imagine homepage design mockup (the designer step for the Custom Design look). */
+export type CustomMockup = {
+  /** Stored image name on the look ("mockup"). */
+  name: string;
+  type: string;
+  width?: number;
+  height?: number;
+  model: string;
+  /** "generations" or "edits" (from the site's logo, like the original Imagine flow). */
+  via?: string;
+  ms: number;
+  prompt: string;
+  /** The mockup was made before a later edit of the built page ("make it darker"). */
+  stale?: boolean;
 };
 
 /** What the custom generator knows about the site (built from the stored look). */
@@ -65,7 +89,7 @@ export type CustomContext = {
   pages: { slug: string; label: string }[];
   cta: { label: string; slug: string };
   /** Stored images the page may use ("@img:hero"), with what they show. */
-  images: { name: string; alt: string; width?: number; height?: number; kind: "photo" | "ai photo" | "owner's art (keep)" | "logo"; cutout?: boolean }[];
+  images: { name: string; alt: string; width?: number; height?: number; kind: "the business's own photo" | "photo" | "ai photo" | "owner's art (keep)" | "logo" | "imagine art"; cutout?: boolean }[];
   /** The owner asked to keep this picture ("Keep the rocket"): it is @img:hero and must be shown whole. */
   keep?: string;
   /** The owner's note / latest feedback. */
@@ -196,7 +220,7 @@ Return ONLY JSON: {"css": "...", "html": "..."}.
 Technical contract (the page is rejected otherwise):
 - "html" is the inside of <body> only: a <header> with the brand token (@brand:light or @brand:dark) and a <nav> linking EVERY page (href exactly "@page:<slug>" as given), then <main> with 5-8 <section>s (exactly one <h1>, in the hero), then a <footer> with the pages, the phone/email/address given, and the brand.
 - Call-to-action buttons: <a class="..." href="@page:<cta slug>"> with the CTA label, one in the hero; a phone given = a <a href="tel:..."> link.
-- Images: only the given "@img:<name>" sources (in <img src> or CSS url(@img:name)), with alt text. If the owner asked to keep a picture it is @img:hero: show it large and WHOLE (object-fit: contain, no crop, no filters). Otherwise use @img:hero in the hero. When photos are weak, lean on CSS/SVG illustration.
+- Images: only the given "@img:<name>" sources (in <img src> or CSS url(@img:name)), with alt text. If the owner asked to keep a picture it is @img:hero: show it large and WHOLE (object-fit: contain, no crop, no filters). Otherwise use @img:hero in the hero. The business's own photos (kind "the business's own photo") go first, in the most prominent places. When photos are weak, lean on CSS/SVG illustration.
 - No <script>, no on* attributes, no <form>/<input>, no iframes, no external URLs (no http links except the social links given), no @import, no @font-face (the heading and body Google Fonts are loaded for you: use font-family var(--font-heading) and var(--font-body)).
 - Colors: use the CSS variables we define: var(--background), var(--surface), var(--text), var(--muted), var(--primary), var(--on-primary), var(--accent), var(--on-accent). Any other color you add must keep text at WCAG AA (4.5:1, 3:1 for headings over 24px) against what it sits on; declare color and background together on the same rule.
 - Responsive: mobile-first or with @media (max-width: 720px) rules; on phones the nav stays reachable (wrap it under the brand, never display:none without a <details> menu); nothing wider than the screen (no fixed widths over 600px; use max-width, %, clamp(), grid/flex). Animations only with @keyframes inside @media (prefers-reduced-motion: no-preference).
@@ -206,8 +230,8 @@ Site: ${contextJson(ctx)}`;
   return { system, user };
 }
 
-export function repairPrompt(ctx: CustomContext, brief: CustomBrief, draft: { css: string; html: string }, problems: string[]): { system: string; user: string } {
-  const base = designPrompt(ctx, brief);
+export function repairPrompt(ctx: CustomContext, brief: CustomBrief, draft: { css: string; html: string }, problems: string[], fromMockup = false): { system: string; user: string } {
+  const base = fromMockup ? mockupBuildPrompt(ctx, brief) : designPrompt(ctx, brief);
   return {
     system: `${REPAIR_MARKER}: your draft failed our checks. Fix EVERY problem listed, keep the concept and everything else that worked, and return the complete corrected JSON {"css": "...", "html": "..."}.\n\n${base.system}`,
     user: `Problems:\n${problems.map((p) => `- ${p}`).join("\n")}\n\nYour draft:\n${JSON.stringify({ css: draft.css.slice(0, 20000), html: draft.html.slice(0, 32000) })}\n\n${base.user}`,
@@ -220,6 +244,55 @@ export function editPrompt(ctx: CustomContext, design: CustomDesign, request: st
     system: `${EDIT_MARKER} from the owner's feedback. Change ONLY what they ask (same concept, layout, copy and images unless the request is about them) and return the complete JSON {"css": "...", "html": "...", "palette": {...the CSS variable colors, changed only if the request is about color/lightness}}.\n\n${base.system}`,
     user: `Owner's request: ${JSON.stringify(request.slice(0, 400))}${adjustments.length ? ` (read as: ${adjustments.join(", ")})` : ""}\nCurrent palette: ${JSON.stringify(design.brief.palette)}\nCurrent page:\n${JSON.stringify({ css: design.css.slice(0, 20000), html: design.html.slice(0, 32000) })}\n\nSite: ${contextJson(ctx)}`,
   };
+}
+
+export const MOCKUP_MARKER = "Build this homepage to MATCH THE DESIGN MOCKUP";
+
+/**
+ * Grok Imagine prompt for the homepage design mockup (desktop, above the fold + the next sections), from the brief
+ * and the real content. The site's own photos are described so the design is made around them (the built page
+ * uses the real files in those slots, not the mockup's pixels).
+ */
+export function mockupPrompt(ctx: CustomContext, brief: CustomBrief): string {
+  const nav = ctx.pages.map((p) => p.label).slice(0, 6).join(", ");
+  const photos = ctx.images.filter((i) => i.kind !== "logo" && i.kind !== "imagine art");
+  const hero = photos.find((i) => i.name === "hero");
+  const own = photos.filter((i) => i.kind === "the business's own photo");
+  const photoLine = ctx.keep
+    ? `The hero features the owner's own picture: ${ctx.keep} (${hero?.alt ?? ""}), large and WHOLE, exactly that picture, not redrawn as something else.`
+    : hero
+    ? `The hero photo area shows ${hero.alt.slice(0, 120)}${hero.kind === "the business's own photo" ? " (the business's real photo, it will be placed exactly there)" : ""}.`
+    : "No photos: the hero is bold illustration and typography.";
+  const more = own.filter((i) => i.name !== "hero").slice(0, 3).map((i) => i.alt.slice(0, 80));
+  const services = ctx.services.slice(0, 4).join(" · ");
+  const p = brief.palette;
+  return [
+    `A finished, high-end website homepage design, shown flat and full-frame as a desktop screenshot (no laptop, no device frame, no browser window, no wireframe).`,
+    `Art direction: “${brief.concept}”: ${brief.metaphor}. Mood: ${brief.mood}. Composition: ${brief.composition}.`,
+    `Typography: headings in the style of ${brief.typography.heading}, body text in the style of ${brief.typography.body}. ${brief.typography.notes}`.trim(),
+    `Colors: background ${p.background}, surface ${p.surface}, text ${p.text}, primary ${p.primary}, accent ${p.accent}.`,
+    `Top bar: the brand “${ctx.name}” at the left; menu: ${nav}; a “${ctx.cta.label}” button.`,
+    `Hero headline exactly: “${brief.headline || ctx.tagline || ctx.name}”.${ctx.tagline ? ` Supporting line: “${ctx.tagline.slice(0, 120)}”.` : ""} Main button: “${ctx.cta.label}”.`,
+    photoLine,
+    more.length ? `Further down, sections use the business's real photos of: ${more.join("; ")}.` : "",
+    services ? `Below the hero, a section with: ${services}.` : "",
+    brief.illustration ? `Decorative illustration: ${brief.illustration}.` : "",
+    ctx.request ? `The owner asked: “${ctx.request.slice(0, 200)}”: show that clearly in the design.` : "",
+    `Show the top of the page and the start of the next two sections. Real words exactly as given, crisp and legible; no lorem ipsum; no watermark; no stock-photo site names; not a WordPress theme.`,
+  ]
+    .filter(Boolean)
+    .join(" ")
+    .slice(0, 3600);
+}
+
+/** Grok (vision) builds the page to match the mockup image (sent with this prompt), with the same contract as designPrompt. */
+export function mockupBuildPrompt(ctx: CustomContext, brief: CustomBrief): { system: string; user: string } {
+  const base = designPrompt(ctx, brief);
+  const contract = base.system.slice(base.system.indexOf("Return ONLY JSON"));
+  const system = `${MOCKUP_MARKER} image attached (made by our designer with Grok Imagine). You are a senior front-end developer: rebuild it as a real homepage, as close to the mockup as you can: the same layout and proportions, colors, typography feel (pick from the brief's fonts), shapes, decorative elements and section order. Draw illustrations and shapes with inline SVG / CSS. Use ONLY the business's real content given (never invent phone numbers, emails, prices, reviews, awards or statistics); fix any garbled words in the mockup to the real text.
+Photos: put the REAL photos given ("@img:<name>") into the mockup's photo areas, the business's own photos first and in the most prominent slots; never try to reproduce photo pixels from the mockup. If the mockup has illustration areas and no given photo fits, you may ask for up to 2 extra Grok Imagine artworks: add "assets": [{"name": "art-1", "prompt": "what to draw, style, colors (no text, no logos)", "aspect": "1:1" | "4:3" | "16:9" | "3:4"}] and use them as <img src="@img:art-1" alt="..."> (decorative art only, never instead of the business's own photos).
+${contract.replace('Return ONLY JSON: {"css": "...", "html": "..."}.', 'Return ONLY JSON: {"css": "...", "html": "...", "assets": [...optional]}.')}`;
+  return { system, user: `${base.user}\nThe mockup is the attached image.` };
 }
 
 // ------------------------------------------------------------------------------------------------ CSS variables
@@ -438,51 +511,9 @@ export function validateCustom(html: string, css: string, ctx: ValidateContext):
   const outside = css.replace(/@media[^{]*\{(?:[^{}]*\{[^{}]*\})*[^{}]*\}/gi, "");
   const wide = [...outside.matchAll(/(?:^|[;{\s])(?:min-)?width\s*:\s*(\d{3,5})px/gi)].map((m) => Number(m[1])).filter((n) => n > 600);
   if (wide.length) problems.push(`Fixed widths over 600px break phones (${wide.slice(0, 3).map((n) => `${n}px`).join(", ")}): use max-width, %, clamp() or grid.`);
-  // Contrast (WCAG AA) of the declared pairs.
+  // Contrast (WCAG AA) of the declared pairs (autoFixContrast fixes these before we get here).
   const p = ctx.palette;
-  const vars: Record<string, string> = { "--background": p.background, "--surface": p.surface, "--text": p.text, "--muted": p.muted, "--primary": p.primary, "--accent": p.accent };
-  vars["--on-primary"] = onColor(p.primary);
-  vars["--on-accent"] = onColor(p.accent);
-  for (const r of cssRules(css)) {
-    for (const [k, v] of Object.entries(r.decls)) if (k.startsWith("--")) {
-      const c = resolveColor(v, vars);
-      if (c) vars[k] = c;
-    }
-  }
-  const low: string[] = [];
-  const rules = cssRules(css);
-  const bgOf = (r: { decls: Record<string, string> }): string | undefined | null => {
-    const raw = r.decls["background-color"] ?? r.decls.background;
-    if (!raw) return undefined;
-    if (/url\(|gradient/i.test(raw)) return null; // a photo/gradient: can't tell statically
-    return resolveColor(raw.split(/\s+(?![^(]*\))/)[0]!, vars) ?? null;
-  };
-  // The background a color-only rule sits on: the nearest ancestor rule by selector prefix (".steps li b" ->
-  // ".steps li" -> ".steps").
-  const inherited = (selector: string): string | null => {
-    const parts = selector.split(",")[0]!.trim().split(" ");
-    for (let n = parts.length - 1; n >= 1; n -= 1) {
-      const prefix = parts.slice(0, n).join(" ");
-      for (const r of rules) {
-        if (!r.selector.split(",").map((x) => x.trim()).includes(prefix)) continue;
-        const bg = bgOf(r);
-        if (bg !== undefined) return bg;
-      }
-    }
-    // No ancestor in the selector: the element may sit in any section (the browser check measures it).
-    return null;
-  };
-  for (const r of rules) {
-    const fg = r.decls.color ? resolveColor(r.decls.color, vars) : undefined;
-    if (!fg) continue;
-    const own = bgOf(r);
-    const bg = own === undefined ? inherited(r.selector) : own;
-    if (!bg) continue;
-    // Same-rule pairs are held to AA; inherited ones (size unknown) to the large-text bar (3:1).
-    const large = own === undefined || /\bh1\b|\bh2\b|display|headline|hero-title|big|huge|mega/i.test(r.selector);
-    const ratio = contrast(fg, bg);
-    if (ratio < (large ? 3 : 4.5)) low.push(`${r.selector.slice(0, 60)}: ${fg} on ${bg} = ${ratio.toFixed(2)}:1 (needs ${large ? 3 : 4.5}:1)`);
-  }
+  const low = contrastFailures(css, p).map((f) => `${f.selector.slice(0, 60)}: ${f.fg} on ${f.bg} = ${f.ratio.toFixed(2)}:1 (needs ${f.need}:1)`);
   if (low.length) problems.push(`Text contrast below WCAG AA: ${low.slice(0, 5).join("; ")}.`);
   for (const [a, b, label] of [
     [p.text, p.background, "--text on --background"],
@@ -492,6 +523,139 @@ export function validateCustom(html: string, css: string, ctx: ValidateContext):
   }
   if (html.length > 80_000) problems.push("The html is too long.");
   return problems;
+}
+
+// ------------------------------------------------------------------------------------------------ contrast
+
+function contrastVars(css: string, p: SitePalette): Record<string, string> {
+  const vars: Record<string, string> = { "--background": p.background, "--surface": p.surface, "--text": p.text, "--muted": p.muted, "--primary": p.primary, "--accent": p.accent };
+  vars["--on-primary"] = onColor(p.primary);
+  vars["--on-accent"] = onColor(p.accent);
+  for (const r of cssRules(css)) {
+    for (const [k, v] of Object.entries(r.decls)) if (k.startsWith("--")) {
+      const c = resolveColor(v, vars);
+      if (c) vars[k] = c;
+    }
+  }
+  return vars;
+}
+
+type ContrastFailure = { selector: string; fg: string; bg: string; ratio: number; need: number; ownBg: boolean };
+
+/**
+ * Text/background pairs below WCAG AA, rule by rule: same-rule pairs need 4.5:1 (3:1 for headline-ish selectors);
+ * a color-only rule is checked against its nearest ancestor rule's background (".steps li b" -> ".steps li") at 3:1.
+ */
+function contrastFailures(css: string, p: SitePalette): ContrastFailure[] {
+  const vars = contrastVars(css, p);
+  const rules = cssRules(css);
+  const out: ContrastFailure[] = [];
+  for (const r of rules) {
+    const fg = r.decls.color ? resolveColor(r.decls.color, vars) : undefined;
+    if (!fg) continue;
+    const own = ruleBg(r, vars);
+    const bg = own === undefined ? inheritedBg(r.selector, rules, vars) : own;
+    if (!bg) continue;
+    const large = own === undefined || /\bh1\b|\bh2\b|display|headline|hero-title|big|huge|mega/i.test(r.selector);
+    const need = large ? 3 : 4.5;
+    const ratio = contrast(fg, bg);
+    if (ratio < need) out.push({ selector: r.selector, fg, bg, ratio, need, ownBg: own !== undefined });
+  }
+  return out;
+}
+
+function ruleBg(r: { decls: Record<string, string> }, vars: Record<string, string>): string | undefined | null {
+  const raw = r.decls["background-color"] ?? r.decls.background;
+  if (!raw) return undefined;
+  if (/url\(|gradient/i.test(raw)) return null; // a photo/gradient: can't tell statically
+  return resolveColor(raw.split(/\s+(?![^(]*\))/)[0]!, vars) ?? null;
+}
+
+// The background a color-only rule sits on: the nearest ancestor rule by selector prefix (".steps li b" ->
+// ".steps li" -> ".steps"). No ancestor in the selector: the element may sit in any section (the browser check measures it).
+function inheritedBg(selector: string, rules: { selector: string; decls: Record<string, string> }[], vars: Record<string, string>): string | null {
+  const parts = selector.split(",")[0]!.trim().split(" ");
+  for (let n = parts.length - 1; n >= 1; n -= 1) {
+    const prefix = parts.slice(0, n).join(" ");
+    for (const r of rules) {
+      if (!r.selector.split(",").map((x) => x.trim()).includes(prefix)) continue;
+      const bg = ruleBg(r, vars);
+      if (bg !== undefined) return bg;
+    }
+  }
+  return null;
+}
+
+/** Move a color toward black or white (same hue) until it reaches `need` against `other`; undefined if it can't. */
+function shiftFor(color: string, other: string, need: number): string | undefined {
+  const toward = contrast("#000000", other) >= contrast("#ffffff", other) ? "#000000" : "#ffffff";
+  for (let t = 0.04; t <= 1.0001; t += 0.04) {
+    const c = mix(color, toward, Math.min(1, t));
+    if (contrast(c, other) >= need + 0.05) return c;
+  }
+  return undefined;
+}
+
+/**
+ * Deterministic WCAG AA fix (before any repair pass; Bob, round 2: a page fell back to a template over a 3.5:1
+ * button). Rule by rule: a button-like pair (own background) keeps its text and darkens / lightens its background,
+ * same hue; a color-only rule moves its text color instead. Returns the fixed CSS and what changed.
+ */
+export function autoFixContrast(css: string, p: SitePalette): { css: string; fixes: string[] } {
+  const fixes: string[] = [];
+  let current = css;
+  // A selector can appear more than once (base + @media): a few passes fix each occurrence.
+  for (let pass = 0; pass < 4; pass += 1) {
+    const r = fixOnce(current, p);
+    if (!r.fixes.length) break;
+    fixes.push(...r.fixes);
+    current = r.css;
+  }
+  return { css: current, fixes };
+}
+
+function fixOnce(css: string, p: SitePalette): { css: string; fixes: string[] } {
+  const failing = contrastFailures(css, p);
+  if (!failing.length) return { css, fixes: [] };
+  const vars = contrastVars(css, p);
+  const bySelector = new Map(failing.map((f) => [f.selector, f]));
+  const fixes: string[] = [];
+  const fixed = css.replace(/([^{}@;]+)\{([^{}]*)\}/g, (whole, sel: string, body: string) => {
+    const f = bySelector.get(sel.trim().replace(/\s+/g, " "));
+    if (!f) return whole;
+    // This occurrence must be the failing one (a selector can repeat: base rule + @media).
+    const own: Record<string, string> = {};
+    for (const d of body.split(";")) {
+      const i = d.indexOf(":");
+      if (i > 0) own[d.slice(0, i).trim().toLowerCase()] = d.slice(i + 1).trim();
+    }
+    const ownFg = own.color ? resolveColor(own.color, vars) : undefined;
+    const ownBg = ruleBg({ decls: own }, vars);
+    if (ownFg !== f.fg || (f.ownBg ? ownBg !== f.bg : ownBg !== undefined)) return whole;
+    bySelector.delete(f.selector);
+    const decls = body.split(";");
+    const setDecl = (key: RegExp, value: string) => decls.map((d) => (key.test(d.slice(0, Math.max(0, d.indexOf(":"))).trim()) ? `${d.slice(0, d.indexOf(":"))}:${value}${/!important/i.test(d) ? " !important" : ""}` : d));
+    let next: string[] | undefined;
+    if (f.ownBg) {
+      const bg = shiftFor(f.bg, f.fg, f.need);
+      if (bg) {
+        next = setDecl(/^background(-color)?$/i, bg);
+        fixes.push(`${f.selector.slice(0, 50)}: background ${f.bg} -> ${bg} (${contrast(f.fg, bg).toFixed(2)}:1)`);
+      }
+    }
+    if (!next) {
+      const fg = shiftFor(f.fg, f.bg, f.need) ?? onColor(f.bg);
+      next = setDecl(/^color$/i, fg);
+      fixes.push(`${f.selector.slice(0, 50)}: text ${f.fg} -> ${fg} (${contrast(fg, f.bg).toFixed(2)}:1)`);
+    }
+    return `${sel}{${next.join(";")}}`;
+  });
+  return { css: fixed, fixes };
+}
+
+/** Contrast problems are fixed automatically and never make us drop the page; everything else is structural. */
+export function isStructuralProblem(problem: string): boolean {
+  return !/^(Text contrast below WCAG AA|Palette --)/.test(problem);
 }
 
 /** "Layout: designed from scratch · concept “The Launchpad”" for the card. */
