@@ -6,6 +6,7 @@
  * goes through assertPublic (no private IPs), redirects are followed manually,
  * bodies are size-capped, and non-HTML responses are skipped.
  */
+import { collectSiteArt } from "@/lib/preview/site-art";
 import {
   REIMAGO_HOSTS,
   REIMAGO_SNAPSHOT,
@@ -600,6 +601,8 @@ export async function scrapeSite(rawUrl: string, notes: string): Promise<SiteFac
     testimonials,
     images,
     imageText: Object.fromEntries(images.filter((u) => imageLabels.has(u)).map((u) => [u, imageLabels.get(u)!])),
+    // All imagery with its words (img, picture, inline SVG, CSS backgrounds, og:image, logo), for "keep the rocket".
+    siteArt: collectSiteArt(docs, cssLinks.map((href, i) => ({ href, text: css[i] ?? "" })), logo),
     nav: nav.filter((n) => sameSite(hostOf(n.url), base.hostname)).slice(0, 8),
     pages,
     social,

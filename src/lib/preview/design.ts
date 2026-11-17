@@ -3,7 +3,7 @@
  * the normalizer that turns an AI concept into something the renderer can trust.
  * Shared by server code and node tests (relative imports only).
  */
-import { requestHints, requestedScene } from "./owner-request.ts";
+import { requestHints, sceneToFind } from "./owner-request.ts";
 import { ARCHETYPES, MOTIFS, type Archetype, type DesignDirection, type Motif, type SiteFacts, type SitePalette } from "./types.ts";
 
 /** Curated Google Fonts with the exact axis spec that the css2 API accepts (all verified). */
@@ -359,7 +359,7 @@ export function mockDirections(facts: SiteFacts, variation: number): DesignDirec
   // The owner's request (note + feedback rounds) shapes the mock looks visibly: asked-for tones come first,
   // asked-for colors lead every palette, and "dark"/"light" sets the backgrounds.
   const hints = requestHints(facts);
-  const scene = requestedScene(facts);
+  const scene = sceneToFind(facts);
   const base = archetypesFor(facts, variation);
   const pool = [...base, ...ARCHETYPES.filter((a) => !base.includes(a))].filter((a) => !(hints.scheme === "light" && a === "dark-premium"));
   const ordered = [...new Set([...hints.archetypes, ...pool])].slice(0, 3);

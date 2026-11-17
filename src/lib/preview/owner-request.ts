@@ -32,7 +32,7 @@ export function cleanFeedback(value: unknown): string[] {
     .slice(-MAX_FEEDBACK_ROUNDS);
 }
 
-type RequestFacts = Pick<SiteFacts, "notes"> & { feedback?: string[]; photoSubject?: string };
+type RequestFacts = Pick<SiteFacts, "notes"> & { feedback?: string[]; photoSubject?: string; photoIntent?: string };
 
 export function ownerRequests(facts: RequestFacts): { note: string; feedback: string[] } {
   return { note: cleanRequest(facts.notes, NOTE_MAX), feedback: cleanFeedback(facts.feedback) };
@@ -155,7 +155,7 @@ export function requestHints(facts: RequestFacts): RequestHints {
 /** Words that make a phrase about design, not a photo subject ("use navy and gold", "use bigger fonts"). */
 /** Words about the design, not about what a photo shows ("use orange", "navy and gold", "add a gallery"). */
 const DESIGN_WORD =
-  /^(colou?rs?|navy|gold|red|blue|green|orange|yellow|purple|pink|black|white|gr[ae]y|brown|teal|tan|cream|font|fonts|type|typography|style|styles|layout|section|sections|button|buttons|text|copy|wording|headline|headlines|logo|menu|darker|lighter|dark|light|bold|bolder|playful|modern|minimal|premium|warm|cozy|clean|simple|bigger|smaller|larger|spacing|space|reviews?|testimonials?|faq|gallery|steps|how|works|phone|number|email|address|hours|contact|form|look|feel|vibe|theme|scheme|palette|accent|accents|shade|shades|tone|tones|it|this|that|everything|site|website|page|pages|please|something|stuff|better|nicer|pretty|more|less|bit|lot|one|ones|thing|things|photo|photos|picture|pictures|image|images|pic|pics|background|backgrounds|hero|backdrop|banner|header|top|instead|too|also|here|there|and|or|with|the|a|an|of|in|on|for|to|as|at|my|our|some|use|using|put|add|show|make|want|like)$/;
+  /^(colou?rs?|navy|gold|red|blue|green|orange|yellow|purple|pink|black|white|gr[ae]y|brown|teal|tan|cream|font|fonts|type|typography|style|styles|layout|section|sections|button|buttons|text|copy|wording|headline|headlines|logo|menu|darker|lighter|dark|light|bold|bolder|playful|modern|minimal|premium|warm|cozy|clean|simple|bigger|smaller|larger|spacing|space|reviews?|testimonials?|faq|gallery|steps|how|works|phone|number|email|address|hours|contact|form|look|feel|vibe|theme|scheme|palette|accent|accents|shade|shades|tone|tones|it|this|that|everything|site|website|page|pages|please|something|stuff|better|nicer|pretty|more|less|bit|lot|one|ones|thing|things|photo|photos|picture|pictures|image|images|pic|pics|background|backgrounds|hero|backdrop|banner|header|top|instead|too|also|here|there|and|or|with|the|a|an|of|in|on|for|to|as|at|my|our|some|use|using|put|add|show|make|want|like|same|current|existing|original|exact|professional|friendly|fun|elegant|sleek|short|simple|consistent|keep|retain|preserve|lose|leave|stay|way|is|was|now|everything|all|look)$/;
 
 /** A real subject has at least one word that is not about colors/fonts/layout ("the red bricks" yes, "red and gold" no). */
 function isSubject(scene: string): boolean {
@@ -168,6 +168,20 @@ function isSubject(scene: string): boolean {
 const PICTURE = String.raw`(?:photos?|pictures?|pics?|images?|shots?|photographs?|backgrounds?|backdrops?|hero(?:\s+(?:image|photo|picture|background))?|header\s+(?:image|photo))`;
 const SLOT = String.raw`(?:the\s+|a\s+|my\s+|our\s+)?(?:background|backdrop|hero(?:\s+(?:image|photo|section))?|header(?:\s+(?:image|photo))?|banner|top(?:\s+of\s+the\s+page)?|main\s+(?:image|photo|picture)|headline|title)`;
 const WANT = String.raw`(?:put|use|using|show|showing|add|want|place|make|feature|featuring|depict|include|need|like|have|set|see|get|give\s+(?:me|us))`;
+
+/** "Keep the rocket", "don't lose our mascot", "still use the same truck photo": a picture from the owner's own site. */
+const KEEP_VERB = String.raw`(?:keep|keeping|retain|preserve|reuse|re-use|don'?t\s+lose|do\s+not\s+lose|don'?t\s+remove|do\s+not\s+remove|don'?t\s+get\s+rid\s+of|don'?t\s+drop|leave(?!\s+(?:out|off|behind)\b)|still\s+(?:use|show|have|include)|stick\s+with|hold\s+on\s+to|hang\s+on\s+to|bring\s+over|carry\s+over)`;
+const KEEP_PATTERNS: RegExp[] = [
+  new RegExp(String.raw`\b${KEEP_VERB}\s+(?:in\s+|using\s+)?([^.;!?\n]{2,90})`),
+  // "the rocket from my site", "the same rocket as now", "our existing rocket graphic"
+  // ("the old courthouse" is a subject to find; "our old logo art" is the owner's own)
+  /\b((?:the|my|our)\s+(?:same|current|existing|original)\s+[^.;!?\n]{2,60}|(?:my|our)\s+old\s+[^.;!?\n]{2,60})/,
+  /\b((?:the|my|our)?\s*[^.;!?\n]{2,60}?)\s+(?:from|on|of)\s+(?:my|our|the)\s+(?:current\s+|existing\s+|old\s+|present\s+)?(?:site|website|web\s+site|homepage|home\s+page|page)\b/,
+  // "our rocket", "I love my rocket, keep it", "my mascot please"
+  /^\s*(?:i\s+(?:really\s+)?(?:like|love)\s+)?((?:my|our)\s+[a-z][a-z' -]{1,40}?)\s*(?:,|$|\s+(?:please|stays?|should|must|is|has\s+to)\b)/,
+];
+/** Words after my/our that name a place, not something on the owner's site ("our town's brick streets"). */
+const PLACE_WORD = /^(?:town|city|community|area|neighborhood|neighbourhood|county|state|region|downtown|village|valley|street|streets|main)\b/;
 
 /** Phrases that introduce what a photo should show, most specific first. */
 const SCENE_PATTERNS: RegExp[] = [
@@ -200,6 +214,85 @@ function trimScene(raw: string): string {
     .slice(0, 90);
 }
 
+/** Strip what marks a "keep" phrase: "the same rocket image", "our rocket graphic from the site" -> "the rocket" / "rocket". */
+function trimKept(raw: string): string {
+  return trimScene(
+    raw
+      .replace(/\s+(?:from|on|of)\s+(?:my|our|the)\s+(?:current\s+|existing\s+|old\s+|present\s+)?(?:site|website|web\s+site|homepage|home\s+page|page)\b.*$/, "")
+      .replace(/\s+(?:as|like)\s+(?:it\s+is|is|now|before|it\s+was|on\s+the\s+site)\b.*$/, "")
+      .replace(/\s+(?:that|which)\s+(?:is|was|we\s+have|i\s+have)\b.*$/, "")
+      .replace(/^(?:(?:the|my|our)\s+)?(?:same|current|existing|original|old)\s+/, (m) => (/^(?:my|our)/.test(m) ? "" : "the "))
+      .replace(/\s+(?:image|images|graphic|graphics|illustration|picture|photo|pic|art|artwork|icon|drawing)$/, ""),
+  ).replace(/^(?:my|our)\s+/, "");
+}
+
+export type PhotoIntent = "keep" | "find" | "none";
+
+/**
+ * What the owner wants pictured and where it must come from:
+ * - "keep": something already on their site ("Keep the rocket", "our storefront", "the logo art from my site") —
+ *   only the scraped site may supply it, never a web search or an AI image;
+ * - "find": a subject to show ("a picture of the red bricks") — the site, then free-license photos, then AI;
+ * - "none": no photo subject.
+ * The AI planner's reading (photoSubject + photoIntent) is used when present; a keep phrase in the owner's own
+ * words always means keep (it is the safe reading: nothing is fetched from outside the site).
+ */
+export function requestedPhoto(facts: RequestFacts): { subject?: string; intent: PhotoIntent; from?: "AI planner" | "note wording" } {
+  const words = readPhoto(facts);
+  const planned = cleanSubject(facts.photoSubject);
+  const plannedIntent = facts.photoIntent === "keep" || facts.photoIntent === "find" ? facts.photoIntent : undefined;
+  if (planned) {
+    const keep = plannedIntent === "keep" || (words?.intent === "keep" && sameThing(words.subject, planned));
+    return { subject: planned, intent: keep ? "keep" : "find", from: "AI planner" };
+  }
+  if (words) return { ...words, from: "note wording" };
+  return { intent: "none" };
+}
+
+function sameThing(a: string, b: string): boolean {
+  const set = (t: string) => new Set(t.toLowerCase().split(/[^a-z]+/).filter((w) => w.length > 2 && !DESIGN_WORD.test(w)).map((w) => w.replace(/s$/, "")));
+  const x = set(a);
+  return [...set(b)].some((w) => x.has(w));
+}
+
+/** The note's own photo subject and intent (no AI): keep phrases first, then "find" phrases. */
+function readPhoto(facts: RequestFacts): { subject: string; intent: PhotoIntent } | undefined {
+  const { note, feedback } = ownerRequests(facts);
+  for (const text of [...feedback].reverse().concat(note ? [note] : [])) {
+    for (const sentence of text.toLowerCase().replace(/’/g, "'").split(/(?<=[.!?;\n])\s+/)) {
+      for (const pattern of KEEP_PATTERNS) {
+        for (const match of sentence.matchAll(new RegExp(pattern.source, "g"))) {
+          const at = match.index ?? 0;
+          // "don't keep the pipes" / "no need to keep the clipart" are not keep requests.
+          if (/\b(?:don'?t|do not|no need to|not|never|stop)\s+$/.test(sentence.slice(Math.max(0, at - 14), at)) && !/^(?:don|do not)/.test(match[0])) continue;
+          if (/^(?:my|our)\s+(\S+)/.test(match[1] ?? "") && PLACE_WORD.test((match[1] ?? "").replace(/^(?:my|our)\s+/, ""))) continue;
+          const subject = trimKept(match[1] ?? "");
+          if (subject && isSubject(subject)) return { subject, intent: "keep" };
+        }
+      }
+      for (const pattern of SCENE_PATTERNS) {
+        for (const match of sentence.matchAll(new RegExp(pattern.source, "g"))) {
+          if (negated(sentence, match.index ?? 0)) continue;
+          const raw = (match[1] ?? "").trim();
+          const scene = trimScene(raw);
+          if (!scene || !isSubject(scene)) continue;
+          // "use our storefront as the hero": something the business has, so it comes from their site.
+          const own = /^(?:my|our)\s+(?!own\b)(\S+)/.exec(raw.replace(/^(?:a|an|some)\s+(?:(?:photos?|pictures?|pics?|images?)\s+of\s+)?/, ""));
+          if (own && !PLACE_WORD.test(own[1]!)) return { subject: scene.replace(/^(?:my|our)\s+/, ""), intent: "keep" };
+          return { subject: scene, intent: "find" };
+        }
+      }
+    }
+  }
+  return undefined;
+}
+
+/** The subject to *find or generate* a photo of; undefined when there is none or it must be kept from the site. */
+export function sceneToFind(facts: RequestFacts): string | undefined {
+  const want = requestedPhoto(facts);
+  return want.intent === "find" ? want.subject : undefined;
+}
+
 /** The owner's photo subject as the AI planner read it ("red brick streets"); cleaned, or "" if it isn't a subject. */
 export function cleanSubject(raw: unknown): string {
   if (typeof raw !== "string") return "";
@@ -215,23 +308,7 @@ export function cleanSubject(raw: unknown): string {
  * The AI planner's reading (facts.photoSubject) wins when present; then the newest feedback, then the note.
  */
 export function requestedScene(facts: RequestFacts): string | undefined {
-  const planned = cleanSubject(facts.photoSubject);
-  if (planned) return planned;
-  const { note, feedback } = ownerRequests(facts);
-  for (const text of [...feedback].reverse().concat(note ? [note] : [])) {
-    // One sentence at a time, so "Make it dark. Use the depot as the background." finds the depot.
-    for (const sentence of text.toLowerCase().split(/(?<=[.!?;\n])\s+/)) {
-      for (const pattern of SCENE_PATTERNS) {
-        for (const match of sentence.matchAll(new RegExp(pattern.source, "g"))) {
-          if (negated(sentence, match.index ?? 0)) continue;
-          const scene = trimScene(match[1] ?? "");
-          if (!scene || !isSubject(scene)) continue;
-          return scene;
-        }
-      }
-    }
-  }
-  return undefined;
+  return requestedPhoto(facts).subject;
 }
 
 /** The owner wants the photo as the hero *background* ("…as background", "in the background", "behind the headline"). */

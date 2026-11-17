@@ -16,7 +16,7 @@ import { ARCHETYPES, type DesignDirection, type PlanPage, type PlanSection, type
 import { PRESETS, archetypesFor, mockDirections, normalizeDirection, HEADING_FONTS as DISPLAY_FONTS, BODY_FONTS as TEXT_FONTS } from "@/lib/preview/design";
 import { SECTION_GUIDE, checkSections, composeImages, composeMockPage, corpusFor, type NormalizeContext } from "@/lib/preview/sections";
 import { redact } from "@/lib/ai-json";
-import { cleanSubject, hasOwnerRequest, ownerRequestRule, ownerRequests, requestedScene, wantsBackground, wantsNewPhotos } from "@/lib/preview/owner-request";
+import { cleanSubject, hasOwnerRequest, ownerRequestRule, ownerRequests, requestedPhoto, requestedScene, wantsBackground, wantsNewPhotos } from "@/lib/preview/owner-request";
 import { heroSuitability, matchScraped, placeOf, webQueries, type PhotoCredit } from "@/lib/preview/web-photo";
 import { arrangeSections, diversifyDirections, lookSignature, photoRank } from "@/lib/preview/look-variety";
 import { findWebPhotos, webPhotosEnabled } from "@/lib/preview/web-photo.server";
@@ -186,13 +186,15 @@ export function normalizePlan(raw: unknown, facts: SiteFacts, variation: number)
     cta: { label: clip(cta.label, 28) || fallback.cta.label, slug: trimmed.some((p) => p.slug === ctaSlug) ? ctaSlug : "contact" },
     pages: trimmed,
     photoSubject: cleanSubject(r.photoSubject ?? r.photo_subject) || undefined,
+    photoIntent: ((v) => (v === "keep" || v === "find" || v === "none" ? v : undefined))(String(r.photoIntent ?? r.photo_intent ?? "").toLowerCase().trim()),
   };
 }
 
 /** The planner's reading of the photo subject travels with the plan; looks read it through the facts. */
 export function withPlanSubject(facts: SiteFacts, plan: SitePlan): SiteFacts {
   const subject = cleanSubject(plan.photoSubject);
-  return subject && !facts.photoSubject ? { ...facts, photoSubject: subject } : facts;
+  if (!subject || facts.photoSubject) return facts;
+  return { ...facts, photoSubject: subject, photoIntent: plan.photoIntent === "keep" ? "keep" : "find" };
 }
 
 export async function planSite(facts: SiteFacts, variation = 0): Promise<{ plan: SitePlan; note?: string }> {
@@ -214,6 +216,7 @@ export async function planSite(facts: SiteFacts, variation = 0): Promise<{ plan:
 Return ONLY one JSON object, no markdown:
 {"tagline": string, "summary": string (1-2 sentences: what the current site does poorly and what the new site fixes), "changes": [3 short strings],
  "photoSubject": string (what the owner's request asks to SHOW in the hero/background photo, in 2-6 plain words with the place if known, e.g. "red brick streets downtown"; "" when the request names no photo subject — colors, fonts and layout wishes are not photo subjects),
+ "photoIntent": "keep" | "find" | "none" ("keep" when the owner wants to keep or reuse a picture that is already on their site — "keep the rocket", "don't lose our mascot", "use the same truck photo", "our storefront"; "find" when they want a photo of something new to be found or made — "a picture of the red bricks"; "none" when photoSubject is ""),
  "cta": {"label": string (max 24 chars), "slug": page slug},
  "pages": [{"slug": "home"|lowercase-hyphenated, "title": string, "navLabel": string (max 18 chars), "purpose": string, "sections": [{"kind": "hero|services|about|testimonials|gallery|faq|hours|cta|text|team|pricing|contact-info", "heading": string, "brief": string}]}]}
 Rules:
@@ -561,19 +564,45 @@ export async function buildLook(
   const jobs: Promise<void>[] = [];
   // The owner's words decide the photos first: a named scene ("use the brick streets") or feedback about
   // photos means the hero is generated from that scene, even when the site has a usable photo of its own.
-  const asked0 = requestedScene(facts);
+  // "Keep the rocket": the owner's own picture, from their site only (never a web search or an AI image).
+  const want = requestedPhoto(facts);
+  const keepSubject = want.intent === "keep" ? want.subject : undefined;
+  let kept: StoredImage | undefined;
+  let keepEntry: ImageTrace | undefined;
+  if (keepSubject) {
+    const { keepFromSite } = await import("@/lib/preview/keep-art.server");
+    const found = await keepFromSite(keepSubject, facts, useAi, stepStart + Math.min(25_000, budget / 3));
+    keepEntry = { name: "hero", slot: "hero", scene: keepSubject, prompt: "", status: "not found on your site" };
+    if (found.kept) {
+      const k = found.kept;
+      try {
+        await saveImage(id, "hero", k.type, k.bytes);
+        kept = { name: "hero", type: k.type, source: "photo", alt: k.art.label.split(/\s+/).slice(0, 8).join(" ") || keepSubject, width: k.width, height: k.height, cutout: k.cutout, kept: true };
+        images.hero = kept;
+        Object.assign(keepEntry, {
+          status: "kept from your site",
+          search: `${k.how} · ${k.art.kind === "svg" ? "inline SVG drawing" : k.art.kind === "css" ? "CSS background image" : k.art.kind === "og" ? "share image (og:image)" : k.art.kind === "logo" ? "logo" : "image"} on ${k.art.home ? "your homepage" : k.art.page}${k.cutout ? " · transparent art, shown whole on a color panel" : ""}`,
+          credit: { title: keepSubject, author: "", license: "", licenseUrl: "", sourceUrl: k.art.url.startsWith("inline-svg:") ? k.art.page : k.art.url, provider: "your site" },
+        } satisfies Partial<ImageTrace>);
+      } catch {
+        // Could not store it: reported as not found.
+      }
+    }
+    if (!kept) keepEntry.search = `looked at ${found.looked} pictures on your site (${found.how}); no web or AI substitute is used for something you asked to keep`;
+  }
+  const asked0 = want.intent === "find" ? want.subject : undefined;
   // No subject named and none of the site's photos suits a hero (a town site with only utility shots): show the
   // town itself — a free-license photo of it, else an AI photo of it.
   const town = placeOf(facts);
   const bestOwn = scored[0];
-  const autoScene = !asked0 && !wantsNewPhotos(facts) && town?.city && (!bestOwn || bestOwn.score <= 0 || !heroWorthy(bestOwn.photo)) && civic ? `downtown ${town.city}` : undefined;
+  const autoScene = !asked0 && !keepSubject && !wantsNewPhotos(facts) && town?.city && (!bestOwn || bestOwn.score <= 0 || !heroWorthy(bestOwn.photo)) && civic ? `downtown ${town.city}` : undefined;
   const scene = asked0 ?? autoScene;
   // Image prompts read the subject from the facts; an automatic town subject is not the owner's request.
-  const imgFacts: SiteFacts = autoScene ? { ...facts, photoSubject: autoScene } : facts;
+  const imgFacts: SiteFacts = autoScene ? { ...facts, photoSubject: autoScene, photoIntent: "find" } : facts;
   const freshPhotos = wantsNewPhotos(facts);
   const asked = hasOwnerRequest(facts);
   const trace: PreviewTrace = {
-    request: { ...ownerRequests(facts), scene: asked0, autoScene, subjectFrom: asked0 ? (cleanSubject(facts.photoSubject) ? "AI planner" : "note wording") : undefined },
+    request: { ...ownerRequests(facts), scene: want.subject, intent: want.subject ? (keepSubject ? "keep" : "find") : undefined, autoScene, subjectFrom: want.from },
     steps: [
       { step: "plan", ai: !plan.mock, ownerRequest: !plan.mock && asked },
       { step: "look directions", ai: Boolean(design.ai), ownerRequest: Boolean(design.ai) && asked },
@@ -602,6 +631,7 @@ export async function buildLook(
       })(),
     );
   };
+  if (keepEntry) trace.images.push(keepEntry);
   const heroAspect = design.heroStyle ? (design.heroStyle === "cinematic" ? "16:9" : "4:3") : design.hero === "split" ? "4:3" : "16:9";
   if (scene) {
     // The owner named what the hero should show. Order: one of the site's own photos that shows it (alt text,
@@ -645,6 +675,8 @@ export async function buildLook(
       return true;
     };
     wantImage("hero", "hero", heroAspect, `photo of ${scene}: the owner asked for this, so use it as the hero background image`, findReal, entry);
+  } else if (kept) {
+    // The kept picture is the hero; nothing is generated in its place.
   } else if (!heroWorthy(photos[0]) || freshPhotos) {
     wantImage("hero", "hero", heroAspect, `generated hero photo: ${design.heroSubject || kind}`);
   }
@@ -669,9 +701,9 @@ export async function buildLook(
   const sections = resolveImages(result.sections, available);
   // The requested scene goes in the hero even if the page writer picked one of the site's own photos, and
   // "as background" means the full-bleed photo hero. With no photo of the scene, no unrelated photo is used.
-  if (sections[0]?.type.startsWith("hero-")) sections[0] = heroForRequest(sections[0], facts, design, Boolean(images.hero), scene, freshPhotos, ownHero);
-  // Each look: its own hero treatment, section order and section variants.
-  sections.splice(0, sections.length, ...arrangeSections(sections, design, available, facts.services));
+  if (sections[0]?.type.startsWith("hero-")) sections[0] = heroForRequest(sections[0], facts, design, Boolean(images.hero), scene ?? (kept ? keepSubject : undefined), freshPhotos, ownHero);
+  // Each look: its own hero treatment, section order and section variants (kept art shown whole, as a cutout).
+  sections.splice(0, sections.length, ...arrangeSections(sections, design, available, facts.services, Boolean(images.hero?.cutout && sections[0]?.image === "hero")));
   trace.layout = lookSignature(design, sections, images.hero?.credit?.sourceUrl ?? sections[0]?.image);
   trace.steps.push({ step: "homepage sections", ai: result.ai, ownerRequest: Boolean(result.ownerRequest) });
   const pages: StoredPage[] = plan.pages.map((p) =>
@@ -776,8 +808,10 @@ export async function finishSite(site: StoredSite): Promise<{ site: StoredSite; 
     if (page.slug === "home") {
       const home = resolveImages(polished.sections, available);
       // Keep the owner's requested scene in the hero after the critique pass.
-      if (home[0]?.type.startsWith("hero-")) home[0] = heroForRequest(home[0], facts, design, Boolean(images.hero), trace.request.scene ?? trace.request.autoScene, wantsNewPhotos(facts));
-      const arranged = arrangeSections(home, design, available, facts.services);
+      // (A subject to keep that wasn't found on the site leaves the hero as it was: no plain-background swap.)
+      const heroScene = trace.request.intent === "keep" && !images.hero?.kept ? undefined : (trace.request.scene ?? trace.request.autoScene);
+      if (home[0]?.type.startsWith("hero-")) home[0] = heroForRequest(home[0], facts, design, Boolean(images.hero), heroScene, wantsNewPhotos(facts));
+      const arranged = arrangeSections(home, design, available, facts.services, Boolean(images.hero?.cutout && home[0]?.image === "hero"));
       trace.layout = lookSignature(design, arranged, images.hero?.credit?.sourceUrl ?? arranged[0]?.image);
       return { ...page, sections: arranged, pending: false };
     }
