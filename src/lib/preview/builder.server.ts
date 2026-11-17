@@ -16,12 +16,12 @@ import { ARCHETYPES, type DesignDirection, type PlanPage, type PlanSection, type
 import { PRESETS, archetypesFor, mockDirections, normalizeDirection, HEADING_FONTS as DISPLAY_FONTS, BODY_FONTS as TEXT_FONTS } from "@/lib/preview/design";
 import { SECTION_GUIDE, checkSections, composeImages, composeMockPage, corpusFor, type NormalizeContext } from "@/lib/preview/sections";
 import { redact } from "@/lib/ai-json";
-import { hasOwnerRequest, ownerRequestRule, ownerRequests, requestedScene, wantsBackground, wantsNewPhotos } from "@/lib/preview/owner-request";
-import { matchScraped, placeOf, webQuery, type PhotoCredit } from "@/lib/preview/web-photo";
+import { cleanSubject, hasOwnerRequest, ownerRequestRule, ownerRequests, requestedScene, wantsBackground, wantsNewPhotos } from "@/lib/preview/owner-request";
+import { heroSuitability, matchScraped, placeOf, webQueries, type PhotoCredit } from "@/lib/preview/web-photo";
 import { arrangeSections, diversifyDirections, lookSignature, photoRank } from "@/lib/preview/look-variety";
 import { findWebPhotos, webPhotosEnabled } from "@/lib/preview/web-photo.server";
 import type { Photo } from "@/lib/preview/images.server";
-import { imagePrompt, sceneFor } from "@/lib/preview/image-prompts";
+import { imagePrompt, isCivic, sceneFor } from "@/lib/preview/image-prompts";
 import type { ImageTrace, PreviewTrace } from "@/lib/preview/types";
 
 /** The owner's note + feedback rounds as a high-priority block at the end of a system prompt. */
@@ -185,7 +185,14 @@ export function normalizePlan(raw: unknown, facts: SiteFacts, variation: number)
     },
     cta: { label: clip(cta.label, 28) || fallback.cta.label, slug: trimmed.some((p) => p.slug === ctaSlug) ? ctaSlug : "contact" },
     pages: trimmed,
+    photoSubject: cleanSubject(r.photoSubject ?? r.photo_subject) || undefined,
   };
+}
+
+/** The planner's reading of the photo subject travels with the plan; looks read it through the facts. */
+export function withPlanSubject(facts: SiteFacts, plan: SitePlan): SiteFacts {
+  const subject = cleanSubject(plan.photoSubject);
+  return subject && !facts.photoSubject ? { ...facts, photoSubject: subject } : facts;
 }
 
 export async function planSite(facts: SiteFacts, variation = 0): Promise<{ plan: SitePlan; note?: string }> {
@@ -206,6 +213,7 @@ export async function planSite(facts: SiteFacts, variation = 0): Promise<{ plan:
           content: `You are a senior web designer planning a clean, modern small-business website that will be built as real HTML pages.
 Return ONLY one JSON object, no markdown:
 {"tagline": string, "summary": string (1-2 sentences: what the current site does poorly and what the new site fixes), "changes": [3 short strings],
+ "photoSubject": string (what the owner's request asks to SHOW in the hero/background photo, in 2-6 plain words with the place if known, e.g. "red brick streets downtown"; "" when the request names no photo subject — colors, fonts and layout wishes are not photo subjects),
  "cta": {"label": string (max 24 chars), "slug": page slug},
  "pages": [{"slug": "home"|lowercase-hyphenated, "title": string, "navLabel": string (max 18 chars), "purpose": string, "sections": [{"kind": "hero|services|about|testimonials|gallery|faq|hours|cta|text|team|pricing|contact-info", "heading": string, "brief": string}]}]}
 Rules:
@@ -507,8 +515,9 @@ function resolveImages(sections: Section[], available: string[]): Section[] {
 }
 
 /** Put the owner's requested photo in the hero (as a full-bleed background when they said "background"). */
-function heroForRequest(hero: Section, facts: SiteFacts, design: DesignDirection, haveHero: boolean, scene: string | undefined, fresh: boolean): Section {
-  if (!scene && !fresh) return hero;
+function heroForRequest(hero: Section, facts: SiteFacts, design: DesignDirection, haveHero: boolean, scene: string | undefined, fresh: boolean, ownHero?: string): Section {
+  // No subject named: the hero is one of the site's photos that suits a homepage (never whichever the page writer grabbed).
+  if (!scene && !fresh) return ownHero && !haveHero ? { ...hero, image: ownHero } : hero;
   // Looks with a hero treatment (look-variety.ts) each show the photo their own way; older looks use the full-bleed hero for "background".
   if (haveHero) return { ...hero, image: "hero", type: wantsBackground(facts) && !design.heroStyle ? "hero-photo" : hero.type };
   return scene ? { ...hero, image: undefined } : hero;
@@ -524,27 +533,47 @@ export function stepBudgetMs(): number {
 /** Homepage-only site for one direction. Images and homepage copy are produced in parallel. */
 export async function buildLook(
   id: string,
-  facts: SiteFacts,
+  rawFacts: SiteFacts,
   plan: SitePlan,
   design: DesignDirection,
   index: number,
 ): Promise<{ site: StoredSite; ai: boolean; aiError?: string; aiWarning?: string; generated: number; photos: number }> {
+  // The AI planner's reading of the photo subject (if any) wins over the regex reading of the note.
+  const facts = withPlanSubject(rawFacts, plan);
   const { goodPhotos, heroWorthy, storePhotos, imagesEnabled, generateAndStore, fetchPhoto } = await import("@/lib/preview/images.server");
   const { saveImage } = await import("@/lib/pages.server");
   const budget = stepBudgetMs();
   const stepStart = Date.now();
   const useAi = !isMockMode() && aiAvailable();
-  const photos = await goodPhotos(facts);
+  // The site's own photos, best hero candidates first (alt text / file name / page URL cues), not just the biggest.
+  // Documents, logos and headshots stay off the homepage; so do pipes and utility photos on a town's site.
+  const civic = isCivic(facts);
+  const scored = (await goodPhotos(facts, 8))
+    .map((photo, i) => ({ photo, i, score: heroSuitability(photo.url, facts.imageText?.[photo.url] ?? "", civic) }))
+    .filter((p) => p.score > -3)
+    .sort((a, b) => b.score - a.score || a.i - b.i);
+  const photos = scored.slice(0, 5).map((p) => p.photo);
   const images: Record<string, StoredImage> = await storePhotos(id, photos, facts);
+  // Suitable hero photos are photo-1..n (sorted above); each look leads with a different one when there are several.
+  const suitable = scored.slice(0, 5).map((p, i) => (p.score > 0 && images[`photo-${i + 1}`] ? `photo-${i + 1}` : "")).filter(Boolean);
+  const ownHero = suitable.length ? suitable[photoRank(design, index) % suitable.length] : undefined;
   const pending: ImageInfo[] = [];
   const jobs: Promise<void>[] = [];
   // The owner's words decide the photos first: a named scene ("use the brick streets") or feedback about
   // photos means the hero is generated from that scene, even when the site has a usable photo of its own.
-  const scene = requestedScene(facts);
+  const asked0 = requestedScene(facts);
+  // No subject named and none of the site's photos suits a hero (a town site with only utility shots): show the
+  // town itself — a free-license photo of it, else an AI photo of it.
+  const town = placeOf(facts);
+  const bestOwn = scored[0];
+  const autoScene = !asked0 && !wantsNewPhotos(facts) && town?.city && (!bestOwn || bestOwn.score <= 0 || !heroWorthy(bestOwn.photo)) && civic ? `downtown ${town.city}` : undefined;
+  const scene = asked0 ?? autoScene;
+  // Image prompts read the subject from the facts; an automatic town subject is not the owner's request.
+  const imgFacts: SiteFacts = autoScene ? { ...facts, photoSubject: autoScene } : facts;
   const freshPhotos = wantsNewPhotos(facts);
   const asked = hasOwnerRequest(facts);
   const trace: PreviewTrace = {
-    request: { ...ownerRequests(facts), scene },
+    request: { ...ownerRequests(facts), scene: asked0, autoScene, subjectFrom: asked0 ? (cleanSubject(facts.photoSubject) ? "AI planner" : "note wording") : undefined },
     steps: [
       { step: "plan", ai: !plan.mock, ownerRequest: !plan.mock && asked },
       { step: "look directions", ai: Boolean(design.ai), ownerRequest: Boolean(design.ai) && asked },
@@ -553,8 +582,8 @@ export async function buildLook(
   };
   const kind = facts.industry || "the business";
   const wantImage = (name: string, slot: ImageTrace["slot"], aspect: "16:9" | "4:3", describe: string, before?: () => Promise<boolean>, preset?: ImageTrace) => {
-    const shown = sceneFor(slot, facts, design) || (slot === "hero" ? kind : `${kind} at work`);
-    const prompt = imagePrompt(slot, facts, design);
+    const shown = sceneFor(slot, imgFacts, design) || (slot === "hero" ? kind : `${kind} at work`);
+    const prompt = imagePrompt(slot, imgFacts, design);
     const entry: ImageTrace = preset ?? { name, slot, scene: shown, prompt, status: "not generated (mock mode / images off)" };
     if (!preset) trace.images.push(entry);
     if (!imagesEnabled() && !before) return;
@@ -579,7 +608,7 @@ export async function buildLook(
     // title or file name) -> a free-license web photo of it near the business -> an AI photo of it. Never just
     // the biggest scraped photo.
     const place = placeOf(facts);
-    const entry: ImageTrace = { name: "hero", slot: "hero", scene, prompt: imagePrompt("hero", facts, design), status: "not generated (mock mode / images off)" };
+    const entry: ImageTrace = { name: "hero", slot: "hero", scene, prompt: imagePrompt("hero", imgFacts, design), status: "not generated (mock mode / images off)" };
     trace.images.push(entry);
     // Up to three real photos of the scene (the site's own match first, then web photos); each look takes a
     // different one. With fewer photos than looks, a later look gets an AI photo (when images are on) or
@@ -597,7 +626,7 @@ export async function buildLook(
       }
       if (real.length < 3 && webPhotosEnabled()) {
         const web = await findWebPhotos(scene, place, 8_000, 3 - real.length).catch(() => []);
-        entry.search = `web search “${webQuery(scene, place)}” (Openverse, Wikimedia Commons; CC0 / public domain / CC BY / CC BY-SA): ${web.length ? `${web.length} matching photo${web.length > 1 ? "s" : ""}` : "no matching photo"}`;
+        entry.search = `web search ${webQueries(scene, place).map((x) => `“${x.q}”`).join(" / ")} (Openverse, Wikimedia Commons; CC0 / public domain / CC BY / CC BY-SA): ${web.length ? `${web.length} matching photo${web.length > 1 ? "s" : ""}` : "no matching photo"}`;
         for (const w of web) real.push({ photo: w.photo, source: "web", alt: w.credit.title, credit: w.credit });
       }
       if (!real.length) return false;
@@ -640,7 +669,7 @@ export async function buildLook(
   const sections = resolveImages(result.sections, available);
   // The requested scene goes in the hero even if the page writer picked one of the site's own photos, and
   // "as background" means the full-bleed photo hero. With no photo of the scene, no unrelated photo is used.
-  if (sections[0]?.type.startsWith("hero-")) sections[0] = heroForRequest(sections[0], facts, design, Boolean(images.hero), scene, freshPhotos);
+  if (sections[0]?.type.startsWith("hero-")) sections[0] = heroForRequest(sections[0], facts, design, Boolean(images.hero), scene, freshPhotos, ownHero);
   // Each look: its own hero treatment, section order and section variants.
   sections.splice(0, sections.length, ...arrangeSections(sections, design, available, facts.services));
   trace.layout = lookSignature(design, sections, images.hero?.credit?.sourceUrl ?? sections[0]?.image);
@@ -747,7 +776,7 @@ export async function finishSite(site: StoredSite): Promise<{ site: StoredSite; 
     if (page.slug === "home") {
       const home = resolveImages(polished.sections, available);
       // Keep the owner's requested scene in the hero after the critique pass.
-      if (home[0]?.type.startsWith("hero-")) home[0] = heroForRequest(home[0], facts, design, Boolean(images.hero), trace.request.scene, wantsNewPhotos(facts));
+      if (home[0]?.type.startsWith("hero-")) home[0] = heroForRequest(home[0], facts, design, Boolean(images.hero), trace.request.scene ?? trace.request.autoScene, wantsNewPhotos(facts));
       const arranged = arrangeSections(home, design, available, facts.services);
       trace.layout = lookSignature(design, arranged, images.hero?.credit?.sourceUrl ?? arranged[0]?.image);
       return { ...page, sections: arranged, pending: false };

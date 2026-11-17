@@ -177,6 +177,9 @@ function plan(facts) {
     changes: ["One clear call to action on every page", "Services grouped so visitors find theirs in seconds", nav.length ? "Navigation trimmed to the pages people actually use" : "A simple five-page structure"],
     cta: { label: facts.phone ? "Book a visit" : "Get in touch", slug: "contact" },
     pages,
+    // Like the real planner: the photo subject it read from the note. FAKE_PHOTO_SUBJECT stands in for that reading
+    // (to test the planner path with notes the wording rules can't read); otherwise "".
+    photoSubject: process.env.FAKE_PHOTO_SUBJECT ?? "",
   };
 }
 
