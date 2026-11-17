@@ -94,6 +94,10 @@ export const previewDirections = createServerFn({ method: "POST" })
         return p;
       });
       const looksP = directionsFor(data.facts, data.variation, { seed, previous });
+      // The from-scratch look's creative brief (Grok), alongside the template directions.
+      const { creativeBrief, customLookEnabled, asCustomDirection } = await import("./preview/custom-design.server");
+      const { PRESETS } = await import("./preview/design");
+      const briefP = customLookEnabled() ? creativeBrief(data.facts, PRESETS.editorial.palette, started + 35_000) : undefined;
       // Proactive photo search (Serper) starts as soon as the plan's imageQueries exist, alongside the looks.
       // It also waits for the looks' archetypes, so each look's photo can suit its mood (dark premium: night, …).
       const archetypesP = looksP.then((l) => l.directions.map((d) => d.archetype)).catch(() => undefined);
@@ -102,7 +106,14 @@ export const previewDirections = createServerFn({ method: "POST" })
       // Give a running search a few more seconds to finish and store its ranking (each look can redo it if not).
       await Promise.race([prefetchP, new Promise((r) => setTimeout(r, Math.max(0, Math.min(12_000, started + stepBudgetMs() - 10_000 - Date.now()))))]);
       const note = [planned.note, looks.note].filter(Boolean).join(" ") || undefined;
-      return { ok: true, plan: planned.plan, directions: looks.directions, note };
+      let directions = looks.directions;
+      if (briefP && directions.length >= 3) {
+        // Bob: "Let's just do one design for now until we get it right and then expand." The third look is
+        // designed from scratch; the other two stay template looks for comparison.
+        const brief = await briefP;
+        directions = directions.map((d, i) => (i === 2 ? asCustomDirection(d, brief) : d));
+      }
+      return { ok: true, plan: planned.plan, directions, note };
     } catch (error) {
       return { ok: false, error: error instanceof Error ? error.message : "The looks could not be planned." };
     }
@@ -164,6 +175,49 @@ export const previewLook = createServerFn({ method: "POST" })
   });
 
 /**
+ * Step 3b — the from-scratch look: after its template build (images, sub-pages, fallback homepage), Grok designs
+ * the homepage as freeform HTML/CSS (validated, one repair pass). On failure the template homepage stays and the
+ * card says why. Its own request, so it has its own time budget.
+ */
+export const previewCustom = createServerFn({ method: "POST" })
+  .validator((input: { id?: string }) => {
+    const id = typeof input?.id === "string" ? input.id.trim() : "";
+    if (!/^[a-f0-9]{16}$/.test(id)) throw new Error("That look was not found. Run the site again.");
+    return { id };
+  })
+  .handler(async ({ data }): Promise<PreviewStepResult<{ custom: NonNullable<LookInfo["custom"]>; name: string; layout?: string }>> => {
+    if (await limited("custom", 30)) return { ok: false, error: "Too many previews from this network in the last hour. Try again shortly." };
+    try {
+      const { readSite, saveSite } = await import("./pages.server");
+      const site = await readSite(data.id);
+      if (!site || site.version !== 3 || !site.design?.custom) return { ok: false, error: "That look was not found on this server. Run the site again." };
+      const { designCustom } = await import("./preview/custom-design.server");
+      const { stepBudgetMs } = await import("./preview/builder.server");
+      const { lookName } = await import("./preview/archetype-label");
+      const { layoutLine } = await import("./preview/look-variety");
+      const { customLayoutLine } = await import("./preview/custom-design");
+      const brief = site.design.custom.brief;
+      const made = await designCustom(site, Date.now() + stepBudgetMs());
+      if (made.design) {
+        site.custom = made.design;
+        await saveSite(site);
+        return { ok: true, name: site.design.name, layout: customLayoutLine(brief), custom: { concept: brief.concept, status: made.design.status, stripped: made.design.stripped.slice(0, 8), repaired: made.design.repaired?.slice(0, 6) } };
+      }
+      // Fallback: the template homepage, under its style's name (one name per look).
+      const name = lookName(site.design.archetype);
+      const reason = made.reason ?? "failed";
+      const shortReason = reason.length > 140 ? `${reason.slice(0, 137).replace(/\s+\S*$/, "")}…` : reason;
+      site.design = { ...site.design, name, custom: { ...site.design.custom, failed: made.reason ?? "failed" } };
+      await saveSite(site);
+      console.info(`[design] fallback: look ${(site.lookIndex ?? 2) + 1} shows its template homepage as “${name}” (${made.reason})`);
+      return { ok: true, name, layout: layoutLine(site.design, site.trace?.layout?.hero), custom: { concept: brief.concept, status: "fallback", note: `The from-scratch design (“${brief.concept}”) didn't pass our checks (${shortReason}), so this card shows the ${name} template look.` } };
+    } catch (error) {
+      console.error("[design] custom step failed", error instanceof Error ? error.message : error);
+      return { ok: false, error: error instanceof Error ? error.message : "The custom design could not be built." };
+    }
+  });
+
+/**
  * "Not quite right?" — first decide whether the feedback names one of the looks on screen. If it does
  * ("The Night Brick is best just a little too dark."), that look is edited (same name, layout, fonts, photo and
  * copy; only the requested change) into three close variations. If it names no look, the browser makes three new
@@ -209,6 +263,7 @@ export const previewRefine = createServerFn({ method: "POST" })
       const { publicBase } = await import("./publish.server");
       const { photosLine } = await import("./preview/image-prompts");
       const { layoutLine } = await import("./preview/look-variety");
+      const { customLayoutLine } = await import("./preview/custom-design");
       const looks: LookInfo[] = edits.map((e) => {
         const site = e.site;
         const design = site.design!;
@@ -228,7 +283,8 @@ export const previewRefine = createServerFn({ method: "POST" })
           mock: site.mock,
           request: data.text,
           photos: photosLine(site.trace, photos),
-          layout: layoutLine(design, site.trace?.layout?.hero),
+          layout: site.custom && !design.custom?.failed ? customLayoutLine(site.custom.brief) : layoutLine(design, site.trace?.layout?.hero),
+          custom: site.custom && !design.custom?.failed ? { concept: site.custom.brief.concept, status: site.custom.status } : undefined,
           trace: site.trace,
           edit: { variant: e.variant, changed: e.changed, from: target.id, how: edit.how ?? "" },
         };

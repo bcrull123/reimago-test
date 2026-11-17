@@ -1077,7 +1077,11 @@ export async function finishSite(site: StoredSite): Promise<{ site: StoredSite; 
     }),
   );
   const homeCtx = normalizeContext(facts, plan, "home", Object.keys(images).filter((n) => !n.startsWith("logo")));
-  const polishJob = polishHome(site, homeCtx, budget - 5_000);
+  // The from-scratch homepage is Grok's own design (already validated): no critique pass on its template fallback.
+  const polishJob =
+    site.custom && !site.design?.custom?.failed
+      ? Promise.resolve({ sections: site.pages.find((p) => p.slug === "home")?.sections ?? [], polish: { method: "skipped" as const, notes: [], reason: "Designed from scratch (custom look)." } })
+      : polishHome(site, homeCtx, budget - 5_000);
   const [built, polished] = await Promise.all([pagesJob, polishJob, ...jobs]);
   const available = Object.keys(images);
   const pages = site.pages.map((page) => {

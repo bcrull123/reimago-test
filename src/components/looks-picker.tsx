@@ -205,6 +205,13 @@ export function LooksPicker({
                     {look.layout}
                   </p>
                 ) : null}
+                {look.custom ? (
+                  <p className={`text-[11px] leading-snug ${look.custom.status === "fallback" ? "text-amber-800" : "text-muted"}`} data-look-custom={look.custom.status}>
+                    {look.custom.status === "fallback"
+                      ? look.custom.note
+                      : `Designed from scratch by Grok: “${look.custom.concept}”${look.custom.status === "repaired" ? " (fixed after our checks)" : ""}.`}
+                  </p>
+                ) : null}
                 {look.trace && (look.trace.request.note || look.trace.request.feedback.length) ? (
                   <details className="text-[11px] leading-snug text-muted" data-look-trace>
                     <summary className="cursor-pointer select-none">How your request was used</summary>

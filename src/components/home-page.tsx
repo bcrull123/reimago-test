@@ -4,7 +4,7 @@ import { ArrowRight } from "lucide-react";
 import { SiteShell, Wordmark } from "@/components/site-shell";
 import { CreateSiteWizard, type CreateBrief, type CreateFiles } from "@/components/create-site-wizard";
 import { checkDomainName, handOffToCursor } from "@/lib/reimagine.functions";
-import { cursorStatus, previewDirections, previewFinish, previewFromBrief, previewLook, previewRead, previewRefine, previewRetryAi, savePreviewPicture } from "@/lib/preview.functions";
+import { cursorStatus, previewCustom, previewDirections, previewFinish, previewFromBrief, previewLook, previewRead, previewRefine, previewRetryAi, savePreviewPicture } from "@/lib/preview.functions";
 import { capturePreviewPicture, pictureFileName } from "@/lib/preview-picture";
 import { notifyReplyWebhook } from "@/lib/reply-webhook.functions";
 import { LivePreview } from "@/components/live-preview";
@@ -310,9 +310,14 @@ export function HomePage() {
     if (!planned.ok) throw new Error(planned.error);
     setStage("paint");
     const settled = await Promise.allSettled(
-      planned.directions.map((direction, index) =>
-        previewLook({ data: { facts: nextFacts, plan: planned.plan, direction, index, variation: nextVariation } }),
-      ),
+      planned.directions.map(async (direction, index) => {
+        const built = await previewLook({ data: { facts: nextFacts, plan: planned.plan, direction, index, variation: nextVariation } });
+        // The from-scratch look: its template build first (images, sub-pages, the fallback), then Grok's own design.
+        if (!built.ok || !direction.custom) return built;
+        const custom = await previewCustom({ data: { id: built.look.id } }).catch(() => undefined);
+        if (!custom?.ok) return { ...built, look: { ...built.look, custom: { concept: direction.custom.brief.concept, status: "fallback" as const, note: "The from-scratch design could not be built this time, so this card shows a template look." } } };
+        return { ...built, look: { ...built.look, name: custom.name, layout: custom.layout ?? built.look.layout, custom: custom.custom, rev: (built.look.rev ?? 0) + 1 } };
+      }),
     );
     const made: LookInfo[] = [];
     const notes = [planned.note ?? ""];
