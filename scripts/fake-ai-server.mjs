@@ -14,6 +14,7 @@
  * review) so the validators are exercised.
  */
 import http from "node:http";
+import { fakeBrief, fakeDesign, fakeEdit } from "./fake-custom-design.mjs";
 
 const PORT = Number(process.env.PORT ?? 9999);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -429,7 +430,25 @@ http
         }
         const user = textOf(userContent);
         let out;
-        if (system.includes("website wizard")) out = { patch: { what: "Dog grooming salon", industry: "Other" }, choices: ["Prairie Paws", "Happy Tails OKC", "Bark & Bath"] };
+        // The from-scratch look (custom-design.ts): brief, design, repair, edit. FAKE_CUSTOM=broken|broken-always|slow.
+        if (user.includes("Write the CREATIVE BRIEF")) {
+          await sleep(1500);
+          out = fakeBrief(user);
+          log("custom brief", out.concept);
+        } else if (system.includes("EDIT this from-scratch homepage")) {
+          await sleep(2000);
+          out = fakeEdit(user);
+          log("custom edit", JSON.stringify(out.palette));
+        } else if (system.includes("REPAIR this from-scratch homepage")) {
+          await sleep(3000);
+          out = fakeDesign(system, user, process.env.FAKE_CUSTOM === "broken-always" ? "broken" : "ok");
+          log("custom repair", process.env.FAKE_CUSTOM === "broken-always" ? "still broken" : "fixed", out.html.length);
+        } else if (system.includes("Design this homepage FROM SCRATCH")) {
+          if (process.env.FAKE_CUSTOM === "slow") await sleep(180_000);
+          await sleep(5000);
+          out = fakeDesign(system, user, /^broken/.test(process.env.FAKE_CUSTOM ?? "") ? "broken" : "ok");
+          log("custom design", process.env.FAKE_CUSTOM ?? "ok", out.html.length);
+        } else if (system.includes("website wizard")) out = { patch: { what: "Dog grooming salon", industry: "Other" }, choices: ["Prairie Paws", "Happy Tails OKC", "Bark & Bath"] };
         else if (system.includes("Propose THREE bold")) {
           await sleep(2500);
           out = directions(system, firstJson(user));
