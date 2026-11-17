@@ -123,7 +123,10 @@ export const previewLook = createServerFn({ method: "POST" })
         aiWarning,
       };
       const { latestRequest, requestHints } = await import("./preview/owner-request");
+      const { photosLine } = await import("./preview/image-prompts");
       look.request = latestRequest(data.facts) || undefined;
+      look.photos = photosLine(site.trace, photos);
+      look.trace = site.trace;
       if (site.mock) {
         const applied = requestHints(data.facts).applied;
         if (applied.length) look.applied = applied;

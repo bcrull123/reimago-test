@@ -334,7 +334,8 @@ function headingsOf(html: string): string[] {
   ].slice(0, 20);
 }
 
-function imagesOf(html: string, base: string): string[] {
+/** Alt/title text of scraped images by URL, so a photo the owner asks for ("the brick streets") can be found. */
+function imagesOf(html: string, base: string, labels?: Map<string, string>): string[] {
   const out: string[] = [];
   const og = meta(html, "og:image");
   if (og) out.push(httpUrl(og, base));
@@ -356,6 +357,8 @@ function imagesOf(html: string, base: string): string[] {
     if ((width && width < 160) || (height && height < 120)) continue;
     const url = httpUrl(src, base);
     if (url) out.push(url);
+    const label = cleanText(`${attr(raw, "alt")} ${attr(raw, "title")}`).slice(0, 160);
+    if (url && label && labels && !labels.has(url)) labels.set(url, label);
   }
   // Photos (jpg/webp) first; PNGs are often partner/brand logos.
   return out
@@ -544,8 +547,9 @@ export async function scrapeSite(rawUrl: string, notes: string): Promise<SiteFac
     .filter((t, i, list) => list.findIndex((x) => x.quote === t.quote) === i)
     .slice(0, 4);
 
+  const imageLabels = new Map<string, string>();
   const images = clipList(
-    [...ld.flatMap((f) => f.images.map((i) => httpUrl(i, home.url))), ...docs.flatMap((doc) => imagesOf(doc.html, doc.url))].filter(
+    [...ld.flatMap((f) => f.images.map((i) => httpUrl(i, home.url))), ...docs.flatMap((doc) => imagesOf(doc.html, doc.url, imageLabels))].filter(
       (url) => url.startsWith("https://") && url !== logo,
     ),
     12,
@@ -595,6 +599,7 @@ export async function scrapeSite(rawUrl: string, notes: string): Promise<SiteFac
     about: aboutText,
     testimonials,
     images,
+    imageText: Object.fromEntries(images.filter((u) => imageLabels.has(u)).map((u) => [u, imageLabels.get(u)!])),
     nav: nav.filter((n) => sameSite(hostOf(n.url), base.hostname)).slice(0, 8),
     pages,
     social,

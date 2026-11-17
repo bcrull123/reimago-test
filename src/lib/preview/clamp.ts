@@ -35,6 +35,12 @@ export function clampFacts(input: unknown): SiteFacts {
       .filter((t) => t.quote)
       .slice(0, 4),
     images: (Array.isArray(f.images) ? f.images : []).map(https).filter(Boolean).slice(0, 12),
+    imageText: Object.fromEntries(
+      Object.entries(f.imageText && typeof f.imageText === "object" ? (f.imageText as Record<string, unknown>) : {})
+        .map(([u, t]) => [https(u), str(t, 160)] as const)
+        .filter(([u, t]) => u && t)
+        .slice(0, 12),
+    ),
     nav: (Array.isArray(f.nav) ? f.nav : [])
       .map((n) => ({ label: str((n as Record<string, unknown>)?.label, 40), url: str((n as Record<string, unknown>)?.url, 300) }))
       .filter((n) => n.label)

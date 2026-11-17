@@ -3,7 +3,7 @@
  * the normalizer that turns an AI concept into something the renderer can trust.
  * Shared by server code and node tests (relative imports only).
  */
-import { requestHints } from "./owner-request.ts";
+import { requestHints, requestedScene } from "./owner-request.ts";
 import { ARCHETYPES, MOTIFS, type Archetype, type DesignDirection, type Motif, type SiteFacts, type SitePalette } from "./types.ts";
 
 /** Curated Google Fonts with the exact axis spec that the css2 API accepts (all verified). */
@@ -282,6 +282,8 @@ export function normalizeDirection(raw: unknown, index: number, facts: Pick<Site
     fonts: { heading, body },
     imagery: clip(r.imagery, 400) || defaultImagery(archetype),
     heroSubject: clip(r.heroSubject ?? r.hero_subject, 300),
+    featureScene: clip(r.featureScene ?? r.feature_scene, 300) || undefined,
+    ai: r.ai === true ? true : undefined,
     motifs: unique.length ? unique : preset.motifs,
     radius: oneOf(r.radius, ["sharp", "soft", "round"] as const, preset.radius),
     buttons: oneOf(r.buttons, ["pill", "square", "outline"] as const, preset.buttons),
@@ -355,6 +357,7 @@ export function mockDirections(facts: SiteFacts, variation: number): DesignDirec
   // The owner's request (note + feedback rounds) shapes the mock looks visibly: asked-for tones come first,
   // asked-for colors lead every palette, and "dark"/"light" sets the backgrounds.
   const hints = requestHints(facts);
+  const scene = requestedScene(facts);
   const base = archetypesFor(facts, variation);
   const pool = [...base, ...ARCHETYPES.filter((a) => !base.includes(a))].filter((a) => !(hints.scheme === "light" && a === "dark-premium"));
   const ordered = [...new Set([...hints.archetypes, ...pool])].slice(0, 3);
@@ -370,7 +373,7 @@ export function mockDirections(facts: SiteFacts, variation: number): DesignDirec
         archetype,
         name: LOOK_NAMES[archetype][(hashString(facts.host) + variation) % 3],
         mood: LOOK_MOODS[archetype],
-        heroSubject: facts.services[0] ? `${facts.services[0]} for ${facts.name}` : `${facts.industry || "the business"} at work`,
+        heroSubject: scene || (facts.services[0] ? `${facts.services[0]} for ${facts.name}` : `${facts.industry || "the business"} at work`),
         palette,
         fonts: preset.fonts,
       },
