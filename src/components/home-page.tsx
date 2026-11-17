@@ -4,7 +4,7 @@ import { ArrowRight } from "lucide-react";
 import { SiteShell, Wordmark } from "@/components/site-shell";
 import { CreateSiteWizard, type CreateBrief, type CreateFiles } from "@/components/create-site-wizard";
 import { checkDomainName, handOffToCursor } from "@/lib/reimagine.functions";
-import { cursorStatus, previewDirections, previewFinish, previewFromBrief, previewLook, previewRead, previewRetryAi, savePreviewPicture } from "@/lib/preview.functions";
+import { cursorStatus, previewDirections, previewFinish, previewFromBrief, previewLook, previewRead, previewRefine, previewRetryAi, savePreviewPicture } from "@/lib/preview.functions";
 import { capturePreviewPicture, pictureFileName } from "@/lib/preview-picture";
 import { notifyReplyWebhook } from "@/lib/reply-webhook.functions";
 import { LivePreview } from "@/components/live-preview";
@@ -392,7 +392,7 @@ export function HomePage() {
       setStage("send");
       const previewUrl = built?.preview?.url ?? look.url;
       const previewPages = built?.preview?.pages.map((page) => `${page.title}: ${page.url}`) ?? [`${look.name} · Home: ${look.url}`];
-      const chosenLookName = `${look.name} (${ARCHETYPE_LABEL[look.archetype] ?? look.archetype})`;
+      const chosenLookName = `${look.name}${look.edit ? `, ${look.edit.variant}` : ""} (${ARCHETYPE_LABEL[look.archetype] ?? look.archetype})`;
       // Email Bot's instant reply: the server posts to its webhook (key stays server-side). Not awaited — the
       // visitor's "check your email" never waits on it; retries reuse the same submission id.
       void notifyReplyWebhook({
@@ -601,6 +601,20 @@ export function HomePage() {
     setRefining(true);
     setRetrying(true);
     try {
+      // Feedback that names a look ("The Night Brick is best, just a little too dark") edits THAT look:
+      // same name, layout, photo and copy, only the requested change, as three close variations.
+      const routed = await previewRefine({ data: { text: wish, ids: (looks ?? []).map((l) => l.id), focused: focusedLook, feedback } }).catch(() => undefined);
+      if (routed?.ok && routed.mode === "none") {
+        setError(routed.note);
+        return;
+      }
+      if (routed?.ok && routed.mode === "edit") {
+        setFacts(nextFacts);
+        setFeedback(nextFeedback);
+        showLooks(routed.looks, "");
+        window.setTimeout(() => document.querySelector("[data-choose-banner]")?.scrollIntoView({ behavior: "smooth", block: "start" }), 50);
+        return;
+      }
       const made = await makeLooks(nextFacts, nextVariation);
       setFacts(nextFacts);
       setVariation(nextVariation);

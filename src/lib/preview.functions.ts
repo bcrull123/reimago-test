@@ -76,8 +76,15 @@ export const previewDirections = createServerFn({ method: "POST" })
   .handler(async ({ data }): Promise<PreviewStepResult<{ plan: SitePlan; directions: DesignDirection[]; note?: string }>> => {
     if (await limited("dir", 20)) return { ok: false, error: "Too many previews from this network in the last hour. Try again shortly." };
     try {
-      const { planSite, directionsFor } = await import("./preview/builder.server");
-      const [planned, looks] = await Promise.all([planSite(data.facts, data.variation), directionsFor(data.facts, data.variation)]);
+      const { planSite, directionsFor, prefetchForPlan, stepBudgetMs } = await import("./preview/builder.server");
+      const started = Date.now();
+      const planP = planSite(data.facts, data.variation);
+      const looksP = directionsFor(data.facts, data.variation);
+      // Proactive photo search (Serper) starts as soon as the plan's imageQueries exist, alongside the looks.
+      const prefetchP = planP.then((p) => prefetchForPlan(data.facts, p.plan, started + Math.max(20_000, stepBudgetMs() - 15_000)));
+      const [planned, looks] = await Promise.all([planP, looksP]);
+      // Give a running search a few more seconds to finish and store its ranking (each look can redo it if not).
+      await Promise.race([prefetchP, new Promise((r) => setTimeout(r, Math.max(0, Math.min(12_000, started + stepBudgetMs() - 10_000 - Date.now()))))]);
       const note = [planned.note, looks.note].filter(Boolean).join(" ") || undefined;
       return { ok: true, plan: planned.plan, directions: looks.directions, note };
     } catch (error) {
@@ -137,6 +144,77 @@ export const previewLook = createServerFn({ method: "POST" })
     } catch (error) {
       console.error("[preview] look failed", error instanceof Error ? error.message : error);
       return { ok: false, error: error instanceof Error ? error.message : "This look could not be built." };
+    }
+  });
+
+/**
+ * "Not quite right?" — first decide whether the feedback names one of the looks on screen. If it does
+ * ("The Night Brick is best just a little too dark."), that look is edited (same name, layout, fonts, photo and
+ * copy; only the requested change) into three close variations. If it names no look, the browser makes three new
+ * looks as before (mode "new"). Never sends the form.
+ */
+export const previewRefine = createServerFn({ method: "POST" })
+  .validator((input: { text?: string; ids?: unknown; focused?: string; feedback?: unknown }) => {
+    const text = typeof input?.text === "string" ? input.text.replace(/\s+/g, " ").trim().slice(0, 400) : "";
+    if (!text) throw new Error("Tell us what to change.");
+    const ids = (Array.isArray(input?.ids) ? input.ids : []).map(String).filter((id) => /^[a-f0-9]{16}$/.test(id)).slice(0, 3);
+    const focused = typeof input?.focused === "string" && /^[a-f0-9]{16}$/.test(input.focused) ? input.focused : undefined;
+    const feedback = (Array.isArray(input?.feedback) ? input.feedback : []).map((f) => String(f).replace(/\s+/g, " ").trim().slice(0, 400)).filter(Boolean).slice(-5);
+    return { text, ids, focused, feedback };
+  })
+  .handler(async ({ data }): Promise<PreviewStepResult<{ mode: "new" } | { mode: "none"; note: string } | { mode: "edit"; looks: LookInfo[]; target: string; how: string; note?: string }>> => {
+    if (await limited("refine", 40)) return { ok: false, error: "Too many changes from this network in the last hour. Try again shortly." };
+    try {
+      const { readSite } = await import("./pages.server");
+      const sites = (await Promise.all(data.ids.map((id) => readSite(id)))).filter((s): s is NonNullable<typeof s> => Boolean(s?.design && s.version === 3));
+      if (!sites.length) return { ok: true, mode: "new" };
+      const { lookRefs, planEdit, buildEdits } = await import("./preview/look-edit.server");
+      const { aiAvailable, isMockMode } = await import("./ai-provider.server");
+      const refs = lookRefs(sites);
+      const edit = await planEdit(data.text, refs, data.focused, !isMockMode() && aiAvailable());
+      console.info(`[refine] "${data.text.slice(0, 120)}" -> ${edit.targetId ? `edit ${refs.find((r) => r.id === edit.targetId)?.name} (${edit.how})` : "no look named: 3 new looks"} · adjustments ${JSON.stringify(edit.adjustments)}${edit.copy ? " · copy" : ""}${edit.photo ? ` · photo "${edit.photo}"` : ""} · read by ${edit.from}`);
+      if (!edit.targetId) return { ok: true, mode: "new" };
+      const target = sites.find((s) => s.id === edit.targetId)!;
+      const name = refs.find((r) => r.id === edit.targetId)!.name;
+      if (!edit.adjustments.length && !edit.copy && !edit.photo) {
+        return {
+          ok: true,
+          mode: "none",
+          note: `We read that as about “${name}”, but couldn't tell what to change. Try e.g. “${name}, a little lighter”, “…more contrast”, “…bigger text”, “…less busy”, “…warmer”, or name a different photo. This didn't use up a round.`,
+        };
+      }
+      const feedback = [...data.feedback, data.text].slice(-5);
+      const edits = await buildEdits(target, edit, feedback);
+      const { publicBase } = await import("./publish.server");
+      const { photosLine } = await import("./preview/image-prompts");
+      const { layoutLine } = await import("./preview/look-variety");
+      const looks: LookInfo[] = edits.map((e, i) => {
+        const site = e.site;
+        const design = site.design!;
+        const images = Object.values(site.images ?? {});
+        const photos = images.filter((img) => img.name.startsWith("photo-")).length;
+        return {
+          id: site.id,
+          url: `${publicBase()}/made/${site.id}`,
+          index: i,
+          name,
+          mood: design.mood,
+          archetype: design.archetype,
+          palette: site.palette,
+          fonts: design.fonts,
+          images: { generated: images.filter((img) => img.source === "generated").length, photos },
+          mock: site.mock,
+          request: data.text,
+          photos: photosLine(site.trace, photos),
+          layout: layoutLine(design, site.trace?.layout?.hero),
+          trace: site.trace,
+          edit: { variant: e.variant, changed: e.changed, from: target.id, how: edit.how ?? "" },
+        };
+      });
+      return { ok: true, mode: "edit", looks, target: name, how: edit.how ?? "" };
+    } catch (error) {
+      console.error("[refine] failed", error instanceof Error ? error.message : error);
+      return { ok: false, error: error instanceof Error ? error.message : "That change could not be made." };
     }
   });
 

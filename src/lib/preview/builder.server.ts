@@ -16,9 +16,10 @@ import { ARCHETYPES, type DesignDirection, type PlanPage, type PlanSection, type
 import { PRESETS, archetypesFor, mockDirections, normalizeDirection, HEADING_FONTS as DISPLAY_FONTS, BODY_FONTS as TEXT_FONTS } from "@/lib/preview/design";
 import { SECTION_GUIDE, checkSections, composeImages, composeMockPage, corpusFor, type NormalizeContext } from "@/lib/preview/sections";
 import { redact } from "@/lib/ai-json";
-import { cleanSubject, hasOwnerRequest, ownerRequestRule, ownerRequests, requestedPhoto, requestedScene, wantsBackground, wantsNewPhotos } from "@/lib/preview/owner-request";
+import { cleanSubject, hasOwnerRequest, plannedFromOwner, ownerRequestRule, ownerRequests, requestedPhoto, requestedScene, wantsBackground, wantsNewPhotos } from "@/lib/preview/owner-request";
 import { heroSuitability, matchScraped, placeOf, webQueries, type PhotoCredit } from "@/lib/preview/web-photo";
 import { findGooglePhotos, photoSearchEnabled } from "@/lib/preview/google-photo.server";
+import { cleanImageQueries, defaultImageQueries } from "@/lib/preview/photo-queries";
 import type { TemporaryPhoto } from "@/lib/preview/google-photo";
 import { arrangeSections, diversifyDirections, lookSignature, photoRank } from "@/lib/preview/look-variety";
 import { findWebPhotos, webPhotosEnabled } from "@/lib/preview/web-photo.server";
@@ -134,6 +135,7 @@ function mockPlan(facts: SiteFacts, variation: number): SitePlan {
     },
     cta: { label: facts.phone ? "Call or message us" : "Get in touch", slug: "contact" },
     pages,
+    imageQueries: defaultImageQueries(facts),
     mock: true,
   };
 }
@@ -189,14 +191,27 @@ export function normalizePlan(raw: unknown, facts: SiteFacts, variation: number)
     pages: trimmed,
     photoSubject: cleanSubject(r.photoSubject ?? r.photo_subject) || undefined,
     photoIntent: ((v) => (v === "keep" || v === "find" || v === "none" ? v : undefined))(String(r.photoIntent ?? r.photo_intent ?? "").toLowerCase().trim()),
+    imageQueries: ((q) => (q.length ? q : fallback.imageQueries))(cleanImageQueries(r.imageQueries ?? r.image_queries)),
   };
 }
 
 /** The planner's reading of the photo subject travels with the plan; looks read it through the facts. */
 export function withPlanSubject(facts: SiteFacts, plan: SitePlan): SiteFacts {
   const subject = cleanSubject(plan.photoSubject);
-  if (!subject || facts.photoSubject) return facts;
+  if (!subject || facts.photoSubject || !plannedFromOwner(facts, subject)) return facts;
   return { ...facts, photoSubject: subject, photoIntent: plan.photoIntent === "keep" ? "keep" : "find" };
+}
+
+/**
+ * Round 1 needs no note: when photo search is configured and the owner named no photo subject (and asked to keep
+ * nothing), the planner's imageQueries are searched right after the plan, while the looks are being designed.
+ * Each look build then reads the stored ranking (plannedPhotos). Returns undefined when it doesn't apply.
+ */
+export async function prefetchForPlan(rawFacts: SiteFacts, plan: SitePlan, deadline: number) {
+  const facts = withPlanSubject(rawFacts, plan);
+  if (!photoSearchEnabled() || requestedPhoto(facts).intent !== "none" || !plan.imageQueries?.length) return undefined;
+  const { prefetchPlannedPhotos } = await import("@/lib/preview/google-photo.server");
+  return prefetchPlannedPhotos(facts, plan.imageQueries, !isMockMode() && aiAvailable(), deadline).catch(() => undefined);
 }
 
 export async function planSite(facts: SiteFacts, variation = 0): Promise<{ plan: SitePlan; note?: string }> {
@@ -219,6 +234,7 @@ Return ONLY one JSON object, no markdown:
 {"tagline": string, "summary": string (1-2 sentences: what the current site does poorly and what the new site fixes), "changes": [3 short strings],
  "photoSubject": string (what the owner's request asks to SHOW in the hero/background photo, in 2-6 plain words with the place if known, e.g. "red brick streets downtown"; "" when the request names no photo subject — colors, fonts and layout wishes are not photo subjects),
  "photoIntent": "keep" | "find" | "none" ("keep" when the owner wants to keep or reuse a picture that is already on their site — "keep the rocket", "don't lose our mascot", "use the same truck photo", "our storefront"; "find" when they want a photo of something new to be found or made — "a picture of the red bricks"; "none" when photoSubject is ""),
+ "imageQueries": [2-3 strings] (Google Images searches for real photos that would make a strong website hero for THIS business and place, even when the owner asked for nothing: concrete, photographable, with the town and state when known, e.g. a small-town city site -> "downtown Pauls Valley Oklahoma brick streets", "Pauls Valley Oklahoma landmark"; a plumber -> "plumber truck Oklahoma City", "plumber at work". No logos, no people's names, no search operators),
  "cta": {"label": string (max 24 chars), "slug": page slug},
  "pages": [{"slug": "home"|lowercase-hyphenated, "title": string, "navLabel": string (max 18 chars), "purpose": string, "sections": [{"kind": "hero|services|about|testimonials|gallery|faq|hours|cta|text|team|pricing|contact-info", "heading": string, "brief": string}]}]}
 Rules:
@@ -519,14 +535,43 @@ function resolveImages(sections: Section[], available: string[]): Section[] {
   }));
 }
 
+/**
+ * One server log line per look saying where its hero photo came from and why, so the owner can confirm on the
+ * host's logs that Google Images (Serper) is working: e.g.
+ *   [photo] look 2 "Night Brick": hero = Google Images (commons.wikimedia.org) · query "downtown Pauls Valley Oklahoma" · Google Images “…”: 18 results, 5 usable
+ */
+function logHeroChoice(index: number, look: string, heroImage: string | undefined, images: Record<string, StoredImage>, trace: PreviewTrace, searchOn: boolean) {
+  const hero = heroImage ? images[heroImage] : undefined;
+  const entry = trace.images.find((i) => i.slot === "hero" && i.status !== "not found on your site") ?? trace.images.find((i) => i.slot === "hero");
+  const source = !hero
+    ? "none (no photo)"
+    : hero.kept
+      ? "kept from your site"
+      : hero.temporary
+        ? `Google Images (${hero.temporary.domain}) · query "${hero.temporary.query}" · picked by ${hero.temporary.pickedBy}`
+        : hero.source === "web"
+          ? `${hero.credit?.provider ?? "web"} (free license)`
+          : hero.source === "generated"
+            ? "AI image"
+            : `your site (${heroImage})`;
+  const why = [
+    entry?.status ? `status: ${entry.status}` : "",
+    entry?.search ?? "",
+    searchOn ? "" : "Google Images off on this server (no SERPER_API_KEY or photo-search proxy)",
+  ]
+    .filter(Boolean)
+    .join(" · ");
+  console.info(`[photo] look ${index + 1} "${look}": hero = ${source}${why ? ` · ${why.slice(0, 600)}` : ""}`);
+}
+
 /** The credit shape for a temporary Google Images photo (shown as "preview only" on the card and footer). */
-function googleCredit(t: TemporaryPhoto): PhotoCredit {
+export function googleCredit(t: TemporaryPhoto): PhotoCredit {
   return { title: t.title, author: t.domain, license: "preview only", licenseUrl: "", sourceUrl: t.sourcePage || t.imageUrl, provider: "Google Images" };
 }
 
-function googleSearchNote(g: { photos: unknown[]; queries: string[]; seen: number; rejected: Record<string, number> }): string {
+function googleSearchNote(g: { photos: unknown[]; queries: string[]; seen: number; rejected: Record<string, number>; ranking?: string }): string {
   const skipped = Object.entries(g.rejected).map(([why, n]) => `${n} ${why}`).join(", ");
-  return `Google Images ${g.queries.map((q) => `“${q}”`).join(" / ")}: ${g.seen} results${skipped ? ` (skipped ${skipped})` : ""}, ${g.photos.length} usable`;
+  return `Google Images ${g.queries.map((q) => `“${q}”`).join(" / ")}: ${g.seen} results${skipped ? ` (skipped ${skipped})` : ""}, ${g.photos.length} usable${g.ranking ? ` · ${g.ranking}` : ""}`;
 }
 
 /** Put the owner's requested photo in the hero (as a full-bleed background when they said "background"). */
@@ -607,7 +652,13 @@ export async function buildLook(
   // town itself — a free-license photo of it, else an AI photo of it.
   const town = placeOf(facts);
   const bestOwn = scored[0];
-  const autoScene = !asked0 && !keepSubject && !wantsNewPhotos(facts) && town?.city && (!bestOwn || bestOwn.score <= 0 || !heroWorthy(bestOwn.photo)) && civic ? `downtown ${town.city}` : undefined;
+  // Round 1 with no subject: the planner's proactive Google Images searches (prefetched by the plan step).
+  const photoDeadline = stepStart + Math.max(10_000, Math.min(40_000, budget - 25_000));
+  const pre =
+    !asked0 && !keepSubject && photoSearchEnabled() && plan.imageQueries?.length
+      ? await (await import("@/lib/preview/google-photo.server")).plannedPhotos(facts, plan.imageQueries, useAi, photoDeadline).catch(() => undefined)
+      : undefined;
+  const autoScene = !pre?.photos.length && !asked0 && !keepSubject && !wantsNewPhotos(facts) && town?.city && (!bestOwn || bestOwn.score <= 0 || !heroWorthy(bestOwn.photo)) && civic ? `downtown ${town.city}` : undefined;
   const scene = asked0 ?? autoScene;
   // Image prompts read the subject from the facts; an automatic town subject is not the owner's request.
   const imgFacts: SiteFacts = autoScene ? { ...facts, photoSubject: autoScene, photoIntent: "find" } : facts;
@@ -644,11 +695,11 @@ export async function buildLook(
     );
   };
   if (keepEntry) trace.images.push(keepEntry);
-  // Photo search shares the step budget with the page writer (they run in parallel).
-  const photoDeadline = stepStart + Math.max(10_000, Math.min(40_000, budget - 25_000));
+  // Photo search shares the step budget with the page writer (they run in parallel): photoDeadline above.
   // A usable but weak own hero (small) is replaced by a Google Images one only when PHOTO_SEARCH_WEAK_HEROES=1.
   const weakHero = process.env.PHOTO_SEARCH_WEAK_HEROES === "1" && !scene && !kept && Boolean(photos[0]) && (photos[0]!.width < 1600 || (bestOwn?.score ?? 0) <= 0);
   let googleHero: string | undefined;
+  let proactiveOwn: string | undefined;
   const heroAspect = design.heroStyle ? (design.heroStyle === "cinematic" ? "16:9" : "4:3") : design.hero === "split" ? "4:3" : "16:9";
   if (scene) {
     // The owner named what the hero should show. Order: one of the site's own photos that shows it (alt text,
@@ -676,6 +727,8 @@ export async function buildLook(
         const google = await findGooglePhotos(scene, facts, useAi, photoDeadline, 3);
         for (const g of google.photos.slice(0, 3 - real.length)) real.push({ photo: g.photo, source: "web", alt: g.temp.title, credit: googleCredit(g.temp), temp: g.temp });
         entry.search = googleSearchNote(google);
+      } else if (!photoSearchEnabled()) {
+        entry.search = "Google Images: off on this server (no SERPER_API_KEY or photo-search proxy)";
       }
       if (real.length < 3 && webPhotosEnabled()) {
         const web = await findWebPhotos(scene, place, 8_000, 3 - real.length).catch(() => []);
@@ -707,6 +760,52 @@ export async function buildLook(
     wantImage("hero", "hero", heroAspect, `photo of ${scene}: the owner asked for this, so use it as the hero background image`, findReal, entry);
   } else if (kept) {
     // The kept picture is the hero; nothing is generated in its place.
+  } else if (pre?.photos.length) {
+    // Proactive pick (no note needed): strong, relevant site photos first, then the ranked Google Images results,
+    // then the site's weaker photos. Each look takes a different one (photoRank). "Asked for new photos" puts
+    // Google first.
+    const describe = (url: string) => {
+      const cue = facts.imageText?.[url]?.trim();
+      if (cue) return cue.length > 60 ? `${cue.slice(0, 60).replace(/\s+\S*$/, "")}…` : cue;
+      const file = decodeURIComponent(url.split(/[?#]/)[0]!.split("/").pop() ?? "").replace(/\.[a-z0-9]+$/i, "").replace(/[-_+]+/g, " ").trim();
+      return file && /[a-z]{3}/i.test(file) && !/^(img|dsc|image|photo)?\s*\d+$/i.test(file) ? file.slice(0, 60) : "your homepage";
+    };
+    const strong = scored.slice(0, 5).flatMap((p, i) => (p.score >= 2 && heroWorthy(p.photo) && images[`photo-${i + 1}`] ? [{ own: `photo-${i + 1}`, score: p.score, what: describe(p.photo.url) }] : []));
+    const weak = suitable.filter((n) => !strong.some((x) => x.own === n)).map((own) => ({ own, score: 0, what: describe(scored[Number(own.slice(6)) - 1]?.photo.url ?? "") }));
+    const google = pre.photos.map((g) => ({ g }));
+    // The site's single best photo can still win one look; strong Google results take the others, then the rest.
+    const pool: ({ own: string; score: number; what: string } | { g: (typeof pre.photos)[number] })[] = freshPhotos
+      ? [...google, ...strong, ...weak]
+      : [...strong.slice(0, 1), ...google, ...strong.slice(1), ...weak];
+    const rank = photoRank(design, index);
+    const entry: ImageTrace = {
+      name: "hero",
+      slot: "hero",
+      scene: pre.queries.join(" / "),
+      prompt: "",
+      status: "not generated (mock mode / images off)",
+      search: `Google Images (proactive, from the plan) ${pre.queries.map((q) => `“${q}”`).join(" / ")}: ${pre.seen} results, ${pre.photos.length} usable${pre.ranking ? ` · ${pre.ranking}` : ""}${Object.keys(pre.rejected).length ? ` (skipped ${Object.entries(pre.rejected).map(([w, n]) => `${n} ${w}`).join(", ")})` : ""} · ${strong.length} strong site photo${strong.length === 1 ? "" : "s"}`,
+    };
+    trace.images.push(entry);
+    const order = [...pool.slice(rank), ...pool.slice(0, rank)];
+    const choose = async (): Promise<boolean> => {
+      for (const option of order) {
+        if ("own" in option) {
+          proactiveOwn = option.own;
+          Object.assign(entry, { status: "your site's photo", source: "your site", scene: option.what, search: `${entry.search} · chose your site's photo (relevance ${option.score})` } satisfies Partial<ImageTrace>);
+          return true;
+        }
+        const photo = await fetchPhoto(option.g.temp.imageUrl);
+        if (!photo || photo.width < 1000) continue;
+        await saveImage(id, "hero", photo.type, photo.bytes);
+        images.hero = { name: "hero", type: photo.type, source: "web", alt: option.g.temp.title, width: photo.width, height: photo.height, credit: googleCredit(option.g.temp), temporary: option.g.temp };
+        Object.assign(entry, { status: "preview photo (Google Images)", source: "web search", credit: googleCredit(option.g.temp), scene: option.g.temp.query } satisfies Partial<ImageTrace>);
+        googleHero = option.g.temp.query;
+        return true;
+      }
+      return false;
+    };
+    wantImage("hero", "hero", heroAspect, `generated hero photo: ${design.heroSubject || kind}`, choose, entry);
   } else if (!heroWorthy(photos[0]) || freshPhotos || (weakHero && photoSearchEnabled())) {
     // No good hero photo on the site (or a weak one, with PHOTO_SEARCH_WEAK_HEROES=1): Google Images of the
     // business type in its town when photo search is on (each look a different one), else an AI photo.
@@ -748,10 +847,12 @@ export async function buildLook(
   const sections = resolveImages(result.sections, available);
   // The requested scene goes in the hero even if the page writer picked one of the site's own photos, and
   // "as background" means the full-bleed photo hero. With no photo of the scene, no unrelated photo is used.
-  if (sections[0]?.type.startsWith("hero-")) sections[0] = heroForRequest(sections[0], facts, design, Boolean(images.hero), scene ?? (kept ? keepSubject : undefined) ?? googleHero, freshPhotos, ownHero);
+  if (sections[0]?.type.startsWith("hero-")) sections[0] = heroForRequest(sections[0], facts, design, Boolean(images.hero), scene ?? (kept ? keepSubject : undefined) ?? googleHero, freshPhotos && !proactiveOwn, proactiveOwn ?? ownHero);
+  if (proactiveOwn && sections[0]?.type.startsWith("hero-") && !images.hero) sections[0] = { ...sections[0], image: proactiveOwn };
   // Each look: its own hero treatment, section order and section variants (kept art shown whole, as a cutout).
   sections.splice(0, sections.length, ...arrangeSections(sections, design, available, facts.services, Boolean(images.hero?.cutout && sections[0]?.image === "hero")));
   trace.layout = lookSignature(design, sections, images.hero?.credit?.sourceUrl ?? sections[0]?.image);
+  logHeroChoice(index, design.name, sections[0]?.image, images, trace, photoSearchEnabled());
   trace.steps.push({ step: "homepage sections", ai: result.ai, ownerRequest: Boolean(result.ownerRequest) });
   const pages: StoredPage[] = plan.pages.map((p) =>
     p.slug === "home" ? { slug: p.slug, title: p.title, navLabel: p.navLabel, body: "", sections } : { slug: p.slug, title: p.title, navLabel: p.navLabel, body: "", pending: true },

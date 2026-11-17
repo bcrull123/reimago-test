@@ -108,7 +108,15 @@ export function LooksPicker({
       )}
       {feedback.length ? (
         <p className="mt-4 text-sm text-fg" data-refine-round>
-          <strong>3 new looks</strong> from your feedback (round {feedback.length} of {maxFeedback}): “{feedback.at(-1)}”
+          {looks[0]?.edit ? (
+            <>
+              <strong>Edited {looks[0].name}</strong>, as you asked: only the change you named; same layout, fonts, photo and words (round {feedback.length} of {maxFeedback}): “{feedback.at(-1)}”
+            </>
+          ) : (
+            <>
+              <strong>3 new looks</strong> from your feedback (round {feedback.length} of {maxFeedback}): “{feedback.at(-1)}”
+            </>
+          )}
         </p>
       ) : null}
       <div className={`mt-6 grid gap-5 transition-opacity md:grid-cols-3 ${refining ? "pointer-events-none opacity-40" : ""}`} aria-busy={refining}>
@@ -129,7 +137,10 @@ export function LooksPicker({
               <div className="flex flex-1 flex-col gap-3 p-4">
                 <div className="flex items-start justify-between gap-2">
                   <div>
-                    <h3 className="font-display text-xl leading-tight text-ink">{look.name}</h3>
+                    <h3 className="font-display text-xl leading-tight text-ink" data-look-name>
+                      {look.name}
+                      {look.edit ? <span className="text-muted" data-look-variant>, {look.edit.variant}</span> : null}
+                    </h3>
                     <p className="text-xs uppercase tracking-eyebrow text-faint">{ARCHETYPE_LABEL[look.archetype]}</p>
                   </div>
                   {isChosen ? (
@@ -157,6 +168,11 @@ export function LooksPicker({
                     <MessageSquareText className="mr-1 inline size-3.5 align-[-2px] text-accent" aria-hidden />
                     Based on your request: “{look.request.length > 140 ? `${look.request.slice(0, 137)}…` : look.request}”
                     {look.applied?.length ? <span className="mt-0.5 block text-muted">Applied: {look.applied.join(" · ")}</span> : null}
+                  </p>
+                ) : null}
+                {look.edit ? (
+                  <p className="rounded-md border border-emerald-300 bg-emerald-50 px-2.5 py-1.5 text-xs leading-relaxed text-emerald-900" data-look-changed>
+                    {look.edit.changed}
                   </p>
                 ) : null}
                 {look.photos ? (
@@ -241,7 +257,7 @@ export function LooksPicker({
             Not quite right? What would you like to see different?
           </label>
           <p className="mt-1 text-sm text-muted">
-            Tell us in your own words (colors, mood, photos, sections, wording). We'll make 3 new looks using your original note plus this. Nothing is sent until you choose a look.
+            Tell us in your own words (colors, mood, photos, sections, wording). Name a look (“Night Brick, a little lighter”, “the second one, bigger text”, “this one, less busy”) to adjust just that look; otherwise we'll make 3 new looks using your original note plus this. Nothing is sent until you choose a look.
           </p>
           <textarea
             id="refine-text"
