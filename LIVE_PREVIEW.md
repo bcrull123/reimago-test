@@ -309,6 +309,44 @@ Bob tested the from-scratch look on bob.me. Editorial got a Vecteezy stock photo
   - `[imagine] art for the custom page: k/n made in Ns (model) · art-1 1:1 “…”`
   - `[design] checks “X”: pass | auto-fixed contrast: …`, and `[design] “X” ready (ok, from the Imagine mockup) in Ns · … images … (N of the site's own) · Imagine art …`
 
+### Custom Design art: the site's own assets first, then Imagine; Google only as a last resort (round 7)
+
+Bob ran 52fb142 on bob.me. The Imagine mockup was bold, but the built Custom Design page was plain, with a Google Images photo of two people at a laptop ("Photo: from Google Images"). Bob asked: "why did we use google images and not imagine". Bob also said: "Imagine used to make some cool sites out of the rocket" and "let imagine be creative with what they have on their site first".
+
+**Why Google won**: the order of the steps. The custom card runs `previewLook` (the template build) first, then `previewImagine`, then `previewCustom`. The template step ran the normal hero pipeline for look 3 too: no site photo passed, so it took a Google Images photo and stored it as `hero`. The custom page then had to use `@img:hero` (the validator requires the hero photo when there is one), and the card kept the template step's "Photo: from Google Images" line. Imagine was never asked for art.
+
+**Now**:
+- **Template step for the Custom Design look** (`buildLook`, `imagineFirst` when Imagine design is on): only the site's own photos (or the kept picture) are taken. There is no Google pick, no free-license photo, no plain AI photo and no AI feature photo for this look. The trace says "Custom Design: Grok Imagine makes this look's imagery from your site's own assets (no Google Images)". The round's shared Google search still runs once for the two template looks.
+- **The site's assets** (`prepareCustomPhotos` / `customContext`):
+  - The template's own-photo hero is copied to `@img:hero`.
+  - Photos that passed the gate are used as before. Photos that failed only the hero bar (not signs, lettering, logos, documents, maps, watermarks or the brief's off-topic words) come along as **secondary** material (collage tiles, textures).
+  - The **signature graphic** (`signatureArt`, `site-art.ts` `signatureCandidates` / `isSignatureArt`) is stored as `@img:brand-art`. It is a mascot or illustration placed in the page: a transparent PNG/WebP or SVG of at least 200 px, not the logo, not an icon, not a banner strip or wide wordmark (wider than 2:1), and not a decorative shape (circle, blob, divider, dots). Example: bob.me's 440x360 "Blast off" rocket. This needs no note.
+- **Imagine gets the real assets**: `/v1/images/edits` with up to 5 reference images as data URIs (`images: [...]`; one image uses `image: {...}`). Order: logo, signature graphic, hero photo, other own photos, then secondary photos. The prompt names each one (`<IMAGE_0>` …) and asks Imagine to design around them and recompose them creatively (collage, duotone, cutouts, framing, color treatments) instead of replacing them. With a signature graphic and no own hero photo, the graphic is the hero centerpiece. Log: `[imagine] site assets sent to Imagine (N reference images, /images/edits): logo “…” · brand-art “…” · …`. `PREVIEW_IMAGINE_REFS=0` sends none; `PREVIEW_IMAGINE_LOGO=0` leaves out the logo.
+- **Gap art** (`planArt` / `makeArt`): Imagine art from the mockup (plus the signature graphic) as reference images, made in parallel with the vision build (≤45 s). The build is told the names up front (`kind: "imagine art"`). At most 4 pieces:
+  - no own hero and no signature graphic: `hero` (16:9) + 3 supporting pieces;
+  - a signature graphic: 2 pieces in its style (its world: trails, scenery; a pattern from its shapes);
+  - own photos: 1 decorative piece.
+  - Art that fails is removed from the page.
+- **Google is the last resort**: only when the hero artwork failed, or when Imagine failed (no mockup) and the site has no picture at all (`googleHero`, logged as `[photo] Custom Design: … Google Images photo (last resort)`).
+- **The built page uses the real files** (`@img:brand-art`, `@img:hero`, `@img:photo-N`) with CSS treatments, never the mockup's pixels.
+- **Card line** (`photoLineFor`, from what the built page really uses), for example:
+  - "Art: your site's own Blast off rocket, with 2 pieces of art created by Grok Imagine for this design"
+  - "Art: created by Grok Imagine for this design"
+  - "Photos: your site's own (N)"
+  - "Photo: your site's own (1) · Art: 2 pieces created by Grok Imagine for this design" (own hero photo plus Imagine gap art)
+  - "Photo: from Google Images (Grok Imagine was unavailable; preview only)"
+- **Fidelity**:
+  - The server samples the mockup's pixels (PNG/JPEG; `mockupColors`): the dominant color and tone of the header (top 10%), hero (10–70%) and below (70–100%) bands, plus the main colors with their shares. These go into the vision prompt ("Colors sampled from the mockup's pixels (match them): …").
+  - The prompt asks Grok to describe the mockup region by region first (`"regions": [...]`), then build each region to match: layout (grids, collages), dark/light blocking, headline scale and decorative elements.
+  - `fidelityScore` is render-free (0–100): 60% from the header, hero and next section's declared backgrounds vs the bands, 40% from main-color coverage in the CSS.
+  - Under 60 (`PREVIEW_FIDELITY_MIN`), there is one repair pass with the differences ("The mockup's hero area is dark (#0b1026) but your section.hero background is light (#ffffff)…"). The repair is kept only if it doesn't break the page or lower the score. Low fidelity alone never falls back to a template.
+  - Log: `[design] fidelity N/100 vs the Imagine mockup (header ✓ dark … · hero … · below … · 3/4 main colors)`.
+- **Cost per round (Custom Design images)**, from docs.x.ai/developers/pricing (grok-imagine-image-2.0: $0.04 per 1K-low output, $0.01 per input image; edits bill input + output):
+  - mockup: $0.04 + $0.01 × reference images (≤5), so $0.04–0.09;
+  - each art piece: $0.04 + $0.01 for the mockup reference (+ $0.01 with the signature graphic), so $0.05–0.06 each;
+  - totals: bob.me-like (logo + rocket, 2 art pieces) ≈ $0.06 + $0.12 = **$0.18**; no site assets (hero + 3 art) ≈ $0.04 + 4 × $0.05 = **$0.24**; worst case (5 refs, 4 art with 2 refs each) ≈ $0.09 + $0.24 = **$0.33**.
+  - The vision build's tokens come on top (not measured; the default `AI_MODEL` rate was not checked).
+
 ### The site's own photos first (all looks) and watermarked stock rejected
 
 - **Priority** (Bob: "Make sure you use the actual photos on the site if available"): the business's own photos → Google Images / free-license → AI / Imagine art. A site photo passes at **6/10** (`SITE_BAR`, others 7/10) when it is on-topic, sharp and not a sign or utility shot. It also gets +4 in the hero score and a +15 weight when heroes are assigned, so a site photo rated 7 beats a Google photo rated 9. The card says "Photo: your site's own photo of …". The Custom Design gets only the site photos that passed the round's gate (`StoredImage.gate`, with the vision caption in `shows`). Signs, the airport and utility shots that failed are never offered. The template's hero (e.g. `photo-3`) is copied to `@img:hero` (`prepareCustomPhotos`), so the mockup is drawn around that real photo and the built page uses the real file. Utility words (industrial, pipes, valves, machinery, pump station, storage tanks) are off-topic for a town hero.
@@ -560,6 +598,8 @@ The old domain step (step 12) is gone. Wizard answers are kept in memory only (s
 | `PREVIEW_CUSTOM_BUILD_TIMEOUT_MS` | no | Vision build time limit (default 90000). |
 | `PREVIEW_CUSTOM_BUDGET_MS` | no | Budget of each Custom Design request (default 150000); keep the host's `maxDuration` above it. |
 | `PREVIEW_VISION_MODEL` | no | Model for the vision build (default `AI_MODEL`). |
+| `PREVIEW_IMAGINE_REFS` | no | `0` sends no site assets to Imagine as reference images (default: logo, signature graphic and own photos, ≤5). |
+| `PREVIEW_FIDELITY_MIN` | no | Custom Design fidelity score (0-100) under which the build gets one repair pass with the differences (default 60). |
 | `PREVIEW_STORE_DIR` | no | File storage folder when there is no `DATABASE_URL` (default: OS temp dir). |
 | `CURSOR_API_KEY` | no | When set, "Send to Cursor" starts a Cursor agent with the preview links; otherwise the button downloads a brief. |
 
@@ -636,3 +676,5 @@ Quality gate (business types): the mock's Pauls Valley pool also has a gravel lo
 Custom Design (from scratch): the fake AI answers the brief, design, repair and edit calls (`scripts/fake-custom-design.mjs`: a realistic page with SVG art per concept). `FAKE_CUSTOM=broken` returns a broken first draft (header nav missing pages, a script, external image/link, onclick, low contrast, a 1400px width) that the repair pass fixes. `FAKE_CUSTOM=broken-always` keeps it broken, so the card falls back to the template. `FAKE_CUSTOM=slow` sleeps 180s, so the draft times out and falls back. After a round, run `CHROME_PATH=… node scripts/custom-look-check.mjs http://localhost:8080 <third card id> <outDir>`. `scripts/refine-edit-e2e.mjs` adds a "Make the custom one darker" step (`CUSTOM_EDIT`) when a Custom Design card exists. Unit tests: `src/lib/preview/custom-design.test.ts` (also the Wolf River Bob regression).
 
 Imagine designer (stand-ins): the fake AI answers image prompts containing "website homepage design" with a sample mockup PNG (`fakeMockupPng`: the brief's colors, header, headline bars, photo area, a rocket when asked, cards). It answers the "MATCH THE DESIGN MOCKUP" vision build with the realistic page plus one `@img:art-1` asset, and the "Illustration / artwork" prompts with art. `FAKE_IMAGINE=fail` makes the mockup fail (text-brief fallback). `FAKE_CUSTOM=lowcontrast` adds `.btn.small{background:#e85d04;color:#fff}` (3.5:1), which the automatic contrast fix must correct without a fallback. The mock Serper returns a Vecteezy decoy for startup/founder queries, which must be skipped as "stock / watermarked". Unit tests: `custom-design.test.ts` (mockup prompts, contrast auto-fix), `photo-priority.test.ts` (site photos win over Google, watermarks), `keep-art.test.ts` (cutout variety).
+
+Custom Design art (round 7, stand-ins): Imagine edits with an `images` array are logged as "edits (N reference images)". Art prompts ("Illustration / artwork for a website section") on `/images/edits` get art (`FAKE_IMAGINE=artfail` fails only the art, on edits and on the generations retry, which tests dropping planned art and the Google last resort). The vision build (`fakeMockupBuild`) uses the planned `imagine art` and the signature graphic (`@img:brand-art`) and returns `regions`. `FAKE_CUSTOM=plain` makes the first build ignore the mockup's dark blocking, so the fidelity check sends it back once. Unit tests: `custom-design.test.ts` (mockup color sampling, fidelity high/low), `photo-priority.test.ts` (signature graphic detection).
