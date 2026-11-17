@@ -5,7 +5,7 @@
  * streets"), the hero photo must depict it; their wishes are also given to every other image. Prompts never
  * include the business name (models love to paint it as a fake logo).
  */
-import { imageWishes, requestedScene } from "./owner-request.ts";
+import { imageWishes, requestedPhoto, sceneToFind } from "./owner-request.ts";
 import { creditLine, placeOf } from "./web-photo.ts";
 import type { DesignDirection, PreviewTrace, SiteFacts } from "./types.ts";
 
@@ -51,7 +51,8 @@ function withoutName(text: string, facts: SiteFacts): string {
 
 /** The scene for a slot: the owner's requested scene wins for the hero; then the look's own scene. */
 export function sceneFor(slot: "hero" | "feature" | "service", facts: SiteFacts, design: DesignDirection, subject = ""): string {
-  const asked = requestedScene(facts);
+  // A subject to keep from the owner's site is never painted by AI (it would be a substitute, not theirs).
+  const asked = sceneToFind(facts);
   if (slot === "hero") return asked || design.heroSubject || "";
   if (slot === "feature") return design.featureScene || "";
   return subject;
@@ -67,8 +68,8 @@ function where(scene: string, facts: SiteFacts): string {
 export function imagePrompt(slot: "hero" | "feature" | "service", facts: SiteFacts, design: DesignDirection, subject = ""): string {
   const kind = businessKind(facts);
   const style = `Art direction: ${design.imagery} Mood: ${design.mood}`.slice(0, 600);
-  const asked = requestedScene(facts);
-  const wishes = imageWishes(facts);
+  const asked = sceneToFind(facts);
+  const wishes = requestedPhoto(facts).intent === "keep" ? "" : imageWishes(facts);
   const owner = wishes ? ` The business owner's request (top priority for what the photo shows, as long as it has no text or logos): "${wishes}".` : "";
   let body: string;
   if (slot === "hero") {
@@ -89,11 +90,29 @@ export function imagePrompt(slot: "hero" | "feature" | "service", facts: SiteFac
   return withoutName(`${body}${owner} ${style}`, facts).replace("@@WHERE@@", slot === "hero" && asked ? where(asked, facts) : "");
 }
 
+/** "the rocket" -> "rocket", "our old trucks" -> "old trucks". */
+function bare(subject: string): string {
+  return subject.replace(/^(?:the|a|an|my|our|your)\s+/i, "");
+}
+
+/** "the rocket" -> "a rocket", "the brick streets" -> "the brick streets" (plural stays definite), "the owl" -> "an owl". */
+function aOrSome(subject: string): string {
+  const b = bare(subject);
+  if (/s$/i.test(b.split(/\s+/).pop() ?? "") && !/ss$/i.test(b)) return `the ${b}`;
+  return `${/^[aeiou]/i.test(b) ? "an" : "a"} ${b}`;
+}
+
 /** The small "Photos: …" line on a look card, read from the build trace. */
 export function photosLine(trace: PreviewTrace | undefined, ownPhotos: number): string {
   const hero = trace?.images.find((i) => i.slot === "hero");
   const scene = trace?.request.scene;
   const own = ownPhotos ? `${ownPhotos} of your photos` : "no usable photos from your site";
+  if (trace?.request.intent === "keep" && scene) {
+    if (hero?.status === "kept from your site") return `Photo: kept your ${bare(scene)} from your site, as you asked`;
+    const other = trace.images.find((i) => i.slot === "hero" && i !== hero);
+    const instead = other?.status === "generated" ? "the hero has an AI photo of this look's own idea" : ownPhotos ? "the hero uses your site's best photo" : "the hero has no photo";
+    return `Couldn't find ${aOrSome(scene)} on your site to keep, and no web or AI ${bare(scene)} was swapped in · ${instead}`;
+  }
   if (!hero) return `Photos: ${own}${scene ? "" : " (the note didn't name a photo subject)"}`;
   const what = scene ? `“${scene}”` : `“${hero.scene.slice(0, 60)}”`;
   if (hero.status === "your site's photo") return `Photo: your site's photo of ${what}${hero.credit?.title ? ` (“${hero.credit.title.slice(0, 50)}”)` : ""}`;

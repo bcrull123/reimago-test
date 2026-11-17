@@ -717,7 +717,7 @@ function badge(ctx: RenderContext): string {
 }
 
 export function renderSection(section: Section, ctx: RenderContext): string {
-  const cls = `sec s-${section.type} t-${section.tone}${section.variant ? ` v-${esc(section.variant)}` : ""}${section.align === "center" ? " center" : ""}`;
+  const cls = `sec s-${section.type} t-${section.tone}${section.variant ? ` v-${esc(section.variant)}` : ""}${section.align === "center" ? " center" : ""}${section.fit === "cutout" ? " x-cutout" : ""}`;
   const open = `<section class="${cls}">`;
   const items = section.items ?? [];
   switch (section.type) {

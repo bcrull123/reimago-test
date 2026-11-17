@@ -217,6 +217,20 @@ p{margin:0 0 1em}
 .s-hero-split.v-collage .frame>.media:not(.tile){aspect-ratio:1/1;border-radius:40px;border:10px solid #fff;transform:rotate(3deg);box-shadow:0 40px 70px -35px rgba(0,0,0,.55)}
 .s-hero-split.v-collage .frame>.media:not(.tile) img{filter:grayscale(1) contrast(1.12)}
 .s-hero-split.v-collage .frame>.media:not(.tile)::after{content:"";position:absolute;inset:0;background:var(--accent);mix-blend-mode:multiply;opacity:.6;pointer-events:none}
+/* Kept art (illustration / transparent PNG / SVG): shown whole on a color panel — no crop, frame, tilt or duotone. */
+.x-cutout .frame{margin:0;padding:clamp(1.2rem,3.5vw,2.8rem);border-radius:calc(var(--radius) * 2 + 8px);background:radial-gradient(60% 60% at 50% 55%,color-mix(in srgb,var(--accent) 34%,transparent) 0%,color-mix(in srgb,var(--accent) 10%,transparent) 62%,transparent 100%)}
+.x-cutout .frame::before{display:none}
+.x-cutout .frame>.media,.x-cutout .frame>.media:not(.tile){aspect-ratio:auto!important;border:0!important;border-radius:0!important;box-shadow:none!important;transform:none!important;background:none!important;overflow:visible}
+.x-cutout .frame>.media::after,.x-cutout .frame>.media:not(.tile)::after{display:none!important}
+.x-cutout .frame>.media img,.x-cutout .frame>.media:not(.tile) img{display:block;width:100%;height:auto;max-height:min(62vh,560px);object-fit:contain;filter:drop-shadow(0 24px 40px rgba(0,0,0,.18))!important;transform:none!important;animation:none}
+.x-cutout .frame>.media:hover img{transform:none}
+.s-hero-split.v-caption.x-cutout .frame{background:var(--bg);border:1px solid var(--line)}
+.s-hero-split.v-cinematic.x-cutout{background:radial-gradient(70% 90% at 75% 50%,color-mix(in srgb,var(--accent) 22%,var(--dark-bg)) 0%,var(--dark-bg) 70%);min-height:min(88vh,860px);display:flex;align-items:center;padding-top:clamp(7rem,12vw,10rem)}
+.s-hero-split.v-cinematic.x-cutout .wrap{width:100%}
+.s-hero-split.v-cinematic.x-cutout h1{font-size:clamp(2.8rem,6vw,5.6rem);line-height:.98;max-width:11ch}
+.s-hero-split.v-cinematic.x-cutout .frame{background:radial-gradient(55% 55% at 50% 55%,color-mix(in srgb,var(--accent) 45%,transparent) 0%,transparent 72%)}
+.s-hero-split.v-cinematic.x-cutout .frame>.media img{filter:drop-shadow(0 30px 60px rgba(0,0,0,.55))!important}
+.s-hero-split.v-collage.x-cutout .frame{background:color-mix(in srgb,#fff 88%,var(--accent));transform:rotate(2deg);box-shadow:0 40px 70px -35px rgba(0,0,0,.5)}
 .s-hero-split.v-collage .tile{position:absolute;width:44%;aspect-ratio:1/1;left:-14%;bottom:-12%;border-radius:26px;border:8px solid #fff;transform:rotate(-8deg);z-index:2;box-shadow:0 24px 40px -20px rgba(0,0,0,.5)}
 .s-hero-split.v-collage .badge{display:grid!important;width:156px;height:156px;right:-26px;top:-34px;transform:rotate(12deg)}
 .s-hero-type.v-caption .hero-copy{background:var(--bg);border:1px solid var(--line);border-radius:var(--radius);padding:clamp(2rem,5vw,4rem)}

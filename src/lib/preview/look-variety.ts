@@ -88,7 +88,7 @@ export function photoRank(design: DesignDirection, index: number): number {
 }
 
 /** Hero treatment + section order + section variants for one look. Uses only what is already on the page (no new copy or facts). */
-export function arrangeSections(sections: Section[], design: DesignDirection, available: string[], services: string[] = []): Section[] {
+export function arrangeSections(sections: Section[], design: DesignDirection, available: string[], services: string[] = [], cutout = false): Section[] {
   const style = design.heroStyle;
   const recipe = design.layout;
   if (!style || !recipe || !sections.length) return sections;
@@ -100,6 +100,11 @@ export function arrangeSections(sections: Section[], design: DesignDirection, av
     if (!image) {
       // No photo for the hero: the typographic hero, still shaped per look.
       out[0] = { ...first, type: "hero-type", variant: style, tone: style === "cinematic" ? "dark" : style === "collage" ? "brand" : "tint" };
+    } else if (cutout) {
+      // Kept illustration / transparent art: shown whole on a color panel in every treatment (a full-bleed crop
+      // or a duotone would ruin a drawing). Cinematic: dark stage with a glow; caption: light panel; collage: brand.
+      const tone = style === "cinematic" ? "dark" : style === "collage" ? "brand" : "light";
+      out[0] = { ...first, type: "hero-split", variant: style, tone, fit: "cutout", reverse: false, items: style === "collage" ? [] : first.items };
     } else if (style === "cinematic") {
       out[0] = { ...first, type: "hero-photo", variant: "cinematic", tone: "dark" };
     } else if (style === "caption") {
@@ -142,7 +147,7 @@ export function arrangeSections(sections: Section[], design: DesignDirection, av
 export type LookSignature = { hero: string; header: string; buttons: string; footer: string; sections: string; photo: string };
 
 export function lookSignature(design: DesignDirection, sections: Section[], heroImage?: string): LookSignature {
-  const hero = sections[0] ? `${sections[0].type}/${sections[0].variant ?? ""}` : "none";
+  const hero = sections[0] ? `${sections[0].type}/${sections[0].variant ?? ""}${sections[0].fit === "cutout" ? "/cutout" : ""}` : "none";
   return {
     hero,
     header: design.header,
@@ -167,9 +172,12 @@ export function similarities(a: LookSignature, b: LookSignature): string[] {
 export function layoutLine(design: DesignDirection, builtHero?: string): string | undefined {
   if (!design.heroStyle) return undefined;
   const noPhoto = builtHero?.startsWith("hero-type");
-  const hero = noPhoto
+  const cutout = builtHero?.endsWith("/cutout");
+  const hero = cutout
+    ? { caption: "split hero with your art shown whole on a light panel", cinematic: "dark stage hero with your art shown whole", collage: "color-block hero with your art shown whole" }[design.heroStyle]
+    : noPhoto
     ? { caption: "type-only hero on a light panel (no photo)", cinematic: "dark type-only hero (no photo)", collage: "color-block type hero (no photo)" }[design.heroStyle]
     : { caption: "split hero with a captioned photo", cinematic: "full-bleed cinematic hero", collage: "collage hero with a tilted duotone photo" }[design.heroStyle];
-  const header = noPhoto && design.header === "overlay" ? "dark header" : { light: "solid header", overlay: "transparent header", center: "centered-logo header", dark: "dark header" }[design.header];
+  const header = (noPhoto || cutout) && design.header === "overlay" ? "dark header" : { light: "solid header", overlay: "transparent header", center: "centered-logo header", dark: "dark header" }[design.header];
   return `Layout: ${hero} · ${header} · ${design.buttons} buttons`;
 }
