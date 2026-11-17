@@ -10,7 +10,7 @@
  * validated (business name, nav to every page, CTA links, phone, one h1, content, mobile rules, WCAG AA contrast of
  * the declared color pairs); one repair pass by Grok on failure, then the template look is used instead.
  */
-import { contrast, isHex, mix, readablePalette } from "./design.ts";
+import { contrast, isHex, luminance, mix, readablePalette } from "./design.ts";
 import type { SitePalette } from "./types.ts";
 
 export const CUSTOM_NAME = "Custom Design";
@@ -57,6 +57,11 @@ export type CustomDesign = {
   assets?: string[];
   /** Contrast pairs we fixed automatically ("..: background #e85d04 -> #b84a03 (4.6:1)"). */
   autofixed?: string[];
+  /** The card's picture line ("Art: created by Grok Imagine for this design", "Photo: your site's own photo …"). */
+  photoLine?: string;
+  /** Site assets sent to Imagine as reference images (names), and the mockup fidelity score (0-100). */
+  assetsSent?: string[];
+  fidelity?: number;
 };
 
 /** A Grok Imagine homepage design mockup (the designer step for the Custom Design look). */
@@ -89,7 +94,7 @@ export type CustomContext = {
   pages: { slug: string; label: string }[];
   cta: { label: string; slug: string };
   /** Stored images the page may use ("@img:hero"), with what they show. */
-  images: { name: string; alt: string; width?: number; height?: number; kind: "the business's own photo" | "photo" | "ai photo" | "owner's art (keep)" | "logo" | "imagine art"; cutout?: boolean }[];
+  images: { name: string; alt: string; width?: number; height?: number; kind: "the business's own photo" | "the business's own photo (secondary)" | "the business's signature graphic" | "photo" | "ai photo" | "owner's art (keep)" | "logo" | "imagine art"; cutout?: boolean }[];
   /** The owner asked to keep this picture ("Keep the rocket"): it is @img:hero and must be shown whole. */
   keep?: string;
   /** The owner's note / latest feedback. */
@@ -230,8 +235,8 @@ Site: ${contextJson(ctx)}`;
   return { system, user };
 }
 
-export function repairPrompt(ctx: CustomContext, brief: CustomBrief, draft: { css: string; html: string }, problems: string[], fromMockup = false): { system: string; user: string } {
-  const base = fromMockup ? mockupBuildPrompt(ctx, brief) : designPrompt(ctx, brief);
+export function repairPrompt(ctx: CustomContext, brief: CustomBrief, draft: { css: string; html: string }, problems: string[], fromMockup = false, colors?: string, artReady = false): { system: string; user: string } {
+  const base = fromMockup ? mockupBuildPrompt(ctx, brief, colors, artReady) : designPrompt(ctx, brief);
   return {
     system: `${REPAIR_MARKER}: your draft failed our checks. Fix EVERY problem listed, keep the concept and everything else that worked, and return the complete corrected JSON {"css": "...", "html": "..."}.\n\n${base.system}`,
     user: `Problems:\n${problems.map((p) => `- ${p}`).join("\n")}\n\nYour draft:\n${JSON.stringify({ css: draft.css.slice(0, 20000), html: draft.html.slice(0, 32000) })}\n\n${base.user}`,
@@ -253,16 +258,24 @@ export const MOCKUP_MARKER = "Build this homepage to MATCH THE DESIGN MOCKUP";
  * and the real content. The site's own photos are described so the design is made around them (the built page
  * uses the real files in those slots, not the mockup's pixels).
  */
-export function mockupPrompt(ctx: CustomContext, brief: CustomBrief): string {
+export function mockupPrompt(ctx: CustomContext, brief: CustomBrief, refs: string[] = []): string {
   const nav = ctx.pages.map((p) => p.label).slice(0, 6).join(", ");
-  const photos = ctx.images.filter((i) => i.kind !== "logo" && i.kind !== "imagine art");
+  const photos = ctx.images.filter((i) => i.kind !== "logo" && i.kind !== "imagine art" && i.kind !== "the business's signature graphic");
   const hero = photos.find((i) => i.name === "hero");
-  const own = photos.filter((i) => i.kind === "the business's own photo");
+  const own = photos.filter((i) => i.kind === "the business's own photo" || i.kind === "the business's own photo (secondary)");
+  const signature = ctx.images.find((i) => i.kind === "the business's signature graphic");
   const photoLine = ctx.keep
     ? `The hero features the owner's own picture: ${ctx.keep} (${hero?.alt ?? ""}), large and WHOLE, exactly that picture, not redrawn as something else.`
+    : hero && hero.kind === "the business's own photo"
+    ? `The hero photo area shows ${hero.alt.slice(0, 120)} (the business's real photo, it will be placed exactly there).`
+    : signature
+    ? `The hero centerpiece is the business's signature graphic (${signature.alt.slice(0, 80)}), large, with supporting artwork in the same style around it (its world: trails, shapes, scenery, patterns).`
     : hero
-    ? `The hero photo area shows ${hero.alt.slice(0, 120)}${hero.kind === "the business's own photo" ? " (the business's real photo, it will be placed exactly there)" : ""}.`
+    ? `The hero photo area shows ${hero.alt.slice(0, 120)}.`
     : "No photos: the hero is bold illustration and typography.";
+  const refLine = refs.length
+    ? `The attached reference images are the business's REAL assets: ${refs.map((r, i) => `<IMAGE_${i}> ${r}`).join("; ")}. Design the page AROUND them: creatively reinterpret and recompose them (collage, duotone, cutouts, framing, color treatments, scale) rather than replacing them with new pictures; keep the logo and any signature graphic recognizable.`
+    : "";
   const more = own.filter((i) => i.name !== "hero").slice(0, 3).map((i) => i.alt.slice(0, 80));
   const services = ctx.services.slice(0, 4).join(" · ");
   const p = brief.palette;
@@ -274,6 +287,7 @@ export function mockupPrompt(ctx: CustomContext, brief: CustomBrief): string {
     `Top bar: the brand “${ctx.name}” at the left; menu: ${nav}; a “${ctx.cta.label}” button.`,
     `Hero headline exactly: “${brief.headline || ctx.tagline || ctx.name}”.${ctx.tagline ? ` Supporting line: “${ctx.tagline.slice(0, 120)}”.` : ""} Main button: “${ctx.cta.label}”.`,
     photoLine,
+    refLine,
     more.length ? `Further down, sections use the business's real photos of: ${more.join("; ")}.` : "",
     services ? `Below the hero, a section with: ${services}.` : "",
     brief.illustration ? `Decorative illustration: ${brief.illustration}.` : "",
@@ -286,12 +300,13 @@ export function mockupPrompt(ctx: CustomContext, brief: CustomBrief): string {
 }
 
 /** Grok (vision) builds the page to match the mockup image (sent with this prompt), with the same contract as designPrompt. */
-export function mockupBuildPrompt(ctx: CustomContext, brief: CustomBrief): { system: string; user: string } {
+export function mockupBuildPrompt(ctx: CustomContext, brief: CustomBrief, colors?: string, artReady = false): { system: string; user: string } {
   const base = designPrompt(ctx, brief);
   const contract = base.system.slice(base.system.indexOf("Return ONLY JSON"));
   const system = `${MOCKUP_MARKER} image attached (made by our designer with Grok Imagine). You are a senior front-end developer: rebuild it as a real homepage, as close to the mockup as you can: the same layout and proportions, colors, typography feel (pick from the brief's fonts), shapes, decorative elements and section order. Draw illustrations and shapes with inline SVG / CSS. Use ONLY the business's real content given (never invent phone numbers, emails, prices, reviews, awards or statistics); fix any garbled words in the mockup to the real text.
-Photos: put the REAL photos given ("@img:<name>") into the mockup's photo areas, the business's own photos first and in the most prominent slots; never try to reproduce photo pixels from the mockup. If the mockup has illustration areas and no given photo fits, you may ask for up to 2 extra Grok Imagine artworks: add "assets": [{"name": "art-1", "prompt": "what to draw, style, colors (no text, no logos)", "aspect": "1:1" | "4:3" | "16:9" | "3:4"}] and use them as <img src="@img:art-1" alt="..."> (decorative art only, never instead of the business's own photos).
-${contract.replace('Return ONLY JSON: {"css": "...", "html": "..."}.', 'Return ONLY JSON: {"css": "...", "html": "...", "assets": [...optional]}.')}`;
+Method: FIRST look at the mockup region by region, top to bottom (header, hero, each following band), and write that down in "regions": [{"name", "background": "#hex", "layout": "e.g. 2-column split, 3x2 photo collage grid, full-bleed", "elements": "headline scale, shapes, art, photos"}]. THEN build each region in that order so it matches: the same layout structure (grids, collages, overlaps), the same dark vs light color blocking and background colors, the same headline scale (a huge headline in the mockup is a huge clamp() font-size on the page), the same decorative elements.${colors ? `\n${colors}` : ""}
+Pictures: put the REAL files given ("@img:<name>") into the mockup's picture areas: the business's own photos first and most prominent; its signature graphic (kind "the business's signature graphic", a transparent cutout) shown whole as the hero centerpiece when the mockup has it there; secondary own photos can be collage tiles or textures. Match the mockup's treatment with CSS (object-fit, clip-path, border-radius, mix-blend-mode, filter: grayscale/sepia/contrast, duotone overlays, rotations); never try to reproduce photo pixels from the mockup.${artReady ? ' Artwork made by Grok Imagine for this design is given as kind "imagine art" (e.g. @img:hero / @img:art-1): use it for the mockup\'s illustration areas; do not ask for more.' : ' If the mockup has illustration areas and no given picture fits, you may ask for up to 2 extra Grok Imagine artworks: add "assets": [{"name": "art-1", "prompt": "what to draw, style, colors (no text, no logos)", "aspect": "1:1" | "4:3" | "16:9" | "3:4"}] and use them as <img src="@img:art-1" alt="..."> (decorative art only, never instead of the business\'s own photos).'}
+${contract.replace('Return ONLY JSON: {"css": "...", "html": "..."}.', 'Return ONLY JSON: {"regions": [...], "css": "...", "html": "...", "assets": [...optional]}.')}`;
   return { system, user: `${base.user}\nThe mockup is the attached image.` };
 }
 
@@ -661,4 +676,165 @@ export function isStructuralProblem(problem: string): boolean {
 /** "Layout: designed from scratch · concept “The Launchpad”" for the card. */
 export function customLayoutLine(brief: CustomBrief): string {
   return `Layout: designed from scratch · concept “${brief.concept}” · ${brief.metaphor.slice(0, 90)}`;
+}
+
+// ------------------------------------------------------------------------------------------------ mockup fidelity
+
+/** What the mockup looks like, sampled from its pixels (server side): bands top to bottom and its main colors. */
+export type MockupColors = {
+  /** Horizontal bands: header (top 10%), hero (10-70%), below (70-100%), each its dominant color. */
+  bands: { name: "header" | "hero" | "below"; hex: string; tone: Tone }[];
+  /** The main colors of the whole mockup with their share of the pixels (≥4%). */
+  palette: { hex: string; share: number }[];
+};
+type Tone = "dark" | "mid" | "light";
+
+export const toneOf = (hex: string): Tone => {
+  const l = luminance(hex);
+  return l < 0.12 ? "dark" : l > 0.45 ? "light" : "mid";
+};
+
+const hex2 = (r: number, g: number, b: number) => `#${[r, g, b].map((c) => Math.max(0, Math.min(255, Math.round(c))).toString(16).padStart(2, "0")).join("")}`;
+const rgbOf = (hex: string) => [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16)) as [number, number, number];
+const dist = (a: string, b: string) => {
+  const [x, y] = [rgbOf(a), rgbOf(b)];
+  return Math.hypot(x[0] - y[0], x[1] - y[1], x[2] - y[2]);
+};
+
+/** Dominant colors of an RGBA pixel buffer: 32-level buckets, each bucket's mean color, by share. */
+function dominant(data: Uint8Array, width: number, y0: number, y1: number, step: number): { hex: string; share: number }[] {
+  const buckets = new Map<number, { n: number; r: number; g: number; b: number }>();
+  let total = 0;
+  for (let y = y0; y < y1; y += step) {
+    for (let x = 0; x < width; x += step) {
+      const i = (y * width + x) * 4;
+      if (data[i + 3]! < 128) continue;
+      const r = data[i]!, g = data[i + 1]!, b = data[i + 2]!;
+      const key = ((r >> 5) << 6) | ((g >> 5) << 3) | (b >> 5);
+      const e = buckets.get(key) ?? { n: 0, r: 0, g: 0, b: 0 };
+      e.n += 1; e.r += r; e.g += g; e.b += b;
+      buckets.set(key, e);
+      total += 1;
+    }
+  }
+  return [...buckets.values()]
+    .sort((a, b) => b.n - a.n)
+    .map((e) => ({ hex: hex2(e.r / e.n, e.g / e.n, e.b / e.n), share: total ? e.n / total : 0 }));
+}
+
+/** Sample the mockup's pixels (RGBA): its header / hero / below bands and its main colors. */
+export function mockupColors(data: Uint8Array, width: number, height: number): MockupColors {
+  const step = Math.max(1, Math.round(Math.min(width, height) / 180));
+  const band = (name: MockupColors["bands"][number]["name"], a: number, b: number) => {
+    const top = dominant(data, width, Math.floor(height * a), Math.max(Math.floor(height * a) + 1, Math.floor(height * b)), step)[0];
+    const hex = top?.hex ?? "#ffffff";
+    return { name, hex, tone: toneOf(hex) };
+  };
+  const merged: { hex: string; share: number }[] = [];
+  for (const c of dominant(data, width, 0, height, step)) {
+    const near = merged.find((m) => dist(m.hex, c.hex) < 40);
+    if (near) near.share += c.share;
+    else merged.push({ ...c });
+  }
+  return {
+    bands: [band("header", 0, 0.1), band("hero", 0.1, 0.7), band("below", 0.7, 1)],
+    palette: merged.filter((c) => c.share >= 0.04).sort((a, b) => b.share - a.share).slice(0, 6).map((c) => ({ hex: c.hex, share: Math.round(c.share * 100) / 100 })),
+  };
+}
+
+/** The sampled colors as prompt text for the vision build. */
+export function mockupColorsText(m: MockupColors): string {
+  return `Colors sampled from the mockup's pixels (match them): ${m.bands.map((b) => `${b.name} area ${b.hex} (${b.tone})`).join(", ")}; main colors ${m.palette.map((c) => `${c.hex} ${Math.round(c.share * 100)}%`).join(", ")}.`;
+}
+
+type Region = { tag: string; cls: string; bg: string | "image" | undefined };
+
+/** The built page's regions in order (header, sections, footer) with the background each declares (or inherits). */
+export function declaredRegions(html: string, css: string, p: SitePalette): Region[] {
+  const vars = contrastVars(css, p);
+  const rules = cssRules(css);
+  const page = (() => {
+    for (const r of rules) if (/(^|,)\s*(body|html|:root|\.page|main)\s*(,|$)/.test(r.selector)) {
+      const bg = ruleBg(r, vars);
+      if (bg) return bg;
+    }
+    return p.background;
+  })();
+  const out: Region[] = [];
+  for (const m of html.matchAll(/<(header|section|footer)\b([^>]*)>/gi)) {
+    const attrs = m[2] ?? "";
+    const cls = (attrs.match(/class\s*=\s*"([^"]*)"/i)?.[1] ?? "").trim();
+    const id = attrs.match(/id\s*=\s*"([^"]*)"/i)?.[1] ?? "";
+    const tag = m[1]!.toLowerCase();
+    const inline = attrs.match(/style\s*=\s*"[^"]*background(?:-color)?\s*:\s*([^;"]+)/i)?.[1];
+    const names = [tag, ...cls.split(/\s+/).filter(Boolean).map((c) => `.${c}`), ...(id ? [`#${id}`] : [])];
+    let bg: Region["bg"];
+    if (inline) bg = /url\(|@img:/i.test(inline) ? "image" : resolveColor(inline.split(/\s+(?![^(]*\))/)[0]!, vars);
+    for (const r of rules) {
+      if (bg) break;
+      const hit = r.selector.split(",").some((sel) => {
+        const last = sel.trim().split(/\s+|>/).filter(Boolean).pop() ?? "";
+        if (/::?(before|after|hover|focus)/.test(last)) return false;
+        const parts = last.match(/(^[a-z][\w-]*|[.#][\w-]+)/gi) ?? [];
+        return parts.length > 0 && parts.every((x) => names.includes(x.toLowerCase().startsWith(".") || x.startsWith("#") ? x : x.toLowerCase()));
+      });
+      if (!hit) continue;
+      const raw = r.decls["background-color"] ?? r.decls.background ?? r.decls["background-image"];
+      if (!raw) continue;
+      if (/url\(|@img:/i.test(raw)) bg = "image";
+      else if (/gradient/i.test(raw)) {
+        const c = raw.match(/#[0-9a-f]{6}\b|#[0-9a-f]{3}\b|var\(--[\w-]+\)|rgba?\([^)]*\)/i)?.[0];
+        bg = c ? resolveColor(c, vars) : undefined;
+      } else bg = resolveColor(raw.split(/\s+(?![^(]*\))/)[0]!, vars);
+    }
+    out.push({ tag, cls, bg: bg ?? page });
+  }
+  return out;
+}
+
+export type Fidelity = { score: number; regions: string[]; palette: string; diff: string[] };
+
+/**
+ * Render-free fidelity check: does the built page's color blocking follow the mockup? Header / hero / the next
+ * section's declared backgrounds vs the mockup's sampled bands (tone + color), plus how many of the mockup's main
+ * colors appear in the CSS. 0-100; under 60 gets one repair pass with the differences.
+ */
+export function fidelityScore(m: MockupColors, html: string, css: string, p: SitePalette): Fidelity {
+  const regions = declaredRegions(html, css, p);
+  const header = regions.find((r) => r.tag === "header");
+  const sections = regions.filter((r) => r.tag === "section");
+  const pairs: [MockupColors["bands"][number], Region | undefined][] = [
+    [m.bands[0]!, header],
+    [m.bands[1]!, sections[0]],
+    [m.bands[2]!, sections[1]],
+  ];
+  const diff: string[] = [];
+  const lines: string[] = [];
+  let sum = 0;
+  for (const [band, region] of pairs) {
+    if (!region) {
+      sum += 0.5;
+      lines.push(`${band.name} ?`);
+      continue;
+    }
+    if (region.bg === "image") {
+      sum += 0.8;
+      lines.push(`${band.name} photo`);
+      continue;
+    }
+    const bg = region.bg ?? p.background;
+    const same = toneOf(bg) === band.tone;
+    const close = dist(bg, band.hex) < 90;
+    const s = same && close ? 1 : same ? 0.7 : close ? 0.5 : 0;
+    sum += s;
+    lines.push(`${band.name} ${s >= 0.7 ? "✓" : "✗"} ${band.tone} ${band.hex} vs ${bg}`);
+    if (s < 0.7) diff.push(`The mockup's ${band.name} area is ${band.tone} (${band.hex}) but your ${region.tag}${region.cls ? `.${region.cls.split(/\s+/)[0]}` : ""} background is ${toneOf(bg)} (${bg}): use ${band.hex} (or the closest palette color) there.`);
+  }
+  const used = [...new Set([...(css.match(/#[0-9a-f]{6}\b/gi) ?? []).map((c) => c.toLowerCase()), ...Object.values(contrastVars(css, p))])];
+  const main = m.palette.filter((c) => c.share >= 0.06);
+  const missing = main.filter((c) => !used.some((u) => /^#[0-9a-f]{6}$/.test(u) && dist(u, c.hex) < 60));
+  const coverage = main.length ? (main.length - missing.length) / main.length : 1;
+  if (missing.length) diff.push(`Main mockup colors missing from your CSS: ${missing.map((c) => `${c.hex} (${Math.round(c.share * 100)}% of the mockup)`).join(", ")}.`);
+  const score = Math.round(100 * (0.6 * (sum / pairs.length) + 0.4 * coverage));
+  return { score, regions: lines, palette: `${main.length - missing.length}/${main.length} main colors`, diff };
 }

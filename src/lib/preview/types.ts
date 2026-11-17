@@ -193,6 +193,10 @@ export type StoredImage = {
   /** A site photo's verdict in the round's hero quality gate, and what it shows (the vision caption / alt text). */
   gate?: "passed" | "failed";
   shows?: string;
+  /** The site's signature brand graphic (mascot / illustration, a transparent cutout), e.g. bob.me's rocket. */
+  signature?: boolean;
+  /** Made by Grok Imagine for the Custom Design (hero art, supporting art). */
+  imagine?: boolean;
 };
 
 /** One image the build asked for: its prompt and what happened (no secrets; prompts never contain keys). */
@@ -270,6 +274,10 @@ export type LookInfo = {
     imagineNote?: string;
     /** The mockup shows the design before a later edit ("make it darker"). */
     mockupStale?: boolean;
+    /** The card's picture line for the built custom page ("Art: created by Grok Imagine for this design"). */
+    photoLine?: string;
+    /** How closely the built page follows the mockup's color blocking (0-100, render-free check). */
+    fidelity?: number;
   };
   /** Bumped after "Retry with AI" so thumbnails reload. */
   rev?: number;

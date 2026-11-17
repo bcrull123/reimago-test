@@ -141,6 +141,7 @@ export function photosLine(trace: PreviewTrace | undefined, ownPhotos: number): 
   if (hero.status === "preview photo (Google Images)") return TEMP_PHOTO_LINE;
   if (hero.status === "your site's photo") return `Photo: your site's own photo of ${what}${hero.credit?.title ? ` (“${hero.credit.title.slice(0, 50)}”)` : ""}`;
   if (hero.status === "web photo" && hero.credit) return `Photo: ${creditLine(hero.credit)}`;
+  if (hero.status === "skipped" && /Grok Imagine/.test(hero.search ?? "")) return "Art: Grok Imagine makes this design's art from your site's own assets (no Google Images)";
   if (hero.status === "generated") return `AI photo of ${what}${scene ? " (no matching photo on your site or free photo sites)" : ""}`;
   if (hero.status === "failed") return `Photos: no photo of ${what} found and generating one failed, so the hero has ${scene ? "a plain background" : ownPhotos ? "your site's photo" : "a placeholder"}`;
   return `Photos: no photo of ${what} found; would generate one (mock mode / AI images off) · ${own}`;
