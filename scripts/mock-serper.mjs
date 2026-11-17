@@ -73,6 +73,10 @@ const FOOD = [
   C("c/c5/DFC_1093_Two_grilled_sausages_served_with_creamy_potato_salad_and_a_side_of_coleslaw_on_a_white_plate.jpg", 5568, 3712, "Plated grilled sausages with potato salad"),
   C("5/5c/Menu_board_and_service_preparer_at_Red_White_and_Que_restaurant_in_New_Jersey.jpg", 1927, 1536, "Menu board at the counter"),
 ];
+// A startup community (bob.me): Bob's round 1 hero was a Vecteezy preview with its watermark; it must be skipped.
+const STARTUP = [
+  { title: "Business people at whiteboard brainstorming", imageUrl: "https://static.vecteezy.com/system/resources/previews/000/mock/business-people-whiteboard.jpg", imageWidth: 1920, imageHeight: 1080, link: "https://www.vecteezy.com/photo/000-business-people", domain: "www.vecteezy.com", source: "Vecteezy" },
+];
 const ROUND1 = {
   "downtown pauls valley oklahoma": [GRAVEL, SIGN1(1920, 1440, "Welcome to Pauls Valley sign"), NIGHT, HIST, SIGN2],
   "pauls valley historic district": [HIST, SIGN1(1280, 960, "Pauls Valley, Oklahoma - gateway"), TOWN[0], PARK],
@@ -83,7 +87,7 @@ function results(q) {
   const s = q.toLowerCase().trim();
   const list =
     ROUND1[s] ??
-    (/brick/.test(s) ? BRICKS : /pauls valley/.test(s) ? [GRAVEL, ...TOWN] : /plumb|bathroom|technician|drain|water heater|home/.test(s) ? PLUMB : /restaurant|dining|dish|patio|cafe|food|bistro|grill|kitchen/.test(s) ? FOOD : []);
+    (/brick/.test(s) ? BRICKS : /pauls valley/.test(s) ? [GRAVEL, ...TOWN] : /plumb|bathroom|technician|drain|water heater|home/.test(s) ? PLUMB : /restaurant|dining|dish|patio|cafe|food|bistro|grill|kitchen/.test(s) ? FOOD : /startup|founder|entrepreneur|coworking/.test(s) ? STARTUP : []);
   return list.map((x, i) => ({ ...x, thumbnailUrl: "https://encrypted-tbn0.gstatic.com/images?q=tbn:mock", googleUrl: "https://www.google.com/imgres", position: i + 1 }));
 }
 

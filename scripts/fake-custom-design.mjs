@@ -157,6 +157,10 @@ h1,h2,h3{font-family:var(--font-heading);line-height:1.02;margin:0}
 @media (prefers-reduced-motion:no-preference){.stars circle{animation:tw 3s ease-in-out infinite alternate}.stars circle:nth-child(3n){animation-delay:1s}@keyframes tw{to{opacity:.15}}.trail{stroke-dashoffset:400;animation:draw 2.4s ease-out forwards}@keyframes draw{to{stroke-dashoffset:0}}.steam{animation:rise 3s ease-in-out infinite alternate}@keyframes rise{to{transform:translateY(-8px)}}.sun{animation:up 2s ease-out}@keyframes up{from{transform:translateY(60px)}}}
 @media (max-width:720px){.hero,.story{grid-template-columns:1fr}.visual{min-height:300px}.steps ol,.grid{grid-template-columns:1fr}.top{flex-wrap:wrap}.top nav{order:3;width:100%;margin-left:0;gap:.9rem}.band{margin:1rem -1rem}}
 `;
+  if (mode === "lowcontrast") {
+    // Bob's round 2 failure: a 3.5:1 header button (white on #e85d04). Auto-fixed, never a fallback.
+    css += "\n.top .btn.small{background:#e85d04;color:#ffffff}";
+  }
   if (mode === "broken") {
     html = html.replace(/<nav aria-label="Main">[\s\S]*?<\/nav>/, '<nav aria-label="Main"><a href="@page:home">Home</a></nav>') + '<script>alert("x")</script><img src="https://example.com/stock.jpg" alt=""><link rel="stylesheet" href="https://evil.example/x.css">';
     html = html.replace('<a class="btn" href', '<a class="btn" onclick="track()" href');
@@ -175,4 +179,99 @@ export function fakeEdit(user) {
   if (darker) Object.assign(next, { background: "#05070f", surface: "#0e1430", text: "#f6f7ff", muted: "#b7bde3" });
   if (lighter) Object.assign(next, { background: "#ffffff", surface: "#f1f3ff", text: "#141a3a", muted: "#4a5175" });
   return { css: page.css ?? "", html: page.html ?? "", palette: next };
+}
+
+// ---------------------------------------------------------------- Grok Imagine stand-ins (mockup + art)
+
+/**
+ * A stand-in for Grok Imagine's homepage design mockup: a flat 1280x720 PNG drawn from the prompt's colors
+ * (header with brand + nav + button, a big headline block, the hero photo area as a circle, a rocket when the
+ * prompt asks for one, and a row of cards). Not a real design: it lets the pipeline (store, card, vision build)
+ * run end to end without a key.
+ */
+export async function fakeMockupPng(prompt) {
+  const { PNG } = await import("pngjs");
+  const W = 1280;
+  const H = 720;
+  const png = new PNG({ width: W, height: H });
+  const color = (name, fallback) => {
+    const m = prompt.match(new RegExp(`${name} (#[0-9a-fA-F]{6})`));
+    const hex = (m?.[1] ?? fallback).slice(1);
+    return [parseInt(hex.slice(0, 2), 16), parseInt(hex.slice(2, 4), 16), parseInt(hex.slice(4, 6), 16)];
+  };
+  const bg = color("background", "#f6f1e8");
+  const surface = color("surface", "#ffffff");
+  const text = color("text", "#1a1a1a");
+  const primary = color("primary", "#c2410c");
+  const accent = color("accent", "#f59e0b");
+  const set = (x, y, c) => {
+    if (x < 0 || y < 0 || x >= W || y >= H) return;
+    const i = (y * W + x) * 4;
+    png.data[i] = c[0];
+    png.data[i + 1] = c[1];
+    png.data[i + 2] = c[2];
+    png.data[i + 3] = 255;
+  };
+  const rect = (x0, y0, w, h, c, r = 0) => {
+    for (let y = y0; y < y0 + h; y += 1)
+      for (let x = x0; x < x0 + w; x += 1) {
+        const dx = Math.max(x0 + r - x, 0, x - (x0 + w - 1 - r));
+        const dy = Math.max(y0 + r - y, 0, y - (y0 + h - 1 - r));
+        if (r && dx * dx + dy * dy > r * r) continue;
+        set(x, y, c);
+      }
+  };
+  const circle = (cx, cy, r, c, ring) => {
+    for (let y = cy - r; y <= cy + r; y += 1)
+      for (let x = cx - r; x <= cx + r; x += 1) {
+        const d = Math.hypot(x - cx, y - cy);
+        if (d <= r && (!ring || d >= r - ring)) set(x, y, c);
+      }
+  };
+  rect(0, 0, W, H, bg);
+  // Header.
+  rect(0, 0, W, 72, surface);
+  rect(40, 22, 120, 28, text, 6);
+  for (let i = 0; i < 5; i += 1) rect(720 + i * 82, 32, 60, 8, text, 4);
+  rect(1130, 18, 120, 36, primary, 18);
+  // Headline + supporting line + buttons.
+  rect(60, 170, 520, 54, text, 8);
+  rect(60, 240, 460, 54, primary, 8);
+  rect(60, 310, 380, 54, primary, 8);
+  rect(60, 395, 420, 12, text, 6);
+  rect(60, 418, 340, 12, text, 6);
+  rect(60, 470, 170, 52, primary, 26);
+  rect(250, 486, 140, 14, text, 7);
+  // Hero photo area (a circle with an accent ring) and a decorative orbit.
+  circle(930, 330, 205, accent);
+  for (let y = 145; y < 515; y += 1) for (let x = 745; x < 1115; x += 1) if (Math.hypot(x - 930, y - 330) <= 190) set(x, y, [Math.round(120 + (y - 145) / 4), Math.round(140 + (x - 745) / 6), 170]);
+  circle(930, 330, 250, primary, 3);
+  if (/rocket/i.test(prompt)) {
+    // A simple rocket: body, nose, fins, flame.
+    rect(1120, 120, 34, 90, surface, 14);
+    for (let k = 0; k < 30; k += 1) rect(1120 + Math.floor(k / 2), 120 - k, 34 - k, 1, primary);
+    rect(1108, 185, 14, 30, primary, 4);
+    rect(1152, 185, 14, 30, primary, 4);
+    circle(1137, 225, 12, accent);
+  }
+  // Next section: three cards.
+  rect(0, 580, W, 140, surface);
+  for (let i = 0; i < 3; i += 1) {
+    rect(60 + i * 400, 605, 360, 100, bg, 16);
+    rect(84 + i * 400, 628, 40, 40, accent, 20);
+    rect(140 + i * 400, 632, 200, 12, text, 6);
+    rect(140 + i * 400, 656, 160, 10, text, 5);
+  }
+  return PNG.sync.write(png);
+}
+
+/** The vision build's optional extra Imagine art: one decorative illustration placed in the second section. */
+export function withFakeAsset(out, concept) {
+  const html = out.html.replace(/(<section\b[^>]*>)([\s\S]*?<section\b[^>]*>)/, (all, first, rest) => `${first}${rest}<img class="deco-art" src="@img:art-1" alt="">`);
+  return {
+    ...out,
+    html,
+    css: `${out.css}\n.deco-art{display:block;width:min(200px,40vw);height:auto;margin:0 auto 1.5rem;border-radius:50%}`,
+    assets: [{ name: "art-1", prompt: `a flat decorative illustration for “${concept}”: simple geometric shapes in the brand colors`, aspect: "1:1" }],
+  };
 }

@@ -14,7 +14,7 @@
  * review) so the validators are exercised.
  */
 import http from "node:http";
-import { fakeBrief, fakeDesign, fakeEdit } from "./fake-custom-design.mjs";
+import { fakeBrief, fakeDesign, fakeEdit, fakeMockupPng, withFakeAsset } from "./fake-custom-design.mjs";
 
 const PORT = Number(process.env.PORT ?? 9999);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -390,8 +390,36 @@ http
     req.on("end", async () => {
       try {
         const json = JSON.parse(body || "{}");
+        // Grok Imagine as the designer: the homepage design mockup (generations, or edits from the logo).
+        // FAKE_IMAGINE=fail answers 500 (the custom look falls back to the text-brief design).
+        if ((req.url.endsWith("/images/generations") || req.url.endsWith("/images/edits")) && /website homepage design/i.test(json.prompt ?? "")) {
+          await sleep(2000);
+          if (process.env.FAKE_IMAGINE === "fail") {
+            log("imagine mockup", "FAIL (FAKE_IMAGINE=fail)");
+            res.writeHead(500, { "content-type": "application/json" });
+            res.end(JSON.stringify({ error: "fake imagine failure" }));
+            return;
+          }
+          const bytes = await fakeMockupPng(json.prompt ?? "");
+          log("imagine mockup", req.url.endsWith("/edits") ? "edits (logo)" : "generations", json.model, json.aspect_ratio, json.resolution, `${(json.prompt ?? "").length} chars`, /rocket/i.test(json.prompt ?? "") ? "with rocket" : "");
+          res.writeHead(200, { "content-type": "application/json" });
+          res.end(JSON.stringify({ data: [{ b64_json: bytes.toString("base64") }] }));
+          return;
+        }
+        if (req.url.endsWith("/images/edits")) {
+          res.writeHead(400, { "content-type": "application/json" });
+          res.end(JSON.stringify({ error: "fake: edits only for mockups" }));
+          return;
+        }
         if (req.url.endsWith("/images/generations")) {
           await sleep(1500);
+          if (/Illustration \/ artwork for a website section/.test(json.prompt ?? "")) {
+            const art = await photoFor(json.prompt ?? "", false);
+            log("imagine art", (json.prompt ?? "").slice(0, 80));
+            res.writeHead(200, { "content-type": "application/json" });
+            res.end(JSON.stringify({ data: [{ b64_json: art.toString("base64") }] }));
+            return;
+          }
           if (/no text|letters|logos/i.test(json.prompt) === false) log("WARNING: image prompt without text/logo guard");
           if (/morgan|reddy/i.test(json.prompt)) log("WARNING: business name in image prompt");
           const wide = /16:9|1536x1024|4:3/.test(`${json.aspect_ratio ?? ""}${json.size ?? ""}`);
@@ -443,10 +471,19 @@ http
           await sleep(3000);
           out = fakeDesign(system, user, process.env.FAKE_CUSTOM === "broken-always" ? "broken" : "ok");
           log("custom repair", process.env.FAKE_CUSTOM === "broken-always" ? "still broken" : "fixed", out.html.length);
+        } else if (system.includes("MATCH THE DESIGN MOCKUP")) {
+          // The vision build from the Imagine mockup (the image must be attached).
+          const images = (Array.isArray(userContent) ? userContent : []).filter((p) => p?.type === "image_url").length;
+          if (process.env.FAKE_CUSTOM === "slow") await sleep(180_000);
+          await sleep(5000);
+          const mode = /^broken/.test(process.env.FAKE_CUSTOM ?? "") ? "broken" : process.env.FAKE_CUSTOM === "lowcontrast" ? "lowcontrast" : "ok";
+          const concept = (user.match(/"concept":"([^"]+)"/) ?? [])[1] ?? "Signature";
+          out = withFakeAsset(fakeDesign(system, user, mode), concept);
+          log("custom build from mockup", `${images} image(s) attached`, mode, out.html.length);
         } else if (system.includes("Design this homepage FROM SCRATCH")) {
           if (process.env.FAKE_CUSTOM === "slow") await sleep(180_000);
           await sleep(5000);
-          out = fakeDesign(system, user, /^broken/.test(process.env.FAKE_CUSTOM ?? "") ? "broken" : "ok");
+          out = fakeDesign(system, user, /^broken/.test(process.env.FAKE_CUSTOM ?? "") ? "broken" : process.env.FAKE_CUSTOM === "lowcontrast" ? "lowcontrast" : "ok");
           log("custom design", process.env.FAKE_CUSTOM ?? "ok", out.html.length);
         } else if (system.includes("website wizard")) out = { patch: { what: "Dog grooming salon", industry: "Other" }, choices: ["Prairie Paws", "Happy Tails OKC", "Bark & Bath"] };
         else if (system.includes("Propose THREE bold")) {
@@ -487,7 +524,9 @@ http
         } else if (system.includes("Rate EVERY photo as a homepage hero")) {
           // The hero quality gate. Like a model looking at each photo, rate it from what it shows (the caption):
           // unappealing / off-topic subjects low, attractive on-topic scenes high. FAKE_RATING=none: no answer.
-          const captions = (json.messages[0].content ?? []).filter((p) => p?.type === "text" && /^Photo \d+/.test(p.text)).map((p) => p.text.match(/"(.*)"/)?.[1] ?? "");
+          const captionParts = (json.messages[0].content ?? []).filter((p) => p?.type === "text" && /^Photo \d+/.test(p.text));
+          const captions = captionParts.map((p) => p.text.match(/"(.*)"/)?.[1] ?? "");
+          const own = captionParts.map((p) => /the business's own site/.test(p.text));
           const BAD = /\b(airport|runway|antenna|library|reading|sitting|taking notes|desks?|meeting|gravel|parking|lot|rv park|utility|pole|wires|clutter|dirty|clog|leak|pipes under|drain cleaning|storage|dumpster|sign|logo|menu|plaque|seal|truck wrap|van)\b/i;
           const GOOD = /\b(downtown|historic|main street|courthouse|landmark|aerial|skyline|depot|station|brick|park|festival|night|dusk|dining|plated|dish|patio|pasta|burger|steak|bathroom|kitchen remodel|finished|technician|modern|renovated|interior|team)\b/i;
           out = process.env.FAKE_RATING === "none" ? {} : {
@@ -495,7 +534,9 @@ http
               const bad = BAD.test(c);
               const good = GOOD.test(c);
               const rating = bad ? 3 : good ? (/\b(night|dusk|aerial|plated|finished|renovated)\b/i.test(c) ? 9 : 8) : 5;
-              return { n: i + 1, rating, subject: c.replace(/,?\s*Pauls Valley,?( Oklahoma)?/gi, "").trim().toLowerCase().slice(0, 40) || "photo", note: bad ? "unappealing / off-topic hero" : good ? "attractive on-topic scene" : "ordinary", sign: /\b(sign|logo|plaque)\b/i.test(c) };
+              // The business's own ordinary photo is usable (6); a visible stock watermark is flagged.
+              const r = own[i] && !bad ? Math.max(rating, 6) : rating;
+              return { n: i + 1, rating: r, subject: c.replace(/,?\s*Pauls Valley,?( Oklahoma)?/gi, "").trim().toLowerCase().slice(0, 40) || "photo", note: bad ? "unappealing / off-topic hero" : good ? "attractive on-topic scene" : own[i] ? "the business's own, usable" : "ordinary", sign: /\b(sign|logo|plaque)\b/i.test(c), watermark: /\b(watermark|vecteezy|shutterstock|istock|getty)\b/i.test(c) };
             }),
           };
           log("vision rate", captions.map((c, i) => `${i + 1}:${out.photos?.[i]?.rating}`).join(" "));

@@ -50,7 +50,11 @@ const cards = await page.locator("[data-look]").evaluateAll((list) =>
 const site = await browser.newPage({ viewport: { width: 1280, height: 720 }, reducedMotion: "reduce" });
 for (const [i, card] of cards.entries()) {
   await site.goto(`${base}/made/${card.id}`, { waitUntil: "networkidle" });
-  card.heroImage = await site.locator("section").first().locator("img").first().getAttribute("src").catch(() => null);
+  // The Custom Design page's hero is @img:hero wherever its layout puts it; the template looks' is in the first section.
+  const custom = await site.locator("body.custom-look").count();
+  card.heroImage = custom
+    ? await site.locator('img[src$="/img/hero"]').first().getAttribute("src", { timeout: 3000 }).catch(() => null)
+    : await site.locator("section").first().locator("img").first().getAttribute("src").catch(() => null);
   await site.screenshot({ path: join(outDir, `02-look-${i + 1}-top.png`) });
   card.heroType = await site.locator("section").first().getAttribute("class").catch(() => null);
   card.credit = await site.locator(".photo-credit").first().innerText().catch(() => null);
@@ -95,7 +99,8 @@ if (process.env.EXPECT_DISTINCT_HEROES === "1") {
     // The pick's subject, from the server's "[photo] look N "Name": … subject: X" log line (SERVER_LOG=<file>).
     const log = process.env.SERVER_LOG ? readFileSync(process.env.SERVER_LOG, "utf8") : "";
     const line = log.split("\n").reverse().find((l) => l.startsWith("[photo] look") && l.includes(`"${card.name}"`));
-    card.pickedSubject = line?.match(/picked for this look: .*?subject: ([a-z ]+)/)?.[1]?.trim() ?? null;
+    // The business's own photo (preferred over Google since round 6) has no Google subject: it counts as its own.
+    card.pickedSubject = line?.match(/picked for this look: .*?subject: ([a-z ]+)/)?.[1]?.trim() ?? (line?.includes("hero = your site") ? `own photo ${card.heroSha1}` : null);
   }
   const subjects = cards.map((c) => c.pickedSubject);
   distinct = { hashes, subjects, ok: new Set(hashes).size === cards.length && new Set(subjects).size === cards.length && !subjects.includes("sign") && !subjects.includes(null) };
