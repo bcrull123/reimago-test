@@ -43,7 +43,7 @@ const cards = await page.locator("[data-look]").evaluateAll((list) =>
     name: card.querySelector("h3")?.textContent,
     photos: card.querySelector("[data-look-photos]")?.textContent,
     layout: card.querySelector("[data-look-layout]")?.textContent,
-    trace: card.querySelector("[data-look-trace]")?.textContent?.slice(0, 1500),
+    trace: card.querySelector("[data-look-trace]")?.textContent?.slice(0, 4000),
   })),
 );
 // Hero image of each look.
@@ -82,7 +82,27 @@ const sideBySide = async (files, name, width) => {
 };
 await sideBySide(cards.map((_, i) => `02-look-${i + 1}-top.png`), "05-tops-side-by-side.png", 2400);
 await sideBySide(cards.map((_, i) => `04-look-${i + 1}-full.png`), "06-full-pages-side-by-side.png", 1500);
-const summary = { target, note, formcarryCalls: sent.length, cards };
+// EXPECT_DISTINCT_HEROES=1 (round 1 photo check): three different hero pictures, none of them a sign.
+let distinct;
+if (process.env.EXPECT_DISTINCT_HEROES === "1") {
+  const { createHash } = await import("node:crypto");
+  const hashes = [];
+  for (const card of cards) {
+    const url = card.heroImage ? new URL(card.heroImage, `${base}/made/${card.id}`).href : "";
+    const bytes = url ? Buffer.from(await (await fetch(url)).arrayBuffer()) : Buffer.alloc(0);
+    hashes.push(createHash("sha1").update(bytes).digest("hex").slice(0, 12));
+    card.heroSha1 = hashes.at(-1);
+    // The pick's subject, from the server's "[photo] look N "Name": … subject: X" log line (SERVER_LOG=<file>).
+    const log = process.env.SERVER_LOG ? readFileSync(process.env.SERVER_LOG, "utf8") : "";
+    const line = log.split("\n").reverse().find((l) => l.startsWith("[photo] look") && l.includes(`"${card.name}"`));
+    card.pickedSubject = line?.match(/picked for this look: .*?subject: ([a-z ]+)/)?.[1]?.trim() ?? null;
+  }
+  const subjects = cards.map((c) => c.pickedSubject);
+  distinct = { hashes, subjects, ok: new Set(hashes).size === cards.length && new Set(subjects).size === cards.length && !subjects.includes("sign") && !subjects.includes(null) };
+  console.log(`[check] distinct non-sign heroes: ${distinct.ok ? "PASS" : "FAIL"} ${JSON.stringify(distinct)}`);
+  if (!distinct.ok) process.exitCode = 1;
+}
+const summary = { target, note, formcarryCalls: sent.length, distinct, cards };
 writeFileSync(join(outDir, "summary.json"), JSON.stringify(summary, null, 2));
 console.log(JSON.stringify(summary, null, 2));
 await browser.close();

@@ -193,7 +193,7 @@ function plan(facts) {
 function imageQueriesFor(facts) {
   const name = facts.business_name ?? "";
   const town = name.match(/^(?:City of )?([A-Z][A-Za-z ]+),\s*(Oklahoma|OK)$/);
-  if (town) return [`downtown ${town[1]} Oklahoma brick streets`, `${town[1]} Oklahoma landmark`];
+  if (town) return [`downtown ${town[1]} Oklahoma`, `${town[1]} historic district`, `${town[1]} Oklahoma main street`];
   const where = city(facts);
   const kind = kindOf(facts).toLowerCase();
   return [`${kind} ${where}`.trim(), `${kind} at work`];
@@ -469,6 +469,11 @@ http
           const n = (Array.isArray(json.messages?.[0]?.content) ? json.messages[0].content : []).filter((p) => p?.type === "image_url").length;
           const all = Array.from({ length: n }, (_, i) => i + 1);
           out = { good: process.env.FAKE_GOOGLE_VISION === "none" ? [] : process.env.FAKE_GOOGLE_VISION === "reverse" ? all.reverse() : all };
+          // Proactive searches also ask for a subject per photo: read it off the caption, like a model would see it.
+          if (system.includes("Also describe EVERY photo")) {
+            const captions = (json.messages[0].content ?? []).filter((p) => p?.type === "text" && /^Photo \d+:/.test(p.text)).map((p) => p.text.match(/"(.*)"/)?.[1] ?? "");
+            out.photos = captions.map((c, i) => ({ n: i + 1, subject: c.replace(/,?\s*Pauls Valley,?( Oklahoma)?/gi, "").replace(/^\s*-\s*/, "").trim().toLowerCase() || "town view", sign: /\b(sign|city limits)\b/i.test(c) }));
+          }
           log("vision google", `${n} pictures`, "->", out.good.join(","));
         } else if (system.includes("senior art director reviewing")) {
           await sleep(3000);

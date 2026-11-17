@@ -39,9 +39,25 @@ const TOWN = [
   img("Pauls Valley water tower", `${W}/thumb/8/80/Pauls_Valley_water_tower%2C_August_2019.jpg/1920px-Pauls_Valley_water_tower%2C_August_2019.jpg`, 1920, 1440, "https://commons.wikimedia.org/wiki/File:Pauls_Valley_water_tower,_August_2019.jpg", "commons.wikimedia.org", "Wikimedia Commons"),
 ];
 
+// Round 1 with no note (the planner's proactive searches): like real Google, the town's name brings back its
+// welcome signs (the same sign at two sizes, one titled "gateway"), mixed with downtown, depot and a dim park.
+const T = "https://thumb.wikimedia.org/wikipedia/commons/thumb";
+const SIGN1 = (w, h, title) => img(title, `${T}/e/e9/Grandfield%2C_Oklahoma_Welcome_sign_east_of_town_January_7%2C_2016.jpg/${w}px-Grandfield%2C_Oklahoma_Welcome_sign_east_of_town_January_7%2C_2016.jpg`, w, h, "https://commons.wikimedia.org/wiki/File:Grandfield,_Oklahoma_Welcome_sign_east_of_town_January_7,_2016.jpg", "commons.wikimedia.org", "Wikimedia Commons");
+const SIGN2 = img("Pauls Valley welcome sign, Established 1857", `${T}/5/50/Welcome_Sign_Pawhuska_Oklahoma_2024.jpg/1920px-Welcome_Sign_Pawhuska_Oklahoma_2024.jpg`, 1920, 1280, "https://commons.wikimedia.org/wiki/File:Welcome_Sign_Pawhuska_Oklahoma_2024.jpg", "commons.wikimedia.org", "Wikimedia Commons");
+const SIGN3 = img("Pauls Valley city limits", `${T}/2/2a/Municipal_welcome_sign%2C_Muldrow%2C_Oklahoma%2C_2023-09-11%2C_TJ_01.jpg/1920px-Municipal_welcome_sign%2C_Muldrow%2C_Oklahoma%2C_2023-09-11%2C_TJ_01.jpg`, 1920, 1099, "https://commons.wikimedia.org/wiki/File:Municipal_welcome_sign,_Muldrow,_Oklahoma,_2023-09-11,_TJ_01.jpg", "commons.wikimedia.org", "Wikimedia Commons");
+const HIST = img("Pauls Valley Historic District", `${W}/3/37/Pauls_Valley_Historic_District.jpg`, 1864, 1398, "https://commons.wikimedia.org/wiki/File:Pauls_Valley_Historic_District.jpg", "commons.wikimedia.org", "Wikimedia Commons");
+const NIGHT = img("Downtown Pauls Valley at night", `${T}/c/ce/Oklahoma_City%27s_downtown_at_night.jpg/1920px-Oklahoma_City%27s_downtown_at_night.jpg`, 1920, 1440, "https://commons.wikimedia.org/wiki/File:Oklahoma_City%27s_downtown_at_night.jpg", "commons.wikimedia.org", "Wikimedia Commons");
+const PARK = img("Wacker Park, Pauls Valley", `${T}/0/0d/Park_Bench_at_Night_%28279616294%29.jpg/1920px-Park_Bench_at_Night_%28279616294%29.jpg`, 1920, 1280, "https://commons.wikimedia.org/wiki/File:Park_Bench_at_Night_(279616294).jpg", "commons.wikimedia.org", "Wikimedia Commons");
+const BRICK_MAIN = { ...BRICKS[3], title: "Brick main street, downtown Pauls Valley" };
+const ROUND1 = {
+  "downtown pauls valley oklahoma": [SIGN1(1920, 1440, "Welcome to Pauls Valley sign"), NIGHT, HIST, SIGN2],
+  "pauls valley historic district": [HIST, SIGN1(1280, 960, "Pauls Valley, Oklahoma - gateway"), TOWN[0], PARK],
+  "pauls valley oklahoma main street": [SIGN3, BRICK_MAIN, TOWN[1], PARK],
+};
+
 function results(q) {
-  const s = q.toLowerCase();
-  const list = /brick/.test(s) ? BRICKS : /pauls valley/.test(s) ? TOWN : [];
+  const s = q.toLowerCase().trim();
+  const list = ROUND1[s] ?? (/brick/.test(s) ? BRICKS : /pauls valley/.test(s) ? TOWN : []);
   return list.map((x, i) => ({ ...x, thumbnailUrl: "https://encrypted-tbn0.gstatic.com/images?q=tbn:mock", googleUrl: "https://www.google.com/imgres", position: i + 1 }));
 }
 
