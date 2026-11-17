@@ -1,5 +1,6 @@
 /** Shared (client + server) shapes for the live multi-page preview. */
 import type { PhotoCredit } from "./web-photo.ts";
+import type { CustomBrief } from "./custom-design.ts";
 import type { SiteArt } from "./site-art.ts";
 import type { TemporaryPhoto } from "./google-photo.ts";
 import type { LookTune } from "./look-edit.ts";
@@ -123,6 +124,8 @@ export type DesignDirection = {
   headline: string;
   /** Why this direction fits the business. */
   rationale: string;
+  /** The from-scratch look ("Custom Design"): Grok's creative brief; its homepage is freeform HTML/CSS (custom-design.ts). */
+  custom?: { brief: CustomBrief; failed?: string };
 };
 
 export const SECTION_TYPES = [
@@ -245,6 +248,8 @@ export type LookInfo = {
   aiError?: string;
   /** The AI homepage was used, but some of its sections were dropped (first reasons). */
   aiWarning?: string;
+  /** The from-scratch look: its concept, and whether it passed (else the template look is shown and why). */
+  custom?: { concept: string; status: "ok" | "repaired" | "fallback"; note?: string; stripped?: string[]; repaired?: string[] };
   /** Bumped after "Retry with AI" so thumbnails reload. */
   rev?: number;
   /** An edit of an earlier look ("Night Brick, lighter"): the look's unchanged name is `name`. */

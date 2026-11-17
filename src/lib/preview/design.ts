@@ -3,6 +3,7 @@
  * the normalizer that turns an AI concept into something the renderer can trust.
  * Shared by server code and node tests (relative imports only).
  */
+import { cleanBrief, fallbackBrief } from "./custom-design.ts";
 import { requestHints, sceneToFind } from "./owner-request.ts";
 import { seeded } from "./look-variety.ts";
 import { ARCHETYPE_LABEL } from "./archetype-label.ts";
@@ -296,7 +297,18 @@ export function normalizeDirection(raw: unknown, index: number, facts: Pick<Site
     footer: oneOf(r.footer, ["columns", "minimal", "statement"] as const, preset.footer),
     headline: clip(r.headline, 110),
     rationale: clip(r.rationale, 300),
+    custom: customOf(r.custom, clip(r.name, 40), readablePalette(r.palette as Partial<SitePalette> | undefined, fallbackPalette)),
   };
+}
+
+/** The from-scratch look's brief, carried through the browser between steps (re-cleaned on every read). */
+function customOf(raw: unknown, name: string, palette: SitePalette): DesignDirection["custom"] {
+  if (!raw || typeof raw !== "object") return undefined;
+  const c = raw as { brief?: unknown; failed?: unknown };
+  if (!c.brief || typeof c.brief !== "object") return undefined;
+  const brief = cleanBrief(c.brief, fallbackBrief("general", name, palette));
+  const by = (c.brief as { by?: unknown }).by === "ai" ? "ai" : "fallback";
+  return { brief: { ...brief, by }, failed: typeof c.failed === "string" ? c.failed.slice(0, 300) : undefined };
 }
 
 export function defaultImagery(archetype: Archetype): string {

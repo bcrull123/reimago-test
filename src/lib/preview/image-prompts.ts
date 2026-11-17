@@ -27,7 +27,28 @@ const TRADES: [RegExp, string][] = [
   [/paint/i, "painting company"],
   [/pest|exterminat/i, "pest control company"],
   [/construct|remodel|contractor|builder/i, "construction company"],
+  [/start(?:ing)?\s+(?:a|your)\s+(?:own\s+)?business|startups?\b|start-ups?\b|founders?\b|entrepreneur|incubator|accelerator|coworking|co-working/i, "community for startup founders and small-business owners"],
 ];
+
+/** Scraped "services" that are really merch, shop items or page furniture ("Bob.me Golf Hat", "Specs", "Report"). */
+const NOT_A_SERVICE = /\b(?:hats?|caps?|shirts?|t-shirts?|tees?|hoodies?|mugs?|stickers?|merch(?:andise)?|swag|gift\s+cards?|specs?|description|report|forum|login|log\s+in|sign\s+(?:in|up)|cart|checkout|terms|privacy|cookies?|reviews?|faqs?|home|menu|search)\b/i;
+
+/** Words of the business name ("bob", "me" for "Bob.me"): never evidence a photo is about the business. */
+export function nameWords(facts: Pick<SiteFacts, "name" | "host">): string[] {
+  const host = (facts.host || "").replace(/^www\./, "").replace(/\.[a-z]{2,}$/i, "");
+  return [...new Set(`${facts.name || ""} ${host}`.toLowerCase().split(/[^a-z0-9]+/).filter((w) => w.length >= 2))];
+}
+
+/** The site's real services: no merch/shop items, no page furniture, none that are just the brand name + a product. */
+export function realServices(facts: Pick<SiteFacts, "services" | "name" | "host">): string[] {
+  const brand = nameWords(facts);
+  return facts.services.filter((s) => {
+    const words = s.toLowerCase().split(/[^a-z0-9]+/).filter(Boolean);
+    if (!words.length || NOT_A_SERVICE.test(s)) return false;
+    // "Bob.me Golf Hat": the brand plus a product name is a shop item, not what the business does.
+    return !(words.some((w) => brand.includes(w)) && words.length <= 4);
+  });
+}
 
 /** "City of Pauls Valley": a town's own site, where the place itself is the subject. */
 export function isCivic(facts: Pick<SiteFacts, "name" | "address">): boolean {
@@ -41,9 +62,10 @@ export function isCivic(facts: Pick<SiteFacts, "name" | "address">): boolean {
 export function businessKind(facts: SiteFacts): string {
   if (isCivic(facts)) return "small-town city website";
   if (facts.industry) return facts.industry;
-  const text = [facts.name, facts.tagline, facts.description, ...facts.services.slice(0, 6)].filter(Boolean).join(" ");
+  const services = realServices(facts);
+  const text = [facts.name, facts.tagline, facts.description, ...services.slice(0, 6)].filter(Boolean).join(" ");
   const trade = TRADES.find(([pattern]) => pattern.test(text));
-  return trade?.[1] ?? (facts.services[0] || "local business");
+  return trade?.[1] ?? (services[0] || "local business");
 }
 
 function withoutName(text: string, facts: SiteFacts): string {
