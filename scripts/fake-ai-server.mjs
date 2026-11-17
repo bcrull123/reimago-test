@@ -180,6 +180,8 @@ function plan(facts) {
     // Like the real planner: the photo subject it read from the note. FAKE_PHOTO_SUBJECT stands in for that reading
     // (to test the planner path with notes the wording rules can't read); otherwise "".
     photoSubject: process.env.FAKE_PHOTO_SUBJECT ?? "",
+    // FAKE_PHOTO_INTENT=keep|find|none: the planner's reading of whether the subject is the owner's own picture.
+    photoIntent: process.env.FAKE_PHOTO_INTENT ?? (process.env.FAKE_PHOTO_SUBJECT ? "find" : "none"),
   };
 }
 
@@ -429,6 +431,11 @@ http
           // FAKE_SHAPE=alt answers in shapes real models drift into (type under "section"/"component",
           // CamelCase names, fields nested under "props", "headline"/"button" aliases) to exercise the tolerant reader.
           if (process.env.FAKE_SHAPE === "alt") out = altShape(out);
+        } else if (system.includes("asked us to keep")) {
+          // Vision pick for "keep the X" when no picture on the site is named for it. FAKE_VISION_INDEX (1-based, 0 = none).
+          const pictures = (Array.isArray(json.messages?.[0]?.content) ? json.messages[0].content : []).filter((p) => p?.type === "image_url").length;
+          out = { index: Number(process.env.FAKE_VISION_INDEX ?? 0) };
+          log("vision keep", `${pictures} pictures`, "->", out.index);
         } else if (system.includes("senior art director reviewing")) {
           await sleep(3000);
           out = critique(user, hasImage(userContent));

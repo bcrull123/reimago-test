@@ -132,6 +132,37 @@ Examples: Bob's "put a picture of the red bricks as the background" gives "the r
 3. **An AI photo of it.** It is generated even when the site has enough photos. The hero prompt starts "The photo MUST clearly show: the downtown brick streets in Pauls Valley, Oklahoma. Make … the main subject" and adds photorealistic, golden-hour and "no text". For trades it also says "not plumbing company tools or equipment". The look's own hero idea is used only if it already shows the scene. The business name is removed, but the town is kept.
 4. **Nothing found** (for example, mock mode with no web match). The hero gets a plain background, never an unrelated scraped photo.
 
+**"Keep the rocket": the owner's own picture.** On bob.me, Bob wrote "Keep the rocket" and every look got a different Wikimedia "rocket" (the Success Rockets logo, the Tesla Roadster in orbit, a NASA lab photo). His rocket is a 440×360 transparent PNG illustration: a pink rocket with people and clouds, in an Elementor image box on the homepage. Its alt text is "Blast off" and its title and file name are `rocket_transparent-bg…png`. It was missed for two reasons: the old scrape dropped images under 640 px, and "keep" was read as "find a photo of".
+
+How a keep request is read:
+- `requestedPhoto()` (`owner-request.ts`) returns `{ subject, intent }`.
+- `keep` is detected from words like keep, retain, preserve, reuse, "don't lose", "don't remove", leave, "still use", "stick with", "the same X", "our existing X", "X from my site", "our X" / "my X" (but not "our town"/"our city"), and "I like my X, keep it".
+- The planner also returns `photoIntent: "keep" | "find" | "none"`. A keep reading from either side wins, because keep never fetches anything from outside the site.
+- "keep it simple", "keep the same colors" and "keep the logo" are not photo subjects.
+- `sceneToFind()` gives image prompts and look directions only the *find* subjects. For a keep subject, the prompts also leave out the owner's words, so no AI rocket gets painted.
+
+Where kept art can come from: only the scraped site. The scrape now keeps `facts.siteArt` (`site-art.ts`): every picture on the homepage first, then the other scraped pages. Each entry carries the words that describe it:
+- `<img>`: alt, title, aria-label, class, id, the file name (with CDN hashes and size suffixes removed) and the srcset file names;
+- `<picture><source>`;
+- inline SVG: title, desc, ids, classes, data-name (drawings 64 px or larger);
+- CSS backgrounds: inline styles, data-bg, `<style>` blocks and the site's stylesheets;
+- og:image and the logo.
+
+`matchSiteArt()` needs the subject's words in those words. If nothing matches and AI is on, `keep-art.server.ts` shows up to 8 of the site's pictures to the vision model (same model as the rest, or `PREVIEW_VISION_MODEL`), as data URLs, and asks which one shows the subject. The result is cached per site and subject, so all three looks keep the same picture.
+
+How it is shown: the same picture is the hero of every look, in that look's treatment. Transparent PNGs (`analyzeLogo` reports a transparent background), drawings on a flat color and SVGs are marked `cutout`. They are never cropped full-bleed or duotoned; `arrangeSections(…, cutout)` shows them whole on a color panel (`x-cutout`):
+- caption: a light panel;
+- collage: a tilted white card on the brand color block;
+- cinematic: a dark stage with an accent glow.
+
+The card's layout line says "your art shown whole". Inline and remote SVGs are sanitized (`sanitizeSvg`: no scripts, handlers, foreignObject or outside links). `/made/<id>/img/<name>` now also serves `image/svg+xml`, with a CSP that blocks scripts.
+
+On the card:
+- found: "Photo: kept your rocket from your site, as you asked";
+- not found: "Couldn't find a rocket on your site to keep, and no web or AI rocket was swapped in · …". The hero then falls back to the normal choice (your site's best photo, else the look's own AI photo, which never shows the kept subject).
+
+The trace says how the picture was matched (the words, or AI vision) and where it was on the site.
+
 **No subject named: hero suitability.** Bob asked why pipes showed up on a town website. With no subject, the hero used to be the *largest* scraped photo. Now `heroSuitability()` (`web-photo.ts`) scores each scraped photo from its alt text, file name and URL. There is no extra AI call.
 - **Preferred:** places and landmarks (downtown, streets, parks, lakes, courthouse, historic, storefront, exterior, welcome sign, depot, museum …), then people and events.
 - **Demoted everywhere:** logos, icons, documents/PDFs, forms, flyers, maps, agendas, bids, headshots/staff portraits and placeholders.
@@ -310,6 +341,7 @@ The old domain step (step 12) is gone. Wizard answers are kept in memory only (s
 | **`PREVIEW_STEP_BUDGET_MS`** | no | Time budget per step (default `85000`). |
 | `PREVIEW_MOCK` | no | `1` = no AI calls; looks are composed from the facts with three preset directions, labeled MOCK PREVIEW. |
 | `DATABASE_URL` | recommended in production | Stores preview sites (`preview_sites`) and their images (`preview_images`) in Postgres, created on first use. Without it, files go to `PREVIEW_STORE_DIR` and disappear on serverless restarts. |
+| **`PREVIEW_VISION_MODEL`** | no | Model for the "keep" vision fallback (which of the site's pictures shows the subject). Defaults to the main AI model. |
 | **`PREVIEW_WEB_PHOTOS`** | no | `0` turns off the free-license web photo search (Openverse, Wikimedia Commons) used when the owner's note asks for a photo of something. On by default, also in mock mode. |
 | `PREVIEW_STORE_DIR` | no | File storage folder when there is no `DATABASE_URL` (default: OS temp dir). |
 | `CURSOR_API_KEY` | no | When set, "Send to Cursor" starts a Cursor agent with the preview links; otherwise the button downloads a brief. |
@@ -324,7 +356,7 @@ The old domain step (step 12) is gone. Wizard answers are kept in memory only (s
 - `src/lib/preview/theme.ts`: the design-system CSS. `legacy-theme.ts` keeps old (v2) previews rendering.
 - `src/lib/preview/images.server.ts`: real-photo selection/storage and generated images.
 - `src/lib/preview/look-variety.ts`: makes the three looks different (hero treatment, header, buttons, footer, section recipe), plus the distinctness check.
-- `src/lib/preview/image-prompts.ts`: image prompts (the owner's scene first) and the card's photo line. `web-photo.ts` handles place, scene words, search words, matching, licenses, ranking and hero suitability of scraped photos (pure). `web-photo.server.ts` runs the Openverse and Commons search and the download.
+- `src/lib/preview/image-prompts.ts`: image prompts (the owner's scene first) and the card's photo line. `web-photo.ts` handles place, scene words, search words, matching, licenses, ranking and hero suitability of scraped photos (pure). `web-photo.server.ts` runs the Openverse and Commons search and the download. `site-art.ts` collects and matches all of a site's imagery and sanitizes inline SVG (pure). `keep-art.server.ts` finds the owner's own picture to keep (words, then AI vision) and checks whether it is a cutout.
 - `src/lib/preview/critique.server.ts`: screenshot + critique-and-revise.
 - `src/lib/preview/builder.server.ts`: plan, directions, `buildLook`, `finishSite`.
 - `src/lib/preview.functions.ts`: server functions `previewRead`, `previewFromBrief`, `previewDirections`, `previewLook`, `previewFinish`.
@@ -346,7 +378,7 @@ XAI_API_KEY=fake AI_BASE_URL=http://localhost:9999/v1 IMAGE_BASE_URL=http://loca
 CHROME_PATH=/usr/bin/google-chrome node scripts/live-preview-e2e.mjs https://www.morganplumbingokc.com/ live-preview-shots/morgan-ai 1
 ```
 
-`FAKE_PHOTO_SUBJECT="red brick streets downtown"` makes the fake planner return that `photoSubject`, to test the planner path. For example, `NOTE="it would be great to see those old red bricks downtown" node scripts/note-photo-e2e.mjs https://www.paulsvalley.com/ <outDir>`. To simulate real-API failures with the fake server, set `FAKE_FAIL=slow|length|badjson|reject-reasoning` (add `FAKE_FAIL_ALL=1` to make the fallback model fail too). `scripts/live-preview-retry-e2e.mjs` records each card's error and can click "Retry with AI". `FAKE_SHAPE=alt` answers in drifted shapes (type under `section`/`component`, CamelCase names, nested `props`). `scripts/create-wizard-domain-e2e.mjs` screenshots the domain-first wizard steps. `scripts/preview-picture-e2e.mjs reimagine|wizard <url|-> <outDir> [lookIndex]` does the following:
+`FAKE_PHOTO_INTENT=keep|find|none` sets the fake planner's `photoIntent`, and `FAKE_VISION_INDEX=<n>` sets its answer to the keep vision question (1-based; 0 = none). `FAKE_PHOTO_SUBJECT="red brick streets downtown"` makes the fake planner return that `photoSubject`, to test the planner path. For example, `NOTE="it would be great to see those old red bricks downtown" node scripts/note-photo-e2e.mjs https://www.paulsvalley.com/ <outDir>`. To simulate real-API failures with the fake server, set `FAKE_FAIL=slow|length|badjson|reject-reasoning` (add `FAKE_FAIL_ALL=1` to make the fallback model fail too). `scripts/live-preview-retry-e2e.mjs` records each card's error and can click "Retry with AI". `FAKE_SHAPE=alt` answers in drifted shapes (type under `section`/`component`, CamelCase names, nested `props`). `scripts/create-wizard-domain-e2e.mjs` screenshots the domain-first wizard steps. `scripts/preview-picture-e2e.mjs reimagine|wizard <url|-> <outDir> [lookIndex]` does the following:
 - submits the form and checks that nothing reaches Formcarry before a look is chosen;
 - double-clicks **Choose this look** on the given look (default 1, the second);
 - checks that exactly one request is sent;
