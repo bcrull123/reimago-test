@@ -240,6 +240,24 @@ p{margin:0 0 1em}
 .s-hero-type.v-collage{overflow:hidden}
 .s-hero-type.v-collage::before{content:"";position:absolute;right:-10vw;top:12%;width:44vw;height:76%;background:var(--accent);border-radius:56px;transform:rotate(-7deg);z-index:0}
 .s-hero-type.v-collage .wrap{position:relative;z-index:1}
+.s-hero-photo.v-poster{min-height:min(96vh,940px);align-items:flex-end;text-align:center;padding-bottom:clamp(3.5rem,8vw,6.5rem)}
+.s-hero-photo.v-poster::after{background:linear-gradient(0deg,rgba(0,0,0,.84) 0%,rgba(0,0,0,.5) 34%,rgba(0,0,0,.08) 70%,rgba(0,0,0,.25) 100%)}
+.s-hero-photo.v-poster .hero-copy{max-width:min(980px,100%);margin:0 auto}
+.s-hero-photo.v-poster h1{max-width:none;font-size:clamp(3.2rem,8.4vw,7.6rem);line-height:.94;letter-spacing:-.01em}
+.s-hero-photo.v-poster .lead{margin-left:auto;margin-right:auto}
+.s-hero-photo.v-poster .actions{justify-content:center}
+.s-hero-photo.v-poster .bgimg img{object-position:50% 60%}
+.s-hero-type.v-panorama{padding-bottom:0}
+.s-hero-type.v-panorama h1{font-size:clamp(3rem,7.6vw,6.8rem);max-width:15ch;line-height:.96}
+.s-hero-type.v-panorama .strip{margin-top:clamp(2rem,4vw,3rem);margin-left:calc(50% - 50vw);margin-right:calc(50% - 50vw)}
+.s-hero-type.v-panorama .strip .media{aspect-ratio:21/8;border-radius:0;box-shadow:none}
+.s-hero-split.v-framed .grid{grid-template-columns:1.3fr .7fr;gap:0}
+.s-hero-split.v-framed .frame{order:-1;margin:0}
+.s-hero-split.v-framed .frame::before{display:none}
+.s-hero-split.v-framed .frame>.media{aspect-ratio:5/4;border-radius:var(--radius);box-shadow:0 40px 80px -40px rgba(0,0,0,.5)}
+.s-hero-split.v-framed .hero-copy{position:relative;z-index:2;margin-left:-18%;background:var(--bg);padding:clamp(1.8rem,3.5vw,3rem);border-radius:var(--radius);box-shadow:0 30px 70px -30px rgba(0,0,0,.35);border-top:6px solid var(--accent)}
+.s-hero-split.v-framed .badge{display:none}
+@media (max-width:900px){.s-hero-split.v-framed .grid{grid-template-columns:1fr}.s-hero-split.v-framed .hero-copy{margin:-3rem 1rem 0}}
 @media (max-width:900px){.s-hero-split.v-caption .grid{grid-template-columns:1fr}.s-hero-split.v-collage .frame{margin:1rem}.s-hero-split.v-collage::before{width:90vw;right:-30vw}}
 .s-page-hero{padding:clamp(4rem,8vw,6.5rem) 0 clamp(3rem,6vw,4.5rem)}
 .s-page-hero .grid{display:grid;grid-template-columns:1.2fr .8fr;gap:clamp(2rem,5vw,4rem);align-items:end}

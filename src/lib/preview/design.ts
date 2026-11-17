@@ -4,6 +4,8 @@
  * Shared by server code and node tests (relative imports only).
  */
 import { requestHints, sceneToFind } from "./owner-request.ts";
+import { seeded } from "./look-variety.ts";
+import { ARCHETYPE_LABEL } from "./archetype-label.ts";
 import { ARCHETYPES, MOTIFS, type Archetype, type DesignDirection, type Motif, type SiteFacts, type SitePalette } from "./types.ts";
 
 /** Curated Google Fonts with the exact axis spec that the css2 API accepts (all verified). */
@@ -289,7 +291,7 @@ export function normalizeDirection(raw: unknown, index: number, facts: Pick<Site
     buttons: oneOf(r.buttons, ["pill", "square", "outline"] as const, preset.buttons),
     hero: oneOf(r.hero, ["split", "photo", "type"] as const, preset.hero),
     header: oneOf(r.header, ["light", "dark", "overlay", "center"] as const, preset.header),
-    heroStyle: oneOf<"caption" | "cinematic" | "collage" | "">(r.heroStyle, ["caption", "cinematic", "collage"] as const, "") || undefined,
+    heroStyle: oneOf<"caption" | "cinematic" | "collage" | "poster" | "panorama" | "framed" | "">(r.heroStyle, ["caption", "cinematic", "collage", "poster", "panorama", "framed"] as const, "") || undefined,
     layout: oneOf<"editorial" | "showcase" | "bold" | "">(r.layout, ["editorial", "showcase", "bold"] as const, "") || undefined,
     footer: oneOf(r.footer, ["columns", "minimal", "statement"] as const, preset.footer),
     headline: clip(r.headline, 110),
@@ -314,8 +316,31 @@ export function defaultImagery(archetype: Archetype): string {
   }
 }
 
-/** Three distinct archetypes for a business, picked deterministically (mock mode / AI fallback). */
-export function archetypesFor(facts: Pick<SiteFacts, "industry" | "name" | "host" | "notes" | "brief">, variation: number): Archetype[] {
+/** What a new round should not repeat (read server-side from the looks shown in earlier rounds). */
+export type RoundAvoid = { seed?: number; archetypes?: Archetype[]; names?: string[] };
+
+/**
+ * Three distinct archetypes for a business. Without a seed: deterministic (mock mode / tests). With a seed: picked
+ * at random among the business's five best fits, and a new round prefers archetypes the previous round didn't use.
+ */
+export function archetypesFor(facts: Pick<SiteFacts, "industry" | "name" | "host" | "notes" | "brief">, variation: number, avoid: RoundAvoid = {}): Archetype[] {
+  const order = archetypeOrder(facts);
+  if (!avoid.seed && !avoid.archetypes?.length) {
+    const shift = (variation * 3) % order.length;
+    const rotated = [...order.slice(shift), ...order.slice(0, shift)];
+    return rotated.slice(0, 3);
+  }
+  const rand = seeded(avoid.seed || variation + 1);
+  const fresh = order.filter((a) => !avoid.archetypes?.includes(a));
+  const pool = (fresh.length >= 3 ? fresh : [...fresh, ...order.filter((a) => !fresh.includes(a))]).slice(0, 5);
+  return pool
+    .map((a, i) => ({ a, r: rand() + i * 0.18 }))
+    .sort((x, y) => x.r - y.r)
+    .slice(0, 3)
+    .map((x) => x.a);
+}
+
+function archetypeOrder(facts: Pick<SiteFacts, "industry" | "name" | "host" | "notes" | "brief">): Archetype[] {
   const text = `${facts.industry} ${facts.name} ${facts.notes} ${facts.brief ?? ""}`.toLowerCase();
   let order: Archetype[];
   if (/plumb|hvac|roof|electric|contract|repair|clean|landscap|auto|mechanic|construction|pest|rooter|drain/.test(text)) {
@@ -331,19 +356,9 @@ export function archetypesFor(facts: Pick<SiteFacts, "industry" | "name" | "host
   } else {
     order = ["editorial", "bold-photo", "dark-premium", "warm-craft", "minimal-luxury", "playful"];
   }
-  const shift = (variation * 3) % order.length;
-  const rotated = [...order.slice(shift), ...order.slice(0, shift)];
-  return rotated.slice(0, 3);
+  return order;
 }
 
-const LOOK_NAMES: Record<Archetype, string[]> = {
-  editorial: ["Field Notes", "The Local Edition", "Margin & Ink"],
-  "dark-premium": ["After Hours", "Black Label", "Midnight Service"],
-  "bold-photo": ["Full Frame", "Big & Bright", "Front Page"],
-  playful: ["Sunny Side", "Good Vibes Only", "Bright Spark"],
-  "minimal-luxury": ["Quiet Confidence", "Linen & Stone", "Less, Better"],
-  "warm-craft": ["Workshop Warm", "Hand Built", "Hometown Craft"],
-};
 
 const LOOK_MOODS: Record<Archetype, string> = {
   editorial: "Reads like a well-made local magazine: big serif headlines, calm cream paper, confident restraint.",
@@ -355,12 +370,12 @@ const LOOK_MOODS: Record<Archetype, string> = {
 };
 
 /** Deterministic looks for mock mode or when the AI is unavailable. */
-export function mockDirections(facts: SiteFacts, variation: number): DesignDirection[] {
+export function mockDirections(facts: SiteFacts, variation: number, avoid: RoundAvoid = {}): DesignDirection[] {
   // The owner's request (note + feedback rounds) shapes the mock looks visibly: asked-for tones come first,
   // asked-for colors lead every palette, and "dark"/"light" sets the backgrounds.
   const hints = requestHints(facts);
   const scene = sceneToFind(facts);
-  const base = archetypesFor(facts, variation);
+  const base = archetypesFor(facts, variation, avoid);
   const pool = [...base, ...ARCHETYPES.filter((a) => !base.includes(a))].filter((a) => !(hints.scheme === "light" && a === "dark-premium"));
   const ordered = [...new Set([...hints.archetypes, ...pool])].slice(0, 3);
   return ordered.map((archetype, index) => {
@@ -373,7 +388,7 @@ export function mockDirections(facts: SiteFacts, variation: number): DesignDirec
     return normalizeDirection(
       {
         archetype,
-        name: LOOK_NAMES[archetype][(hashString(facts.host) + variation) % 3],
+        name: ARCHETYPE_LABEL[archetype],
         mood: LOOK_MOODS[archetype],
         heroSubject: scene || (facts.services[0] ? `${facts.services[0]} for ${facts.name}` : `${facts.industry || "the business"} at work`),
         palette,
