@@ -44,12 +44,18 @@ export function sitePhotoText(url: string, facts: SiteFacts): string {
 
 /** The site's hero-sized photos as candidates (they compete with Google on the same score). */
 export async function siteHeroCandidates(facts: SiteFacts): Promise<HeroCandidate[]> {
+  return (await siteHeroPhotos(facts)).map((p) => p.candidate);
+}
+
+/** The same, with each photo's bytes (for the vision rating; never stored). */
+export async function siteHeroPhotos(facts: SiteFacts): Promise<{ candidate: HeroCandidate; bytes: Buffer; type: string }[]> {
   const { goodPhotos, heroWorthy } = await import("@/lib/preview/images.server");
   const civic = isCivic(facts);
   const photos = (await goodPhotos(facts, 8)).filter((p) => heroWorthy(p));
   return photos.map((p) => {
     const m = measurePhoto(p.bytes, p.type);
     const suit = heroSuitability(p.url, facts.imageText?.[p.url] ?? "", civic);
-    return { id: p.url, source: "site", text: sitePhotoText(p.url, facts) || "photo from your site", width: p.width, height: p.height, stats: m?.stats, hash: m?.hash, relevance: Math.max(0, Math.min(3, suit / 2)) };
+    const candidate: HeroCandidate = { id: p.url, source: "site", text: sitePhotoText(p.url, facts) || "photo from your site", width: p.width, height: p.height, stats: m?.stats, hash: m?.hash, relevance: Math.max(0, Math.min(3, suit / 2)) };
+    return { candidate, bytes: p.bytes, type: p.type };
   });
 }

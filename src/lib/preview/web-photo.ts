@@ -47,7 +47,7 @@ export function placeOf(facts: Pick<SiteFacts, "address" | "name">): { city: str
     address.match(new RegExp(`(?:^|,|\\d\\s)\\s*([A-Za-z][A-Za-z .'-]{1,40}?),?\\s+(${Object.keys(STATES).join("|")}|${stateNames})\\.?(?:\\s+\\d{5}(?:-\\d{4})?)?\\s*(?:,|$|USA|United States)`)) ??
     undefined;
   if (m) {
-    const city = m[1]!.replace(/^.*\b(?:St|Street|Ave|Avenue|Rd|Road|Blvd|Dr|Drive|Ln|Hwy|Suite|Ste)\.?\s+/i, "").trim();
+    const city = m[1]!.replace(/^.*\b(?:St|Street|Ave|Avenue|Rd|Road|Blvd|Boulevard|Dr|Drive|Ln|Lane|Hwy|Highway|Pkwy|Parkway|Way|Ct|Court|Pl|Place|Cir|Circle|Trail|Suite|Ste)\.?\s+/i, "").trim();
     const state = STATES[m[2]!.toUpperCase()] ?? m[2]!;
     if (city && !/\d/.test(city)) return { city, state };
   }

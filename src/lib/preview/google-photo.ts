@@ -92,7 +92,7 @@ export function rejectReason(img: GoogleImage): string {
   const where = `${img.domain} ${host(img.imageUrl)} ${host(img.link)}`;
   if (STOCK_DOMAINS.some((d) => where.includes(d))) return "stock / watermarked";
   if (LOGOISH.test(`${img.title} ${img.imageUrl}`)) return "logo / graphic";
-  if (img.imageWidth && img.imageWidth < 1000) return "too small";
+  if (img.imageWidth && img.imageWidth < 1200) return "too small";
   if (img.imageWidth && img.imageHeight && (img.imageWidth / img.imageHeight < 1.2 || img.imageWidth / img.imageHeight > 2.8)) return "not a landscape hero shape";
   if (/\.(gif|svg)(\?|$)/i.test(img.imageUrl)) return "not a photo";
   return "";

@@ -18,7 +18,9 @@ import { googleQueries, normalizeImages, rejectReason, scoreGoogleImage, type Go
 import { placeOf } from "./web-photo.ts";
 import { businessKind, isCivic } from "./image-prompts.ts";
 import type { Archetype, SiteFacts } from "./types.ts";
-import { assignHeroes, hamming, heroScore, withDuplicateSigns, type HeroCandidate, type HeroPick } from "./hero-pick.ts";
+import { assignHeroes, hamming, heroScore, passesBar, withDuplicateSigns, HERO_BAR, type HeroCandidate, type HeroPick } from "./hero-pick.ts";
+import { heroBrief, type HeroBrief } from "./hero-brief.ts";
+import type { PhotoCredit } from "./web-photo.ts";
 
 type Fetcher = (url: string) => Promise<Photo | null | undefined>;
 
@@ -136,6 +138,59 @@ async function visionRank(subject: string, items: { photo: Photo; img: GoogleIma
     }
     if (!Array.isArray(answer.good)) return undefined;
     return [...new Set(answer.good.map(Number).filter((n) => Number.isInteger(n) && n >= 1 && n <= items.length).map((n) => n - 1))];
+  } catch {
+    return undefined;
+  }
+}
+
+export type HeroRating = { rating: number; note?: string; sign?: boolean; subject?: string };
+
+/**
+ * The hero quality gate: the vision model rates every candidate (Google, the site's own, free-license) 1-10 for
+ * "would a designer use this as the hero of a beautiful homepage for THIS business?", judged against the
+ * business type's brief (hero-brief.ts). Undefined when vision is unavailable (the keyword fallback applies).
+ */
+export async function rateHeroes(brief: HeroBrief, name: string, items: { bytes: Buffer; type: string; title: string; source: string }[], deadline: number): Promise<(HeroRating | undefined)[] | undefined> {
+  if (!items.length) return [];
+  const { aiModel, chatJson } = await import("@/lib/ai-provider.server");
+  const content: unknown[] = [
+    {
+      type: "text",
+      text:
+        `Rate EVERY photo as a homepage hero. The site: ${name ? `"${name}", ` : ""}${brief.kind}. ` +
+        `A great hero for this kind of business shows ${brief.good}. Rate low: ${brief.avoid}; also anything dim, murky, flat or low-saturation, blurry or low-resolution, cluttered, mostly sky/grass/pavement, a sign, logo or text, a stock-looking scene unrelated to this business, or an off-topic subject for it. ` +
+        `For each photo give "rating" 1-10 = would a top designer use this as the hero of a beautiful homepage for THIS business (${HERO_BAR}+ = yes, gladly), a 2-5 word "subject", a 2-6 word "note" on why, and "sign" (true when it is mainly a sign, plaque, logo or text). ` +
+        `Answer only JSON: {"photos": [{"n": 1, "rating": 8, "subject": "...", "note": "...", "sign": false}, ...]}.`,
+    },
+  ];
+  items.forEach((it, i) => {
+    content.push({ type: "text", text: `Photo ${i + 1} (${it.source}): "${it.title.slice(0, 90)}"` });
+    content.push({ type: "image_url", image_url: { url: `data:${it.type};base64,${it.bytes.toString("base64")}`, detail: "low" } });
+  });
+  try {
+    const answer = await chatJson<{ photos?: unknown }>({
+      model: process.env.PREVIEW_VISION_MODEL || aiModel(),
+      messages: [{ role: "user", content: content as never }],
+      maxTokens: 1400,
+      temperature: 0,
+      timeoutMs: Math.max(3000, Math.min(25_000, deadline - Date.now())),
+      deadline,
+      retry: false,
+    });
+    if (!Array.isArray(answer.photos)) return undefined;
+    const out: (HeroRating | undefined)[] = items.map(() => undefined);
+    for (const raw of answer.photos as { n?: unknown; rating?: unknown; note?: unknown; sign?: unknown; subject?: unknown }[]) {
+      const n = Number(raw?.n);
+      const rating = Number(raw?.rating);
+      if (!Number.isInteger(n) || n < 1 || n > items.length || !Number.isFinite(rating)) continue;
+      out[n - 1] = {
+        rating: Math.max(1, Math.min(10, Math.round(rating))),
+        note: typeof raw.note === "string" ? raw.note.slice(0, 60) : undefined,
+        subject: typeof raw.subject === "string" ? raw.subject.slice(0, 60) : undefined,
+        sign: raw.sign === true,
+      };
+    }
+    return out;
   } catch {
     return undefined;
   }
@@ -272,6 +327,10 @@ export type PlannedPhoto = { temp: TemporaryPhoto; width: number; height: number
 export type PlannedPhotos = {
   queries: string[];
   photos: PlannedPhoto[];
+  /** Free-license photos (Openverse / Wikimedia) added when too few candidates passed the quality bar. */
+  web?: { url: string; credit: PhotoCredit; width: number; height: number; candidate: HeroCandidate }[];
+  /** The quality gate's verdict per candidate id (image URL). */
+  bar?: { passed: string[]; failed: string[]; rated: boolean; brief: string };
   /** The site's own hero-sized photos, scored the same way (absent when the owner asked for new photos). */
   site?: HeroCandidate[];
   /** One hero per look, all different subjects, chosen together once the looks' archetypes are known. */
@@ -311,11 +370,14 @@ export async function prefetchPlannedPhotos(
   opts: { archetypes?: Promise<(Archetype | undefined)[] | undefined>; site?: boolean; avoid?: PhotoAvoid } = {},
 ): Promise<PlannedPhotos | undefined> {
   if (!photoSearchEnabled() || !queries.length) return undefined;
-  const { measurePhoto, siteHeroCandidates } = await import("@/lib/preview/hero-pick.server");
-  const [found, site] = await Promise.all([
+  const { measurePhoto, siteHeroPhotos } = await import("@/lib/preview/hero-pick.server");
+  type SitePhoto = Awaited<ReturnType<typeof siteHeroPhotos>>[number];
+  const [found, sitePhotos] = await Promise.all([
     findGooglePhotos(undefined, facts, useVision, deadline, 10, queries),
-    opts.site === false ? Promise.resolve([] as HeroCandidate[]) : siteHeroCandidates(facts).catch(() => [] as HeroCandidate[]),
+    opts.site === false ? Promise.resolve([] as SitePhoto[]) : siteHeroPhotos(facts).catch(() => [] as SitePhoto[]),
   ]);
+  const site = sitePhotos.map((p) => p.candidate);
+  const brief = heroBrief(facts);
   const photos: PlannedPhoto[] = found.photos.map((p) => {
     const m = measurePhoto(p.photo.bytes, p.photo.type);
     const candidate: HeroCandidate = {
@@ -334,13 +396,63 @@ export async function prefetchPlannedPhotos(
     return { temp: p.temp, width: p.photo.width, height: p.photo.height, candidate };
   });
   for (const c of site) if (shownBefore(opts.avoid, [c.id], c.hash)) c.shownBefore = true;
+  // The quality gate, judged for THIS kind of business (hero-brief.ts): off-topic titles (no-AI fallback) and
+  // the vision rating of every candidate.
+  for (const c of [...photos.map((p) => p.candidate!), ...site]) if (brief.offTopic.test(`${c.visionSubject ?? ""} ${c.text}`)) c.offTopic = true;
+  const rateItems = [
+    ...found.photos.map((p, i) => ({ c: photos[i]!.candidate!, bytes: p.photo.bytes, type: p.photo.type, title: p.temp.title, source: `Google Images, ${p.temp.domain}` })),
+    ...sitePhotos.map((p) => ({ c: p.candidate, bytes: p.bytes, type: p.type, title: p.candidate.text, source: "the business's own site" })),
+  ].filter((x) => x.bytes.length < 2_500_000).slice(0, 16);
+  let rated = false;
+  const applyRatings = async (items: typeof rateItems) => {
+    if (!useVision || !items.length || Date.now() > deadline - 4000) return;
+    const ratings = await rateHeroes(brief, facts.name, items, deadline);
+    if (!ratings) return;
+    rated = true;
+    items.forEach((it, i) => {
+      const r = ratings[i];
+      if (!r) return;
+      it.c.appeal = r.rating;
+      it.c.appealNote = r.note;
+      if (r.sign) it.c.visionSign = true;
+      if (r.subject && !it.c.visionSubject) it.c.visionSubject = r.subject;
+    });
+  };
+  await applyRatings(rateItems);
+  // Too few good photos: free-license photos of the brief's best scene, rated the same way.
+  let web: NonNullable<PlannedPhotos["web"]> = [];
+  const goodCount = () => [...photos.map((p) => p.candidate!), ...site, ...web.map((w) => w.candidate)].map(heroScore).filter(passesBar).length;
+  if (goodCount() < 3 && Date.now() < deadline - 9000) {
+    const { findWebPhotos, webPhotosEnabled } = await import("./web-photo.server.ts");
+    const { briefQueries } = await import("./hero-brief.ts");
+    if (webPhotosEnabled()) {
+      const scene = briefQueries(facts, brief)[0] ?? queries[0]!;
+      const found2 = await findWebPhotos(scene, placeOf(facts), Math.min(8_000, deadline - Date.now() - 6000), 4).catch(() => []);
+      const pairs = found2
+        .map((w) => {
+          const m = measurePhoto(w.photo.bytes, w.photo.type);
+          const candidate: HeroCandidate = { id: w.photo.url ?? "", source: "web", text: w.credit.title, width: w.photo.width, height: w.photo.height, stats: m?.stats, hash: m?.hash, relevance: 1.5 };
+          if (brief.offTopic.test(candidate.text)) candidate.offTopic = true;
+          if (shownBefore(opts.avoid, [candidate.id, w.credit.sourceUrl], m?.hash)) candidate.shownBefore = true;
+          return { w, entry: { url: w.photo.url ?? "", credit: w.credit, width: w.photo.width, height: w.photo.height, candidate } };
+        })
+        .filter((x) => x.entry.url);
+      web = pairs.map((x) => x.entry);
+      await applyRatings(pairs.map((x) => ({ c: x.entry.candidate, bytes: x.w.photo.bytes, type: x.w.photo.type, title: x.w.credit.title, source: `free-license photo, ${x.w.credit.provider}` })));
+      console.info(`[photo-search] quality gate: only ${goodCount() - web.map((w) => heroScore(w.candidate)).filter(passesBar).length} candidates passed; free-license search “${scene}”: ${web.length} found`);
+    }
+  }
   // The looks' archetypes (from the directions step, running alongside) let each photo suit its look's mood.
   const archetypes = ((await opts.archetypes?.catch(() => undefined)) ?? [undefined, undefined, undefined]).slice(0, 3);
-  const all = [...photos.map((p) => p.candidate!), ...site];
+  const all = [...photos.map((p) => p.candidate!), ...site, ...web.map((w) => w.candidate)];
   const picks = assignHeroes(all, archetypes);
+  const scoredAll = all.map(heroScore);
+  const bar = { passed: scoredAll.filter(passesBar).map((c) => c.id), failed: scoredAll.filter((c) => !passesBar(c)).map((c) => c.id), rated, brief: `${brief.category}: ${brief.kind}` };
   const planned: PlannedPhotos = {
     queries: found.queries,
     photos,
+    web,
+    bar,
     site,
     assign: { archetypes, picks },
     seen: found.seen,
@@ -348,9 +460,10 @@ export async function prefetchPlannedPhotos(
     ranking: found.ranking,
     at: new Date().toISOString(),
   };
-  console.info(`[photo-search] proactive ${JSON.stringify(found.queries)}: ${found.seen} results, ${planned.photos.length} usable (${found.ranking ?? "score"})${Object.keys(found.rejected).length ? `; skipped ${JSON.stringify(found.rejected)}` : ""}; ${site.length} site photo${site.length === 1 ? "" : "s"} competing`);
+  console.info(`[photo-search] proactive ${JSON.stringify(found.queries)}: ${found.seen} results, ${planned.photos.length} usable (${found.ranking ?? "score"})${Object.keys(found.rejected).length ? `; skipped ${JSON.stringify(found.rejected)}` : ""}; ${site.length} site photo${site.length === 1 ? "" : "s"}${web.length ? ` + ${web.length} free-license` : ""} competing`);
+  console.info(`[photo-search] quality gate (${bar.brief}): ${rated ? `vision-rated, bar ${HERO_BAR}/10` : "no vision rating; keyword + light/contrast rules"} · ${bar.passed.length} passed, ${bar.failed.length} failed`);
   for (const c of withDuplicateSigns(all.map(heroScore)).sort((a, b) => b.score - a.score)) {
-    console.info(`[photo-search]   candidate ${c.source} score ${c.score}${c.sign ? " SIGN" : ""}${c.shownBefore ? " SHOWN-BEFORE" : ""} subject "${c.subject || "?"}" “${(c.visionSubject ? `${c.visionSubject} / ` : "") + c.text.slice(0, 60)}”${c.stats ? ` brightness ${c.stats.mean} contrast ${c.stats.contrast}` : ""}`);
+    console.info(`[photo-search]   candidate ${c.source} ${passesBar(c) ? "PASS" : "FAIL"}${c.appeal !== undefined ? ` rating ${c.appeal}/10${c.appealNote ? ` “${c.appealNote}”` : ""}` : ""} score ${c.score}${c.sign ? " SIGN" : ""}${c.offTopic ? " OFF-TOPIC" : ""}${c.shownBefore ? " SHOWN-BEFORE" : ""} subject "${c.subject || "?"}" “${(c.visionSubject ? `${c.visionSubject} / ` : "") + c.text.slice(0, 60)}”${c.stats ? ` brightness ${c.stats.mean} contrast ${c.stats.contrast}` : ""}`);
   }
   for (const p of picks) console.info(`[photo-search] pick look ${p.index + 1}${archetypes[p.index] ? ` (${archetypes[p.index]})` : ""}: ${p.source} “${all.find((c) => c.id === p.id)?.text.slice(0, 60)}” · ${p.reason}`);
   try {
