@@ -75,7 +75,7 @@ await page.locator("#refine-text").fill(feedback);
 await page.screenshot({ path: join(outDir, "03-refine-box.png") });
 
 slow = true;
-await page.getByRole("button", { name: "Show me 3 new looks" }).click();
+await page.getByRole("button", { name: /Make this change|Show me 3 new looks/ }).click();
 await page.waitForTimeout(900);
 await page.screenshot({ path: join(outDir, "04-refine-loading.png") });
 const loadingText = (await page.locator('[role="status"]').first().textContent().catch(() => "")) ?? "";

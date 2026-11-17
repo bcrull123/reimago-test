@@ -153,6 +153,8 @@ function directions(system, facts) {
   const suggested = (system.match(/good starting points for this business: ([a-z\-, ]+)\./)?.[1] ?? "bold-photo, warm-craft, dark-premium").split(/,\s*/);
   // FAKE_DARK_NAME: like Bob's real runs, every round has a dark look under that name.
   if (process.env.FAKE_DARK_NAME && !suggested.slice(0, 3).includes("dark-premium")) suggested.splice(2, 1, "dark-premium");
+  // FAKE_BOB_ROUND1: a first round like Bob's real one (editorial, dark premium, playful); later rounds follow the hints.
+  if (process.env.FAKE_BOB_ROUND1 && !system.includes("The owner already saw")) suggested.splice(0, 3, "editorial", "dark-premium", "playful");
   const brand = (facts.brand_colors ?? [])[0];
   const food = isFood(facts);
   return {
