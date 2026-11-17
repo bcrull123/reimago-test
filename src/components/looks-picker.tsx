@@ -159,6 +159,33 @@ export function LooksPicker({
                     {look.applied?.length ? <span className="mt-0.5 block text-muted">Applied: {look.applied.join(" · ")}</span> : null}
                   </p>
                 ) : null}
+                {look.photos ? (
+                  <p className="text-[11px] leading-snug text-muted" data-look-photos>
+                    {look.photos}
+                  </p>
+                ) : null}
+                {look.trace && (look.trace.request.note || look.trace.request.feedback.length) ? (
+                  <details className="text-[11px] leading-snug text-muted" data-look-trace>
+                    <summary className="cursor-pointer select-none">How your request was used</summary>
+                    <ul className="mt-1 space-y-0.5">
+                      {look.trace.steps.map((step) => (
+                        <li key={step.step}>
+                          {step.ownerRequest ? "✓" : "–"} {step.step}: {step.ai ? (step.ownerRequest ? "AI got your request" : "AI ran without it") : "no AI (mock / fallback)"}
+                        </li>
+                      ))}
+                    </ul>
+                    {look.trace.images.map((image) => (
+                      <p key={image.name} className="mt-1 break-words">
+                        <strong>{image.name}</strong> ({image.status}
+                        {image.source ? `, from ${image.source}` : ""}){image.search ? ` · ${image.search}` : ""}
+                        {image.credit && image.credit.provider !== "your site" ? ` · ${image.credit.title} by ${image.credit.author || "unknown"} (${image.credit.license}) ${image.credit.sourceUrl}` : ""}
+                        {" · AI image prompt: "}
+                        {image.prompt.slice(0, 400)}
+                        {image.prompt.length > 400 ? "…" : ""}
+                      </p>
+                    ))}
+                  </details>
+                ) : null}
                 {look.aiError ? (
                   <div className="rounded-md border border-amber-300 bg-amber-50 p-2.5 text-xs leading-relaxed text-amber-900">
                     <p>
