@@ -14,11 +14,11 @@
 // Relative imports (and lazy server-only ones) so node's test runner can load this file.
 import { createHash } from "node:crypto";
 import type { Photo } from "./images.server.ts";
-import { googleQueries, normalizeImages, rejectReason, scoreGoogleImage, type GoogleImage, type TemporaryPhoto } from "./google-photo.ts";
+import { googleQueries, normalizeImages, rejectReason, scoreGoogleImage, watermarkedSource, type GoogleImage, type TemporaryPhoto } from "./google-photo.ts";
 import { placeOf } from "./web-photo.ts";
 import { businessKind, isCivic } from "./image-prompts.ts";
 import type { Archetype, SiteFacts } from "./types.ts";
-import { assignHeroes, hamming, heroScore, passesBar, withDuplicateSigns, HERO_BAR, type HeroCandidate, type HeroPick } from "./hero-pick.ts";
+import { assignHeroes, hamming, heroScore, passesBar, withDuplicateSigns, HERO_BAR, SITE_BAR, SITE_BONUS, type HeroCandidate, type HeroPick } from "./hero-pick.ts";
 import { brandOnlyMatch, businessAbout, heroBrief, type HeroBrief } from "./hero-brief.ts";
 import type { PhotoCredit } from "./web-photo.ts";
 
@@ -143,7 +143,7 @@ async function visionRank(subject: string, items: { photo: Photo; img: GoogleIma
   }
 }
 
-export type HeroRating = { rating: number; note?: string; sign?: boolean; subject?: string };
+export type HeroRating = { rating: number; note?: string; sign?: boolean; subject?: string; watermark?: boolean };
 
 /**
  * The hero quality gate: the vision model rates every candidate (Google, the site's own, free-license) 1-10 for
@@ -160,8 +160,9 @@ export async function rateHeroes(brief: HeroBrief, name: string, about: string, 
         `Rate EVERY photo as a homepage hero. The site: ${name ? `"${name}", ` : ""}${about || brief.kind}. ` +
         `Judge BUSINESS FIT first: would this photo make a visitor understand what THIS business does? A photo that only shares a word with the business NAME (a person, pet or place that happens to be called the same), a vintage/archival photo, or a portrait of an unrelated person is off-topic: rate it 1-3 however good it looks. ` +
         `A great hero for this kind of business shows ${brief.good}. Rate low: ${brief.avoid}; also anything dim, murky, flat or low-saturation, blurry or low-resolution, cluttered, mostly sky/grass/pavement, a sign, logo or text, a stock-looking scene unrelated to this business, or an off-topic subject for it. ` +
-        `For each photo give "rating" 1-10 = would a top designer use this as the hero of a beautiful homepage for THIS business (${HERO_BAR}+ = yes, gladly), a 2-5 word "subject", a 2-6 word "note" on why, and "sign" (true when it is mainly a sign, plaque, logo or text). ` +
-        `Answer only JSON: {"photos": [{"n": 1, "rating": 8, "subject": "...", "note": "...", "sign": false}, ...]}.`,
+        `For each photo give "rating" 1-10 = would a top designer use this as the hero of a beautiful homepage for THIS business (${HERO_BAR}+ = yes, gladly), a 2-5 word "subject", a 2-6 word "note" on why, "sign" (true when it is mainly a sign, plaque, logo or text), and "watermark" (true when a stock-photo watermark or a stock site's name/logo is visible anywhere on the photo, e.g. Vecteezy, Shutterstock, iStock, Getty Images, Alamy, Dreamstime, Adobe Stock: such a photo can never be used). ` +
+        `Photos from "the business's own site" are the real business: rate them on the same scale (6+ means usable). ` +
+        `Answer only JSON: {"photos": [{"n": 1, "rating": 8, "subject": "...", "note": "...", "sign": false, "watermark": false}, ...]}.`,
     },
   ];
   items.forEach((it, i) => {
@@ -180,7 +181,7 @@ export async function rateHeroes(brief: HeroBrief, name: string, about: string, 
     });
     if (!Array.isArray(answer.photos)) return undefined;
     const out: (HeroRating | undefined)[] = items.map(() => undefined);
-    for (const raw of answer.photos as { n?: unknown; rating?: unknown; note?: unknown; sign?: unknown; subject?: unknown }[]) {
+    for (const raw of answer.photos as { n?: unknown; rating?: unknown; note?: unknown; sign?: unknown; subject?: unknown; watermark?: unknown }[]) {
       const n = Number(raw?.n);
       const rating = Number(raw?.rating);
       if (!Number.isInteger(n) || n < 1 || n > items.length || !Number.isFinite(rating)) continue;
@@ -189,6 +190,7 @@ export async function rateHeroes(brief: HeroBrief, name: string, about: string, 
         note: typeof raw.note === "string" ? raw.note.slice(0, 60) : undefined,
         subject: typeof raw.subject === "string" ? raw.subject.slice(0, 60) : undefined,
         sign: raw.sign === true,
+        watermark: raw.watermark === true,
       };
     }
     return out;
@@ -397,6 +399,7 @@ export async function prefetchPlannedPhotos(
     return { temp: p.temp, width: p.photo.width, height: p.photo.height, candidate };
   });
   for (const c of site) if (shownBefore(opts.avoid, [c.id], c.hash)) c.shownBefore = true;
+  for (const c of site) if (watermarkedSource(c.id, c.text)) c.watermark = true;
   // The quality gate, judged for THIS kind of business (hero-brief.ts): off-topic titles (no-AI fallback) and
   // the vision rating of every candidate.
   for (const c of [...photos.map((p) => p.candidate!), ...site]) if (brief.offTopic.test(`${c.visionSubject ?? ""} ${c.text}`)) c.offTopic = true;
@@ -418,6 +421,7 @@ export async function prefetchPlannedPhotos(
       it.c.appeal = r.rating;
       it.c.appealNote = r.note;
       if (r.sign) it.c.visionSign = true;
+      if (r.watermark) it.c.watermark = true;
       if (r.subject && !it.c.visionSubject) it.c.visionSubject = r.subject;
     });
   };
@@ -436,6 +440,7 @@ export async function prefetchPlannedPhotos(
           const m = measurePhoto(w.photo.bytes, w.photo.type);
           const candidate: HeroCandidate = { id: w.photo.url ?? "", source: "web", text: w.credit.title, width: w.photo.width, height: w.photo.height, stats: m?.stats, hash: m?.hash, relevance: 1.5 };
           if (brief.offTopic.test(candidate.text) || brandOnlyMatch(candidate.text, facts, [scene])) candidate.offTopic = true;
+          if (watermarkedSource(candidate.id, w.credit.title, w.credit.sourceUrl)) candidate.watermark = true;
           if (shownBefore(opts.avoid, [candidate.id, w.credit.sourceUrl], m?.hash)) candidate.shownBefore = true;
           return { w, entry: { url: w.photo.url ?? "", credit: w.credit, width: w.photo.width, height: w.photo.height, candidate } };
         })
@@ -464,9 +469,9 @@ export async function prefetchPlannedPhotos(
     at: new Date().toISOString(),
   };
   console.info(`[photo-search] proactive ${JSON.stringify(found.queries)}: ${found.seen} results, ${planned.photos.length} usable (${found.ranking ?? "score"})${Object.keys(found.rejected).length ? `; skipped ${JSON.stringify(found.rejected)}` : ""}; ${site.length} site photo${site.length === 1 ? "" : "s"}${web.length ? ` + ${web.length} free-license` : ""} competing`);
-  console.info(`[photo-search] quality gate (${bar.brief}): ${rated ? `vision-rated, bar ${HERO_BAR}/10` : "no vision rating; keyword + light/contrast rules"} · ${bar.passed.length} passed, ${bar.failed.length} failed`);
+  console.info(`[photo-search] quality gate (${bar.brief}): ${rated ? `vision-rated, bar ${HERO_BAR}/10 (the site's own photos ${SITE_BAR}/10, preferred +${SITE_BONUS})` : "no vision rating; keyword + light/contrast rules"} · ${bar.passed.length} passed, ${bar.failed.length} failed`);
   for (const c of withDuplicateSigns(all.map(heroScore)).sort((a, b) => b.score - a.score)) {
-    console.info(`[photo-search]   candidate ${c.source} ${passesBar(c) ? "PASS" : "FAIL"}${c.appeal !== undefined ? ` rating ${c.appeal}/10${c.appealNote ? ` “${c.appealNote}”` : ""}` : ""} score ${c.score}${c.sign ? " SIGN" : ""}${c.offTopic ? " OFF-TOPIC" : ""}${c.shownBefore ? " SHOWN-BEFORE" : ""} subject "${c.subject || "?"}" “${(c.visionSubject ? `${c.visionSubject} / ` : "") + c.text.slice(0, 60)}”${c.stats ? ` brightness ${c.stats.mean} contrast ${c.stats.contrast}` : ""}`);
+    console.info(`[photo-search]   candidate ${c.source} ${passesBar(c) ? "PASS" : "FAIL"}${c.appeal !== undefined ? ` rating ${c.appeal}/10${c.appealNote ? ` “${c.appealNote}”` : ""}` : ""} score ${c.score}${c.sign ? " SIGN" : ""}${c.offTopic ? " OFF-TOPIC" : ""}${c.watermark ? " WATERMARK" : ""}${c.shownBefore ? " SHOWN-BEFORE" : ""} subject "${c.subject || "?"}" “${(c.visionSubject ? `${c.visionSubject} / ` : "") + c.text.slice(0, 60)}”${c.stats ? ` brightness ${c.stats.mean} contrast ${c.stats.contrast}` : ""}`);
   }
   for (const p of picks) console.info(`[photo-search] pick look ${p.index + 1}${archetypes[p.index] ? ` (${archetypes[p.index]})` : ""}: ${p.source} “${all.find((c) => c.id === p.id)?.text.slice(0, 60)}” · ${p.reason}`);
   try {

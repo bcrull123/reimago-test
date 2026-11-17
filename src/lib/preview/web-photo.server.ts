@@ -6,6 +6,7 @@
  */
 import { fetchPhoto, type Photo } from "@/lib/preview/images.server";
 import { pickWebPhoto, webQueries, webQuery, type PhotoCredit, type WebPhotoCandidate } from "@/lib/preview/web-photo";
+import { watermarkedSource } from "@/lib/preview/google-photo";
 
 const UA = "ReimagoPreview/1.0 (https://reimago.ai; preview photo search)";
 const cache = new Map<string, { at: number; value: WebPhotoResult[] }>();
@@ -120,6 +121,8 @@ export async function findWebPhotos(scene: string, place: { city: string; state:
   // The same photo found by a town search and a generic one counts as a town photo.
   const sorted = [...found].sort((x, y) => Number(x.scope === "generic") - Number(y.scope === "generic"));
   const unique = sorted.filter((c, i, list) => c.imageUrl && list.findIndex((x) => x.imageUrl === c.imageUrl || (x.title === c.title && x.provider === c.provider)) === i);
+  // Watermarked stock never shows up as a hero or a requested photo (google-photo.ts WATERMARK_SOURCE).
+  for (let i = unique.length - 1; i >= 0; i -= 1) if (watermarkedSource(unique[i]!.imageUrl, unique[i]!.title, unique[i]!.sourceUrl)) unique.splice(i, 1);
   const ranked = pickWebPhoto(unique, scene, place).slice(0, max + 2);
   // Download the best few in parallel, within what is left of the time box; keep rank order.
   const left = Math.max(500, deadline - Date.now());

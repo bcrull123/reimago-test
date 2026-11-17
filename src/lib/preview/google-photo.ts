@@ -53,7 +53,24 @@ export const STOCK_DOMAINS = [
   "pond5.com",
   "vectorstock.com",
   "freepik.com",
+  "vecteezy.com",
+  "static.vecteezy.com",
+  "stocksy.com",
+  "megapixl.com",
+  "photodune.net",
 ];
+
+/**
+ * Watermarked stock in a URL, domain or title ("vecteezy", "Shutterstock", "iStock", "Getty Images", "Alamy",
+ * "Dreamstime", "Depositphotos", "123RF", "Adobe Stock"...). Bob's round 1 on bob.me had a Vecteezy preview with its
+ * watermark as a hero. Applies to every photo source (Google, free-license, the site's own).
+ */
+export const WATERMARK_SOURCE =
+  /\b(?:vecteezy|shutterstock|istock(?:photo)?|getty\s?images|gettyimages|alamy|dreamstime|depositphotos|123\s?rf|adobe\s?stock|stock\.adobe|adobestock|ftcdn|bigstock(?:photo)?|canstock(?:photo)?|agefotostock|pond5|vectorstock|freepik|stocksy|megapixl|photodune|watermark(?:ed)?)\b/i;
+
+export function watermarkedSource(...parts: (string | undefined)[]): boolean {
+  return WATERMARK_SOURCE.test(parts.filter(Boolean).join(" ").replace(/[-_./]+/g, " "));
+}
 
 const LOGOISH = /\b(logo|logos|icon|icons|vector|clip ?art|clipart|cartoon|illustration|drawing|diagram|infographic|map|maps|flyer|poster|template|mock ?up|banner ad|seal|emblem|badge|screenshot|qr)\b|\.svg(\?|$)/i;
 
@@ -90,7 +107,7 @@ export function normalizeImages(json: unknown): GoogleImage[] {
 /** Why an image can't be used, or "" if it can. */
 export function rejectReason(img: GoogleImage): string {
   const where = `${img.domain} ${host(img.imageUrl)} ${host(img.link)}`;
-  if (STOCK_DOMAINS.some((d) => where.includes(d))) return "stock / watermarked";
+  if (STOCK_DOMAINS.some((d) => where.includes(d)) || watermarkedSource(img.domain, img.imageUrl, img.link, img.title)) return "stock / watermarked";
   if (LOGOISH.test(`${img.title} ${img.imageUrl}`)) return "logo / graphic";
   if (img.imageWidth && img.imageWidth < 1200) return "too small";
   if (img.imageWidth && img.imageHeight && (img.imageWidth / img.imageHeight < 1.2 || img.imageWidth / img.imageHeight > 2.8)) return "not a landscape hero shape";

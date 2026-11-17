@@ -182,18 +182,31 @@ export type HeroCandidate = {
   appealNote?: string;
   /** Off-topic for this kind of business by its title / label (hero-brief.ts; the no-AI fallback). */
   offTopic?: boolean;
+  /** A stock-site watermark: by its URL / domain / title (google-photo.ts WATERMARK_SOURCE) or seen by vision. */
+  watermark?: boolean;
 };
 
 /** Minimum vision rating for a hero (out of 10). */
 export const HERO_BAR = 7;
+/**
+ * The business's OWN photos need a little less (Bob: "use the actual photos on the site if available"): 6/10, still
+ * on-topic, sharp (the rating) and not a sign / utility shot.
+ */
+export const SITE_BAR = 6;
+/** How much a passing site photo is preferred over a Google / free-license one on the same score. */
+export const SITE_BONUS = 4;
 
-/** Good enough to be a homepage hero: rated ≥ HERO_BAR by vision, or (no rating) a clean on-topic scene. */
+export function barFor(c: Pick<HeroCandidate, "source">): number {
+  return c.source === "site" ? SITE_BAR : HERO_BAR;
+}
+
+/** Good enough to be a homepage hero: rated ≥ the bar by vision (6 for the site's own photos, 7 for others), or (no rating) a clean on-topic scene. */
 export function passesBar(c: Scored): boolean {
-  if (c.sign) return false;
-  if (c.appeal !== undefined) return c.appeal >= HERO_BAR && !c.offTopic;
+  if (c.sign || c.watermark) return false;
+  if (c.appeal !== undefined) return c.appeal >= barFor(c) && !c.offTopic;
   // A free-license photo matched by title words alone can't prove it fits the business: vision must rate it.
   if (c.source === "web") return false;
-  return !c.offTopic && !LOW_QUALITY.test(`${c.visionSubject ?? ""} ${c.text}`) && c.score >= 3;
+  return !c.offTopic && !LOW_QUALITY.test(`${c.visionSubject ?? ""} ${c.text}`) && c.score >= (c.source === "site" ? 3 + SITE_BONUS - 2 : 3);
 }
 
 export type Scored = HeroCandidate & { score: number; subject: string; sign: boolean; why: string[] };
@@ -218,6 +231,9 @@ export function heroScore(c: HeroCandidate): Scored {
   add(c.shownBefore ? -8 : 0, "shown in an earlier round");
   if (c.appeal !== undefined) add((c.appeal - 6) * 1.5, `designer rating ${c.appeal}/10${c.appealNote ? ` (${c.appealNote})` : ""}`);
   add(c.offTopic ? -6 : 0, "off-topic for this business");
+  add(c.watermark ? -10 : 0, "stock watermark");
+  // The business's own photo wins over a stock / Google one when both pass the bar (Bob: use the site's photos).
+  add(c.source === "site" && !c.offTopic && !sign && !c.watermark && !LOW_QUALITY.test(words) && (c.appeal === undefined || c.appeal >= SITE_BAR) ? SITE_BONUS : 0, "the business's own photo");
   add(LOW_QUALITY.test(words) ? -4 : 0, "low quality / unflattering subject");
   const ratio = c.width / Math.max(1, c.height);
   add(ratio >= 1.3 && ratio <= 2.1 ? 1 : ratio < 1.15 ? -1.5 : 0, ratio >= 1.3 && ratio <= 2.1 ? "wide" : "not wide");
@@ -298,6 +314,9 @@ export function assignHeroes(candidates: HeroCandidate[], archetypes: (Archetype
   const scored = (passing.length ? passing : all).slice(0, 12);
   const n = archetypes.length;
   const fits = scored.map((c) => archetypes.map((a) => moodFit(c, a)));
+  // Site photos first: every passing photo of the business's own is placed before any Google / free-license one
+  // (each on its own look; the score and mood fit decide which look).
+  const ownFirst = scored.map((c) => (c.source === "site" && passesBar(c) ? 15 : 0));
   let best: { total: number; picks: number[] } = { total: -Infinity, picks: [] };
   const walk = (look: number, picks: number[], total: number) => {
     if (look === n) {
@@ -309,7 +328,7 @@ export function assignHeroes(candidates: HeroCandidate[], archetypes: (Archetype
       if (picks.some((p) => p >= 0 && sameSubject(scored[p]!, scored[i]!))) continue;
       placed = true;
       picks.push(i);
-      walk(look + 1, picks, total + scored[i]!.score + fits[i]![look]!.fit);
+      walk(look + 1, picks, total + scored[i]!.score + fits[i]![look]!.fit + ownFirst[i]!);
       picks.pop();
     }
     if (!placed) {
