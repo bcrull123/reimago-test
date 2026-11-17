@@ -1,5 +1,6 @@
 /** Re-validate facts/plans that round-trip through the browser between steps. */
 import type { SiteFacts, SitePlan } from "@/lib/preview/types";
+import { cleanFeedback } from "@/lib/preview/owner-request";
 
 const str = (value: unknown, max: number) => (typeof value === "string" ? value.trim().slice(0, max) : "");
 const strs = (value: unknown, count: number, max: number) =>
@@ -47,6 +48,7 @@ export function clampFacts(input: unknown): SiteFacts {
     social: (Array.isArray(f.social) ? f.social : []).map(https).filter(Boolean).slice(0, 6),
     industry: str(f.industry, 60),
     notes: str(f.notes, 800),
+    feedback: cleanFeedback(f.feedback),
     brief: str(f.brief, 4000) || undefined,
     note: str(f.note, 400) || undefined,
     inspiration: Array.isArray(f.inspiration)

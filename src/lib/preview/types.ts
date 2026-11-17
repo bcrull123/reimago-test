@@ -34,8 +34,10 @@ export type SiteFacts = {
   pages: ScrapedPage[];
   social: string[];
   industry: string;
-  /** What the visitor asked to change. */
+  /** What the visitor asked to change (the form's note). */
   notes: string;
+  /** "Not quite right?" feedback rounds from the looks picker, oldest first (max 5). */
+  feedback?: string[];
   /** Extra brief details from the Create a New Site wizard. */
   brief?: string;
   /** Set when the live site could not be read and on-file copy was used. */
@@ -164,6 +166,10 @@ export type LookInfo = {
   fonts: { heading: string; body: string };
   images: { generated: number; photos: number };
   mock: boolean;
+  /** The owner's latest request this look was built from (note or newest feedback), for the card. */
+  request?: string;
+  /** Mock mode: what was read from the request and applied (colors, backgrounds, tone, sections). */
+  applied?: string[];
   /** Why the AI homepage could not be used (the look then uses the section library). */
   aiError?: string;
   /** The AI homepage was used, but some of its sections were dropped (first reasons). */
