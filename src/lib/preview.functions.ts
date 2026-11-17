@@ -122,6 +122,12 @@ export const previewLook = createServerFn({ method: "POST" })
         aiError: ai || site.mock ? undefined : aiError ?? "AI is not configured on this server",
         aiWarning,
       };
+      const { latestRequest, requestHints } = await import("./preview/owner-request");
+      look.request = latestRequest(data.facts) || undefined;
+      if (site.mock) {
+        const applied = requestHints(data.facts).applied;
+        if (applied.length) look.applied = applied;
+      }
       return { ok: true, look, note: look.aiError ? aiFallbackNote(look.aiError) : undefined };
     } catch (error) {
       console.error("[preview] look failed", error instanceof Error ? error.message : error);

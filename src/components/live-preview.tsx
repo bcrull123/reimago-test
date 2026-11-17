@@ -9,7 +9,7 @@ import type { PreviewInfo } from "@/lib/preview/types";
  * Formcarry in a new tab (allow-forms + allow-popups).
  */
 /** The "Choose this look" bar shown above a look's preview; it sticks to the top while the visitor scrolls the page. */
-export type PreviewChoice = { lookName: string; onChoose: () => void; disabled?: boolean; chosen?: boolean };
+export type PreviewChoice = { lookName: string; onChoose: () => void; disabled?: boolean; chosen?: boolean; onChangeRequest?: () => void };
 
 export function LivePreview({ preview, host, choice }: { preview: PreviewInfo; host: string; choice?: PreviewChoice }) {
   const [device, setDevice] = useState<"desktop" | "mobile">("desktop");
@@ -35,6 +35,12 @@ export function LivePreview({ preview, host, choice }: { preview: PreviewInfo; h
               </>
             )}
           </p>
+          <div className="flex items-center gap-4">
+          {choice.onChangeRequest ? (
+            <button type="button" onClick={choice.onChangeRequest} className="text-sm font-medium text-primary underline underline-offset-4 hover:text-ink">
+              Change something
+            </button>
+          ) : null}
           <button
             type="button"
             onClick={choice.onChoose}
@@ -44,6 +50,7 @@ export function LivePreview({ preview, host, choice }: { preview: PreviewInfo; h
             {choice.chosen ? <Check className="size-5" aria-hidden /> : null}
             {choice.chosen ? "Chosen" : "Choose this look"}
           </button>
+          </div>
         </div>
       ) : null}
     <div className="overflow-hidden rounded-2xl border border-border bg-surface shadow-2xl">

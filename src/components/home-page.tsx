@@ -100,6 +100,13 @@ async function previewPicture(look: LookInfo | undefined, domain: string): Promi
   }
 }
 
+/** "Not quite right?" rounds for the email, numbered, oldest first. */
+function changeRequestsText(rounds?: string[]): string {
+  return (rounds ?? []).map((text, i) => `${i + 1}. ${text}`).join("\n");
+}
+
+const MAX_FEEDBACK = 5;
+
 function appendPicture(data: FormData, picture?: PictureFields) {
   if (!picture) return;
   if (picture.file) data.append("picture", picture.file, picture.file.name);
@@ -124,6 +131,7 @@ async function submitFormcarry(fields: {
   previewUrl?: string;
   previewPages?: string[];
   chosenLook?: string;
+  changeRequests?: string[];
   picture?: PictureFields;
 }): Promise<void> {
   const domain = bareDomain(fields.website);
@@ -135,6 +143,7 @@ async function submitFormcarry(fields: {
   data.append("preview_url", fields.previewUrl ?? "");
   data.append("preview_pages", (fields.previewPages ?? []).join("\n"));
   data.append("chosen_look", fields.chosenLook ?? "");
+  data.append("change_requests", changeRequestsText(fields.changeRequests));
   appendPicture(data, fields.picture);
 
   const response = await fetch(FORMCARRY, {
@@ -153,7 +162,7 @@ async function submitCreateBrief(
   gotcha: string,
   brief: CreateBrief,
   files: CreateFiles,
-  chosen?: { previewUrl: string; previewPages: string[]; chosenLook: string; picture?: PictureFields },
+  chosen?: { previewUrl: string; previewPages: string[]; chosenLook: string; changeRequests?: string[]; picture?: PictureFields },
 ): Promise<void> {
   const pages = brief.pages.length ? brief.pages : ["Home", "About", "Services", "Contact"];
   const industry = [brief.industry, brief.what].filter(Boolean).join(": ");
@@ -198,6 +207,7 @@ async function submitCreateBrief(
   if (chosen) {
     data.append("preview_pages", chosen.previewPages.join("\n"));
     data.append("chosen_look", chosen.chosenLook);
+    data.append("change_requests", changeRequestsText(chosen.changeRequests));
   }
   appendPicture(data, chosen?.picture);
   const named: [string, File | null][] = [
@@ -252,6 +262,8 @@ export function HomePage() {
   const [offers, setOffers] = useState<DomainOffer[] | null>(null);
   const [domainNote, setDomainNote] = useState("");
   const [leadSent, setLeadSent] = useState(false);
+  const [feedback, setFeedback] = useState<string[]>([]);
+  const [refining, setRefining] = useState(false);
   const [choosingSend, setChoosingSend] = useState(false);
   const lead = useRef<{ form: PendingLead; sent: boolean } | null>(null);
   const choosing = useRef(false);
@@ -382,9 +394,9 @@ export function HomePage() {
       const chosenLookName = `${look.name} (${ARCHETYPE_LABEL[look.archetype] ?? look.archetype})`;
       try {
         if (form.kind === "reimagine") {
-          await submitFormcarry({ email: form.email, website: form.website, note: form.note, gotcha: form.gotcha, previewUrl, previewPages, chosenLook: chosenLookName, picture });
+          await submitFormcarry({ email: form.email, website: form.website, note: form.note, gotcha: form.gotcha, previewUrl, previewPages, chosenLook: chosenLookName, changeRequests: feedback, picture });
         } else {
-          await submitCreateBrief(form.email, form.gotcha, form.brief, form.files, { previewUrl, previewPages, chosenLook: chosenLookName, picture });
+          await submitCreateBrief(form.email, form.gotcha, form.brief, form.files, { previewUrl, previewPages, chosenLook: chosenLookName, changeRequests: feedback, picture });
         }
         setLeadSent(true);
         setMailed(picture.file ? THANKS : THANKS_NO_PICTURE);
@@ -452,6 +464,7 @@ export function HomePage() {
     setMailed("");
     setHandoff("");
     setLeadSent(false);
+    setFeedback([]);
     lead.current = null;
     const gotcha = new FormData(event.currentTarget).get("_gotcha");
     try {
@@ -494,6 +507,7 @@ export function HomePage() {
     setMailed("");
     setHandoff("");
     setLeadSent(false);
+    setFeedback([]);
     lead.current = null;
     let made: { looks: LookInfo[]; note: string } | null = null;
     let buildError = "";
@@ -550,6 +564,46 @@ export function HomePage() {
       setRetrying(false);
       setStage("");
     }
+  }
+
+  /**
+   * "Not quite right?": three new looks from the original note plus every feedback round so far
+   * (capped at MAX_FEEDBACK). Same browser-orchestrated steps as the first looks, so each request stays
+   * inside the step budget. Never sends the form — that only happens on "Choose this look".
+   */
+  async function refineLooks(text: string) {
+    const wish = text.replace(/\s+/g, " ").trim().slice(0, 400);
+    if (!wish || !facts || refining || retrying || working) return;
+    if (feedback.length >= MAX_FEEDBACK) {
+      setError("That's all the rounds for this preview. Choose the closest look.");
+      return;
+    }
+    const nextFeedback = [...feedback, wish];
+    const nextFacts: SiteFacts = { ...facts, feedback: nextFeedback };
+    const nextVariation = variation + 1;
+    setError("");
+    setRefining(true);
+    setRetrying(true);
+    try {
+      const made = await makeLooks(nextFacts, nextVariation);
+      setFacts(nextFacts);
+      setVariation(nextVariation);
+      setFeedback(nextFeedback);
+      showLooks(made.looks, made.note);
+      window.setTimeout(() => document.querySelector("[data-choose-banner]")?.scrollIntoView({ behavior: "smooth", block: "start" }), 50);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "New looks could not be made. Try again.");
+    } finally {
+      setRefining(false);
+      setRetrying(false);
+      setStage("");
+    }
+  }
+
+  function goToRefine() {
+    const box = document.getElementById("refine-looks");
+    box?.scrollIntoView({ behavior: "smooth", block: "center" });
+    window.setTimeout(() => document.getElementById("refine-text")?.focus({ preventScroll: true }), 400);
   }
 
   function downloadBlob(blob: Blob, name: string) {
@@ -656,7 +710,9 @@ export function HomePage() {
             <p className="mt-6 text-sm font-medium text-fg">
               {choosingSend
                 ? "Building your site and preparing your picture…"
-                : stage === "finish"
+                : refining
+                  ? "Making 3 new looks from your feedback…"
+                  : stage === "finish"
                   ? "Building your site in this look"
                   : (LOOK_STAGES.find((item) => item.key === stage)?.label ?? "Building your site")}
             </p>
@@ -665,7 +721,7 @@ export function HomePage() {
                 ? CHOOSE_STAGES
                 : stage === "finish"
                   ? FINISH_STAGES
-                  : LOOK_STAGES.filter((item) => (item.key !== "send" && item.key !== "picture") || stage === "send" || stage === "picture")
+                  : LOOK_STAGES.filter((item) => ((item.key !== "send" && item.key !== "picture") || stage === "send" || stage === "picture") && !(refining && item.key === "read"))
               ).map((item) => {
                 const list = choosingSend ? CHOOSE_STAGES : stage === "finish" ? FINISH_STAGES : LOOK_STAGES;
                 const order = list.findIndex((entry) => entry.key === item.key);
@@ -905,6 +961,10 @@ export function HomePage() {
                   onRetry={(look) => void retryAi(look)}
                   retryingId={retryingId}
                   sent={leadSent}
+                  feedback={feedback}
+                  maxFeedback={MAX_FEEDBACK}
+                  refining={refining}
+                  onRefine={facts ? (text) => void refineLooks(text) : undefined}
                 />
               ) : null}
               {looksNote && !result ? <p className="mt-3 text-sm text-faint">{looksNote}</p> : null}
@@ -925,6 +985,7 @@ export function HomePage() {
                           onChoose: () => void chooseLook(focused),
                           disabled: retrying || working || (focused.id === chosenLook && leadSent),
                           chosen: focused.id === chosenLook,
+                          onChangeRequest: facts ? goToRefine : undefined,
                         }}
                       />
                     );
