@@ -147,7 +147,7 @@ export function renderSitePage(site: StoredSite, slug: string, options?: RenderO
     const src = stored(t.image) ?? stored(site.logoMeta?.image) ?? site.logo;
     return `<span class="logo ${t.kind}"${t.plate ? ` style="--plate:${t.plate}"` : ""}><img src="${escapeHtml(src)}" alt="${escapeHtml(site.name)}"></span>`;
   };
-  const headerKind = site.design ? (site.design.header === "overlay" && !firstIsPhoto ? "light" : site.design.header) : "light";
+  const headerKind = site.design ? (site.design.header === "overlay" && !firstIsPhoto ? (site.design.heroStyle ? "dark" : "light") : site.design.header) : "light";
   const headerSurface = headerKind === "dark" ? darkSurface(site.palette) : headerKind === "overlay" ? "#1c1c1c" : site.palette.background;
   // No logo, or one that couldn't be loaded/read: the business name as a text wordmark (never an empty chip).
   const hasLogo = Boolean(site.logo) && !site.logoMeta?.wordmark;
@@ -182,6 +182,11 @@ export function renderSitePage(site: StoredSite, slug: string, options?: RenderO
       hours: site.hours,
       images,
       imageAlt: (name) => site.images?.[name]?.alt ?? site.name,
+      imageCaption: (name) => {
+        const credit = site.images?.[name]?.credit;
+        if (!credit) return undefined;
+        return credit.provider === "your site" ? credit.title : `${credit.title} · Photo: ${credit.author || "unknown"}, ${credit.license}`;
+      },
       page: slug,
     };
     body = page.sections.map((s) => renderSection(s, ctx)).join("\n");

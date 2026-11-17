@@ -126,6 +126,8 @@ export const previewLook = createServerFn({ method: "POST" })
       const { photosLine } = await import("./preview/image-prompts");
       look.request = latestRequest(data.facts) || undefined;
       look.photos = photosLine(site.trace, photos);
+      const { layoutLine } = await import("./preview/look-variety");
+      look.layout = layoutLine(direction, site.trace?.layout?.hero);
       look.trace = site.trace;
       if (site.mock) {
         const applied = requestHints(data.facts).applied;

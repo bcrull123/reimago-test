@@ -164,6 +164,11 @@ export function LooksPicker({
                     {look.photos}
                   </p>
                 ) : null}
+                {look.layout ? (
+                  <p className="text-[11px] leading-snug text-muted" data-look-layout>
+                    {look.layout}
+                  </p>
+                ) : null}
                 {look.trace && (look.trace.request.note || look.trace.request.feedback.length) ? (
                   <details className="text-[11px] leading-snug text-muted" data-look-trace>
                     <summary className="cursor-pointer select-none">How your request was used</summary>
