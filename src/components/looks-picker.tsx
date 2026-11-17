@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { ArrowDown, Check, CheckCircle2, Eye, MessageSquareText, RefreshCw, Wand2 } from "lucide-react";
 import type { LookInfo } from "@/lib/preview/types";
-import { ARCHETYPE_LABEL } from "@/lib/preview/archetype-label";
 
 
 /** A live, scaled-down homepage thumbnail (sandboxed, not interactive). */
@@ -51,6 +50,8 @@ export function LooksPicker({
   maxFeedback = 5,
   refining = false,
   onRefine,
+  editedName = "",
+  onVariant,
 }: {
   looks: LookInfo[];
   focused: string;
@@ -68,6 +69,10 @@ export function LooksPicker({
   refining?: boolean;
   /** Make three new looks from the original note + this feedback. Never sends the form. */
   onRefine?: (text: string) => void;
+  /** The look the last request edited in place (the others were left as they were). */
+  editedName?: string;
+  /** Swap an edited card to another of its variations. */
+  onVariant?: (card: LookInfo, pick: LookInfo) => void;
 }) {
   const [draft, setDraft] = useState("");
   const roundsLeft = maxFeedback - feedback.length;
@@ -108,9 +113,9 @@ export function LooksPicker({
       )}
       {feedback.length ? (
         <p className="mt-4 text-sm text-fg" data-refine-round>
-          {looks[0]?.edit ? (
+          {editedName ? (
             <>
-              <strong>Edited {looks[0].name}</strong>, as you asked: only the change you named; same layout, fonts, photo and words (round {feedback.length} of {maxFeedback}): “{feedback.at(-1)}”
+              <strong>Edited {editedName}</strong> only, as you asked (round {feedback.length} of {maxFeedback}): “{feedback.at(-1)}” The other looks are unchanged.
             </>
           ) : (
             <>
@@ -137,11 +142,10 @@ export function LooksPicker({
               <div className="flex flex-1 flex-col gap-3 p-4">
                 <div className="flex items-start justify-between gap-2">
                   <div>
-                    <h3 className="font-display text-xl leading-tight text-ink" data-look-name>
+                    <h3 className="font-display text-xl leading-tight text-ink" data-look-name={look.name}>
                       {look.name}
-                      {look.edit ? <span className="text-muted" data-look-variant>, {look.edit.variant}</span> : null}
+                      {look.edit ? <span className="text-muted" data-look-variant> · {look.edit.variant}</span> : null}
                     </h3>
-                    <p className="text-xs uppercase tracking-eyebrow text-faint">{ARCHETYPE_LABEL[look.archetype]}</p>
                   </div>
                   {isChosen ? (
                     <span className="inline-flex items-center gap-1 rounded-full bg-primary px-2 py-0.5 text-xs font-medium text-primary-fg">
@@ -169,6 +173,22 @@ export function LooksPicker({
                     Based on your request: “{look.request.length > 140 ? `${look.request.slice(0, 137)}…` : look.request}”
                     {look.applied?.length ? <span className="mt-0.5 block text-muted">Applied: {look.applied.join(" · ")}</span> : null}
                   </p>
+                ) : null}
+                {look.edit?.alternatives && look.edit.alternatives.length > 1 ? (
+                  <div className="flex flex-wrap gap-1.5" data-look-variants role="group" aria-label={`${look.name} variations`}>
+                    {look.edit.alternatives.map((alt) => (
+                      <button
+                        key={alt.id}
+                        type="button"
+                        data-variant-id={alt.id}
+                        aria-pressed={alt.id === look.id}
+                        onClick={() => alt.id !== look.id && onVariant?.(look, alt)}
+                        className={`rounded-full border px-2.5 py-0.5 text-xs ${alt.id === look.id ? "border-ink bg-ink text-white" : "border-border text-fg hover:border-ink/60"}`}
+                      >
+                        {alt.edit?.variant ?? "variation"}
+                      </button>
+                    ))}
+                  </div>
                 ) : null}
                 {look.edit ? (
                   <p className="rounded-md border border-emerald-300 bg-emerald-50 px-2.5 py-1.5 text-xs leading-relaxed text-emerald-900" data-look-changed>
@@ -257,7 +277,7 @@ export function LooksPicker({
             Not quite right? What would you like to see different?
           </label>
           <p className="mt-1 text-sm text-muted">
-            Tell us in your own words (colors, mood, photos, sections, wording). Name a look (“Night Brick, a little lighter”, “the second one, bigger text”, “this one, less busy”) to adjust just that look; otherwise we'll make 3 new looks using your original note plus this. Nothing is sent until you choose a look.
+            Tell us in your own words (colors, mood, photos, sections, wording). Name a look to change just that one (“Dark Premium, a little lighter”, “the second one, bigger text”, “use Editorial's picture on Dark Premium”); the other looks stay as they are. Otherwise we'll make 3 new looks using your original note plus this. Nothing is sent until you choose a look.
           </p>
           <textarea
             id="refine-text"
@@ -276,7 +296,7 @@ export function LooksPicker({
               className="inline-flex h-11 items-center justify-center gap-2 rounded-lg bg-ink px-5 text-sm font-semibold text-white disabled:opacity-50"
             >
               <Wand2 className={`size-4 ${refining ? "animate-pulse" : ""}`} aria-hidden />
-              {refining ? "Making 3 new looks…" : "Show me 3 new looks"}
+              {refining ? "Working on it…" : "Make this change"}
             </button>
             <span className="text-xs text-muted">
               {roundsLeft > 0 ? `${roundsLeft} of ${maxFeedback} rounds left.` : "That's all the rounds for this preview. Choose the closest look; sales will follow up on the rest."}

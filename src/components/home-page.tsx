@@ -9,7 +9,6 @@ import { capturePreviewPicture, pictureFileName } from "@/lib/preview-picture";
 import { notifyReplyWebhook } from "@/lib/reply-webhook.functions";
 import { LivePreview } from "@/components/live-preview";
 import { LooksPicker } from "@/components/looks-picker";
-import { ARCHETYPE_LABEL } from "@/lib/preview/archetype-label";
 import type { LookInfo, PreviewInfo, SiteFacts } from "@/lib/preview/types";
 import type { DomainOffer } from "@/lib/logicboxes-types";
 import type { ReimagineOk } from "@/lib/reimagine-types";
@@ -265,6 +264,10 @@ export function HomePage() {
   const [leadSent, setLeadSent] = useState(false);
   const [feedback, setFeedback] = useState<string[]>([]);
   const [refining, setRefining] = useState(false);
+  /** The look the last refine edited in place ("" after a full new round). */
+  const [editedName, setEditedName] = useState("");
+  /** Every look id shown this session (oldest first). */
+  const seenIds = useRef<string[]>([]);
   const [choosingSend, setChoosingSend] = useState(false);
   const lead = useRef<{ form: PendingLead; sent: boolean } | null>(null);
   const choosing = useRef(false);
@@ -302,7 +305,8 @@ export function HomePage() {
    */
   async function makeLooks(nextFacts: SiteFacts, nextVariation: number): Promise<{ looks: LookInfo[]; note: string }> {
     setStage("dream");
-    const planned = await previewDirections({ data: { facts: nextFacts, variation: nextVariation } });
+    // Earlier rounds' looks (the server reads them itself) so a new round comes back visibly different.
+    const planned = await previewDirections({ data: { facts: nextFacts, variation: nextVariation, previous: nextVariation ? seenIds.current.slice(-12) : [], current: nextVariation ? (looks ?? []).map((l) => l.id) : [] } });
     if (!planned.ok) throw new Error(planned.error);
     setStage("paint");
     const settled = await Promise.allSettled(
@@ -329,6 +333,7 @@ export function HomePage() {
   }
 
   function showLooks(nextLooks: LookInfo[], note: string) {
+    seenIds.current = [...seenIds.current, ...nextLooks.map((l) => l.id)];
     setLooks(nextLooks);
     setFocusedLook(nextLooks[0]!.id);
     setChosenLook("");
@@ -392,7 +397,8 @@ export function HomePage() {
       setStage("send");
       const previewUrl = built?.preview?.url ?? look.url;
       const previewPages = built?.preview?.pages.map((page) => `${page.title}: ${page.url}`) ?? [`${look.name} · Home: ${look.url}`];
-      const chosenLookName = `${look.name}${look.edit ? `, ${look.edit.variant}` : ""} (${ARCHETYPE_LABEL[look.archetype] ?? look.archetype})`;
+      // One name per look (its style), plus the edit variant: "Dark Premium · lighter".
+      const chosenLookName = `${look.name}${look.edit ? ` · ${look.edit.variant}` : ""}`;
       // Email Bot's instant reply: the server posts to its webhook (key stays server-side). Not awaited — the
       // visitor's "check your email" never waits on it; retries reuse the same submission id.
       void notifyReplyWebhook({
@@ -481,6 +487,8 @@ export function HomePage() {
     setHandoff("");
     setLeadSent(false);
     setFeedback([]);
+    setEditedName("");
+    seenIds.current = [];
     lead.current = null;
     const gotcha = new FormData(event.currentTarget).get("_gotcha");
     try {
@@ -524,6 +532,8 @@ export function HomePage() {
     setHandoff("");
     setLeadSent(false);
     setFeedback([]);
+    setEditedName("");
+    seenIds.current = [];
     lead.current = null;
     let made: { looks: LookInfo[]; note: string } | null = null;
     let buildError = "";
@@ -608,17 +618,27 @@ export function HomePage() {
         setError(routed.note);
         return;
       }
-      if (routed?.ok && routed.mode === "edit") {
+      if (routed?.ok && routed.mode === "edit" && routed.looks.length) {
+        // Only the named look changes, in place: same card, same name; the other two stay exactly as they were.
+        // Its variations ("lighter" / "a bit lighter still" / …) are chips on that card.
+        const alternatives = routed.looks;
+        const edited: LookInfo = { ...alternatives[0]!, edit: { ...alternatives[0]!.edit!, alternatives } };
         setFacts(nextFacts);
         setFeedback(nextFeedback);
-        showLooks(routed.looks, "");
-        window.setTimeout(() => document.querySelector("[data-choose-banner]")?.scrollIntoView({ behavior: "smooth", block: "start" }), 50);
+        setEditedName(routed.target);
+        seenIds.current = [...seenIds.current, ...alternatives.map((l) => l.id)];
+        setLooks((prev) => (prev ?? []).map((l) => (l.id === routed.targetId ? edited : l)));
+        setFocusedLook(edited.id);
+        setChosenLook("");
+        setResult(null);
+        window.setTimeout(() => document.querySelector(`[data-look="${edited.id}"]`)?.scrollIntoView({ behavior: "smooth", block: "center" }), 80);
         return;
       }
       const made = await makeLooks(nextFacts, nextVariation);
       setFacts(nextFacts);
       setVariation(nextVariation);
       setFeedback(nextFeedback);
+      setEditedName("");
       showLooks(made.looks, made.note);
       window.setTimeout(() => document.querySelector("[data-choose-banner]")?.scrollIntoView({ behavior: "smooth", block: "start" }), 50);
     } catch (err) {
@@ -741,7 +761,7 @@ export function HomePage() {
               {choosingSend
                 ? "Building your site and preparing your picture…"
                 : refining
-                  ? "Making 3 new looks from your feedback…"
+                  ? "Working on your change…"
                   : stage === "finish"
                   ? "Building your site in this look"
                   : (LOOK_STAGES.find((item) => item.key === stage)?.label ?? "Building your site")}
@@ -995,6 +1015,14 @@ export function HomePage() {
                   maxFeedback={MAX_FEEDBACK}
                   refining={refining}
                   onRefine={facts ? (text) => void refineLooks(text) : undefined}
+                  editedName={editedName}
+                  onVariant={(card, pick) => {
+                    const swapped: LookInfo = { ...pick, edit: { ...pick.edit!, alternatives: card.edit?.alternatives } };
+                    setLooks((prev) => (prev ?? []).map((l) => (l.id === card.id ? swapped : l)));
+                    setFocusedLook(swapped.id);
+                    setChosenLook("");
+                    setResult(null);
+                  }}
                 />
               ) : null}
               {looksNote && !result ? <p className="mt-3 text-sm text-faint">{looksNote}</p> : null}
@@ -1011,7 +1039,7 @@ export function HomePage() {
                         preview={lookPreview(focused)}
                         host={facts?.host || bareDomain(url) || focused.name}
                         choice={{
-                          lookName: focused.name,
+                          lookName: `${focused.name}${focused.edit ? ` · ${focused.edit.variant}` : ""}`,
                           onChoose: () => void chooseLook(focused),
                           disabled: retrying || working || (focused.id === chosenLook && leadSent),
                           chosen: focused.id === chosenLook,

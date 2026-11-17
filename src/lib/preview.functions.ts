@@ -72,14 +72,28 @@ export const previewFromBrief = createServerFn({ method: "POST" })
 
 /** Step 2 — plan the pages and dream up three design directions (two AI calls in parallel). */
 export const previewDirections = createServerFn({ method: "POST" })
-  .validator((input: { facts?: unknown; variation?: number }) => ({ facts: clampFacts(input?.facts), variation: variationOf(input?.variation) }))
+  .validator((input: { facts?: unknown; variation?: number; previous?: unknown; current?: unknown }) => ({
+    facts: clampFacts(input?.facts),
+    variation: variationOf(input?.variation),
+    // Ids of the looks shown in earlier rounds of this session (oldest first); the server reads them itself.
+    previous: (Array.isArray(input?.previous) ? input.previous : []).filter((x): x is string => typeof x === "string" && /^[a-f0-9]{16}$/.test(x)).slice(-12),
+    // The looks on screen now (the round being replaced).
+    current: (Array.isArray(input?.current) ? input.current : []).filter((x): x is string => typeof x === "string" && /^[a-f0-9]{16}$/.test(x)).slice(0, 3),
+  }))
   .handler(async ({ data }): Promise<PreviewStepResult<{ plan: SitePlan; directions: DesignDirection[]; note?: string }>> => {
     if (await limited("dir", 20)) return { ok: false, error: "Too many previews from this network in the last hour. Try again shortly." };
     try {
       const { planSite, directionsFor, prefetchForPlan, stepBudgetMs } = await import("./preview/builder.server");
+      const { previousRound } = await import("./preview/round-memory.server");
       const started = Date.now();
-      const planP = planSite(data.facts, data.variation);
-      const looksP = directionsFor(data.facts, data.variation);
+      const previous = data.previous.length || data.current.length ? await previousRound(data.previous, data.current).catch(() => undefined) : undefined;
+      // A fresh random seed every round: archetypes, hero treatments and names are picked from a wider pool.
+      const seed = 1 + Math.floor(Math.random() * 2_000_000_000);
+      const planP = planSite(data.facts, data.variation).then((p) => {
+        if (previous?.photoKeys.length || previous?.photoHashes.length) p.plan.avoidPhotos = { keys: previous.photoKeys, hashes: previous.photoHashes };
+        return p;
+      });
+      const looksP = directionsFor(data.facts, data.variation, { seed, previous });
       // Proactive photo search (Serper) starts as soon as the plan's imageQueries exist, alongside the looks.
       // It also waits for the looks' archetypes, so each look's photo can suit its mood (dark premium: night, …).
       const archetypesP = looksP.then((l) => l.directions.map((d) => d.archetype)).catch(() => undefined);
@@ -164,7 +178,7 @@ export const previewRefine = createServerFn({ method: "POST" })
     const feedback = (Array.isArray(input?.feedback) ? input.feedback : []).map((f) => String(f).replace(/\s+/g, " ").trim().slice(0, 400)).filter(Boolean).slice(-5);
     return { text, ids, focused, feedback };
   })
-  .handler(async ({ data }): Promise<PreviewStepResult<{ mode: "new" } | { mode: "none"; note: string } | { mode: "edit"; looks: LookInfo[]; target: string; how: string; note?: string }>> => {
+  .handler(async ({ data }): Promise<PreviewStepResult<{ mode: "new" } | { mode: "none"; note: string } | { mode: "edit"; looks: LookInfo[]; target: string; targetId: string; how: string; note?: string }>> => {
     if (await limited("refine", 40)) return { ok: false, error: "Too many changes from this network in the last hour. Try again shortly." };
     try {
       const { readSite } = await import("./pages.server");
@@ -174,11 +188,15 @@ export const previewRefine = createServerFn({ method: "POST" })
       const { aiAvailable, isMockMode } = await import("./ai-provider.server");
       const refs = lookRefs(sites);
       const edit = await planEdit(data.text, refs, data.focused, !isMockMode() && aiAvailable());
-      console.info(`[refine] "${data.text.slice(0, 120)}" -> ${edit.targetId ? `edit ${refs.find((r) => r.id === edit.targetId)?.name} (${edit.how})` : "no look named: 3 new looks"} · adjustments ${JSON.stringify(edit.adjustments)}${edit.copy ? " · copy" : ""}${edit.photo ? ` · photo "${edit.photo}"` : ""} · read by ${edit.from}`);
+      const nameOf = (id: string | undefined) => refs.find((r) => r.id === id)?.name;
+      console.info(
+        `[refine] "${data.text.slice(0, 120)}" -> ${edit.targetId ? `edit ${nameOf(edit.targetId)} only (${edit.how}); unchanged: ${refs.filter((r) => r.id !== edit.targetId).map((r) => r.name).join(", ") || "none"}` : "no look named: 3 new looks"} · adjustments ${JSON.stringify(edit.adjustments)}${edit.copy ? " · copy" : ""}${edit.photo ? ` · photo "${edit.photo}"` : ""}${edit.borrow ? ` · borrow ${edit.borrow.assets.join("+")} from ${nameOf(edit.borrow.fromId)}` : ""} · read by ${edit.from}`,
+      );
       if (!edit.targetId) return { ok: true, mode: "new" };
       const target = sites.find((s) => s.id === edit.targetId)!;
-      const name = refs.find((r) => r.id === edit.targetId)!.name;
-      if (!edit.adjustments.length && !edit.copy && !edit.photo) {
+      const lender = edit.borrow ? sites.find((s) => s.id === edit.borrow!.fromId) : undefined;
+      const name = nameOf(edit.targetId)!;
+      if (!edit.adjustments.length && !edit.copy && !edit.photo && !lender) {
         return {
           ok: true,
           mode: "none",
@@ -186,11 +204,12 @@ export const previewRefine = createServerFn({ method: "POST" })
         };
       }
       const feedback = [...data.feedback, data.text].slice(-5);
-      const edits = await buildEdits(target, edit, feedback);
+      const edits = await buildEdits(target, edit, feedback, lender);
+      const targetIndex = refs.find((r) => r.id === edit.targetId)?.index ?? 0;
       const { publicBase } = await import("./publish.server");
       const { photosLine } = await import("./preview/image-prompts");
       const { layoutLine } = await import("./preview/look-variety");
-      const looks: LookInfo[] = edits.map((e, i) => {
+      const looks: LookInfo[] = edits.map((e) => {
         const site = e.site;
         const design = site.design!;
         const images = Object.values(site.images ?? {});
@@ -198,7 +217,8 @@ export const previewRefine = createServerFn({ method: "POST" })
         return {
           id: site.id,
           url: `${publicBase()}/made/${site.id}`,
-          index: i,
+          // Same card, same place, same name: only this look changes on screen.
+          index: targetIndex,
           name,
           mood: design.mood,
           archetype: design.archetype,
@@ -213,7 +233,7 @@ export const previewRefine = createServerFn({ method: "POST" })
           edit: { variant: e.variant, changed: e.changed, from: target.id, how: edit.how ?? "" },
         };
       });
-      return { ok: true, mode: "edit", looks, target: name, how: edit.how ?? "" };
+      return { ok: true, mode: "edit", looks, target: name, targetId: target.id, how: edit.how ?? "" };
     } catch (error) {
       console.error("[refine] failed", error instanceof Error ? error.message : error);
       return { ok: false, error: error instanceof Error ? error.message : "That change could not be made." };
