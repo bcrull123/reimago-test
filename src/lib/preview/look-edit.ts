@@ -28,6 +28,7 @@ export const ADJUST_TYPES = [
   "less-space",
   "more-color",
   "less-busy",
+  "daylight",
 ] as const;
 export type AdjustType = (typeof ADJUST_TYPES)[number];
 export type Amount = "slight" | "medium" | "strong";
@@ -45,6 +46,8 @@ export type LookEdit = {
   photo?: string;
   /** "Use Editorial's picture on Dark Premium": take these assets from another look on screen. */
   borrow?: { fromId: string; assets: BorrowAsset[] };
+  /** Only when the owner explicitly asked this card for another style ("make it Bold Photo"): its new archetype. */
+  restyle?: Archetype;
   from: "AI planner" | "wording";
 };
 
@@ -88,7 +91,7 @@ function amountNear(text: string, at: number, end: number): Amount {
 const RULES: { type: AdjustType; pattern: RegExp }[] = [
   { type: "lighten", pattern: /\btoo\s+(?:dark|dim|gloomy|black|moody|heavy)\b|\b(?:lighter|brighter|lighten(?:ed)?(?:\s+up)?|brighten(?:ed)?(?:\s+up)?|less\s+dark|not\s+(?:so|as)\s+dark|more\s+light|lift(?:ed)?\s+the\s+(?:darkness|shadows))\b/ },
   { type: "darken", pattern: /\btoo\s+(?:light|bright|washed[\s-]?out|white|pale)\b|\b(?:darker|darken(?:ed)?|moodier|less\s+bright|not\s+(?:so|as)\s+bright|dimmer)\b/ },
-  { type: "more-contrast", pattern: /\b(?:more|higher|stronger|better|increase(?:d)?\s+the)\s+contrast\b|\bhard\s+to\s+read\b|\blow\s+contrast\b|\bmore\s+pop\b|\bpop\s+more\b|\bnot\s+enough\s+contrast\b/ },
+  { type: "more-contrast", pattern: /\b(?:more|higher|stronger|better|increase(?:d)?\s+the)\s+contrast\b|\b(?:raise|increase|boost|improve|add|show|up)\s+(?:the\s+|some\s+)?(?:text\s+|type\s+)?contrast\b|\b(?:text|type|words|writing)\s+(?:to\s+)?(?:show|have|with|needs?)\s+(?:more\s+|better\s+)?contrast\b|\bcontrast\s+(?:on|for|of)\s+the\s+(?:text|type|words)\b|\bhard\s+to\s+read\b|\blow\s+contrast\b|\bmore\s+pop\b|\bpop\s+more\b|\bnot\s+enough\s+contrast\b/ },
   { type: "less-contrast", pattern: /\b(?:less|lower|softer|reduce(?:d)?\s+the)\s+contrast\b|\btoo\s+(?:harsh|contrasty|stark)\b/ },
   { type: "saturate", pattern: /\b(?:more\s+(?:vivid|saturated|vibrant)|richer\s+colou?rs?|colou?rs?\s+(?:pop|more\s+vivid)|too\s+(?:dull|muted|washed)|washed[\s-]+out|(?:dull|faded)\s+colou?rs?)\b/ },
   { type: "desaturate", pattern: /\b(?:less\s+(?:saturated|vivid|vibrant)|more\s+muted|tone(?:d)?\s+(?:it\s+)?down|too\s+(?:saturated|garish|loud|colou?rful|neon))\b/ },
@@ -99,6 +102,8 @@ const RULES: { type: AdjustType; pattern: RegExp }[] = [
   { type: "more-space", pattern: /\b(?:more\s+(?:space|spacing|white\s*space|breathing\s+room|room|padding)|roomier|too\s+(?:cramped|crowded|tight|squished))\b/ },
   { type: "less-space", pattern: /\b(?:less\s+(?:space|spacing|white\s*space|padding)|tighter|more\s+compact|too\s+(?:much\s+(?:white\s*)?space|spread\s+out|sparse))\b/ },
   { type: "more-color", pattern: /\b(?:more\s+colou?r(?:ful)?|add\s+(?:some\s+)?colou?r|too\s+(?:plain|gr[ae]y|bland|boring|beige)|needs\s+colou?r)\b/ },
+  // "make the image daylight": the SAME photo, brighter and sunnier (never a new photo by itself).
+  { type: "daylight", pattern: /\b(?:in\s+)?(?:day[\s-]?light|day[\s-]?time|sunny|sunnier|sunlit|sunlight|sunshine|mid[\s-]?day|in\s+the\s+day|less\s+(?:night|nighttime|dusk)|not\s+(?:at\s+)?night)\b/ },
   { type: "less-busy", pattern: /\b(?:too\s+busy|less\s+busy|cluttered|too\s+much\s+going\s+on|cleaner|simpler|calmer|less\s+cluttered|declutter|tone\s+down\s+the\s+decorations)\b/ },
 ];
 
@@ -548,14 +553,15 @@ export function tuneNumbers(levels: TuneLevels, scrimMin = 0) {
   const con = axis(levels, "more-contrast", "less-contrast");
   const sat = axis(levels, "saturate", "desaturate") + (levels["more-color"] ?? 0) * 0.6;
   const warm = axis(levels, "warmer", "cooler");
-  const scrimTarget = light > 0 ? 1 - 0.27 * light : light < 0 ? 1 : 1;
+  const day = levels.daylight ?? 0;
+  const scrimTarget = (light > 0 ? 1 - 0.27 * light : 1) - 0.12 * day;
   return {
     // Opacity factor of the hero's dark overlay (1 = as designed), never below what keeps white text at AA.
     scrim: Math.round(clamp(Math.max(scrimTarget, scrimMin), 0.15, 1) * 1000) / 1000,
-    brightness: Math.round(clamp(light > 0 ? 1 + 0.11 * light : 1 + 0.09 * light, 0.6, 1.45) * 1000) / 1000,
-    contrast: Math.round(clamp(1 + 0.06 * con, 0.8, 1.3) * 1000) / 1000,
-    saturate: Math.round(clamp(1 + 0.14 * sat, 0.3, 1.6) * 1000) / 1000,
-    sepia: warm > 0 ? Math.round(clamp(0.05 * warm, 0, 0.25) * 1000) / 1000 : 0,
+    brightness: Math.round(clamp((light > 0 ? 1 + 0.11 * light : 1 + 0.09 * light) + 0.1 * day, 0.6, 1.6) * 1000) / 1000,
+    contrast: Math.round(clamp(1 + 0.06 * con + 0.02 * day, 0.8, 1.3) * 1000) / 1000,
+    saturate: Math.round(clamp(1 + 0.14 * sat + 0.06 * day, 0.3, 1.6) * 1000) / 1000,
+    sepia: warm > 0 || day > 0 ? Math.round(clamp(0.05 * Math.max(0, warm) + 0.03 * day, 0, 0.25) * 1000) / 1000 : 0,
     hue: warm < 0 ? Math.round(clamp(-5 * warm, 0, 20)) : 0,
     text: Math.round(clamp(1 + 0.07 * axis(levels, "bigger-text", "smaller-text"), 0.8, 1.3) * 1000) / 1000,
     space: Math.round(clamp(1 + 0.15 * axis(levels, "more-space", "less-space"), 0.6, 1.6) * 1000) / 1000,
@@ -586,6 +592,17 @@ export function tuneCss(tune: LookTune | undefined): string {
   return css.length > 1 ? css.join("\n") : "";
 }
 
+/**
+ * The Custom Design page's photo edit (its HTML is Grok's own, so the template selectors don't apply): the same
+ * filters on the business's photos (@img:hero / @img:photo-N), never on the logo, the signature graphic or Imagine art.
+ */
+export function customTuneCss(tune: LookTune | undefined): string {
+  if (!tune) return "";
+  const n = tuneNumbers(tune.levels, tune.scrimMin);
+  const f = [n.brightness !== 1 ? `brightness(${n.brightness})` : "", n.contrast !== 1 ? `contrast(${n.contrast})` : "", n.saturate !== 1 ? `saturate(${n.saturate})` : "", n.sepia ? `sepia(${n.sepia})` : "", n.hue ? `hue-rotate(${n.hue}deg)` : ""].filter(Boolean).join(" ");
+  return f ? `/* look edit: the business's photos */\nimg[src$="/img/hero"],img[src*="/img/photo-"]{filter:${f}}` : "";
+}
+
 // ------------------------------------------------------------------------------------------- labels
 
 const VERB: Record<AdjustType, string> = {
@@ -603,6 +620,7 @@ const VERB: Record<AdjustType, string> = {
   "less-space": "tighter",
   "more-color": "more color",
   "less-busy": "calmer",
+  daylight: "daylight",
 };
 
 /** "lighter" / "a bit lighter still" / "noticeably lighter" (step 0, 1, 2). */
@@ -630,6 +648,7 @@ const PHRASE: Record<AdjustType, (photoHero: boolean) => string> = {
   "less-space": () => "tighter spacing",
   "more-color": () => "more color in backgrounds and accents",
   "less-busy": () => "calmer layout (decorations removed)",
+  daylight: () => "same photo in daylight (brighter, sunnier, lighter overlay)",
 };
 
 /** The card line: "Changed: lightened backgrounds and photo overlay (slight)". */
@@ -649,4 +668,40 @@ export function addLevels(prev: TuneLevels | undefined, adjustments: Adjustment[
 export function variationScales(adjustments: Adjustment[]): [number, number, number] {
   const top = Math.max(1, ...adjustments.map((a) => AMOUNT_LEVEL[a.amount]));
   return [1, (top + 0.5) / top, (top + 1) / top];
+}
+
+// ------------------------------------------------------------------------------------------- per-card requests
+
+const STYLE_NAMES: [Archetype, RegExp][] = [
+  ["editorial", /editorial/],
+  ["dark-premium", /dark[\s-]*premium/],
+  ["bold-photo", /bold[\s-]*photo/],
+  ["playful", /playful/],
+  ["minimal-luxury", /minimal[\s-]*luxury/],
+  ["warm-craft", /warm[\s-]*craft/],
+];
+
+/**
+ * An explicit style switch for ONE card ("use Bold Photo", "make it Editorial", "switch to Warm Craft style").
+ * Only a full style name counts, and only one that is not the card's current style; anything else keeps the style.
+ */
+export function requestedStyle(raw: string, current: Archetype): Archetype | undefined {
+  const text = raw.toLowerCase().replace(/[’']/g, "'");
+  for (const [archetype, name] of STYLE_NAMES) {
+    if (archetype === current) continue;
+    const re = new RegExp(`\\b(?:use|make\\s+(?:it|this|this\\s+one|this\\s+look)(?:\\s+(?:a|an|the|into|in))?|switch\\s+(?:it\\s+|this\\s+)?to|change\\s+(?:it\\s+|this\\s+|the\\s+style\\s+)?to|turn\\s+(?:it\\s+|this\\s+)?into|restyle\\s+(?:it\\s+)?(?:as|to)|(?:go|try)\\s+(?:with\\s+)?|as|in)\\s+(?:the\\s+|a\\s+)?${name.source}(?:\\s+(?:style|look|template|design))?\\b`);
+    if (re.test(text)) return archetype;
+  }
+  return undefined;
+}
+
+/** Whether the owner asked for a DIFFERENT photo (not just to adjust the current one: daylight, brighter…). */
+export function wantsNewPhoto(raw: string): boolean {
+  const text = raw.toLowerCase();
+  return /\b(?:new|different|another|other|replace|swap|switch)\b[^.]{0,24}\b(?:photo|picture|image|pic|shot|background)s?\b|\b(?:photo|picture|image|pic|shot)s?\s+of\b|\buse\s+(?:a|an|the)\s+(?:photo|picture|image|pic|shot)\b|\b(?:photo|picture|image)\s+(?:with|showing)\b/.test(text);
+}
+
+/** A planner "photo" that only names lighting ("daylight scene", "sunny") is an adjustment, not a new photo. */
+export function lightingOnly(subject: string): boolean {
+  return /^(?:(?:a|the|in|at|bright|brighter|sunny|sunlit|daylight|daytime|day|light|lighter|morning|midday|noon|scene|photo|image|picture|version|shot|of|time)\s*)+$/i.test(subject.trim());
 }

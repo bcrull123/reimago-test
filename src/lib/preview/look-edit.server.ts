@@ -17,7 +17,10 @@ import {
   findBorrow,
   findLookRefs,
   findTargetLook,
+  lightingOnly,
   readAdjustments,
+  requestedStyle,
+  wantsNewPhoto,
   tuneNumbers,
   tunePalette,
   variantLabel,
@@ -62,7 +65,15 @@ export function editByWording(text: string, looks: LookRef[], focusedId?: string
  * (rules), or be a look whose name the planner returned AND that appears (fuzzily) in the text; the planner's
  * adjustments win when it returned any.
  */
-export async function planEdit(text: string, looks: LookRef[], focusedId: string | undefined, useAi: boolean): Promise<LookEdit> {
+export async function planEdit(text: string, looks: LookRef[], focusedId: string | undefined, useAi: boolean, cardId?: string): Promise<LookEdit> {
+  const card = cardId ? looks.find((l) => l.id === cardId) : undefined;
+  if (card) {
+    // The card's own "Change this look" box: the target is that card, sent explicitly (no name matching).
+    const planned = await planEdit(text, looks, card.id, useAi);
+    const restyle = card.custom ? undefined : requestedStyle(text, card.archetype);
+    const borrow = planned.borrow && planned.borrow.fromId !== card.id ? planned.borrow : undefined;
+    return { ...planned, targetId: card.id, how: `its own “Change this look” box (card ${card.index + 1})`, borrow, restyle };
+  }
   const rules = editByWording(text, looks, focusedId);
   if (!useAi) return rules;
   try {
@@ -78,13 +89,14 @@ export async function planEdit(text: string, looks: LookRef[], focusedId: string
           role: "system",
           content: `You are editing ONE existing website look from the owner's feedback. The owner sees these looks (left to right):
 ${looks.map((l, i) => `${i + 1}. "${l.name}" (${l.custom ? "designed from scratch; the owner may call it “the custom one”" : l.archetype}${l.id === focusedId ? ", currently previewed" : ""})`).join("\n")}
-Return ONLY JSON: {"targetLook": exact look name or null, "adjustments": [{"type": one of lighten|darken|more-contrast|less-contrast|saturate|desaturate|warmer|cooler|bigger-text|smaller-text|more-space|less-space|more-color|less-busy, "amount": "slight"|"medium"|"strong"}], "copy": {"headline"?: string, "lead"?: string} or null, "photo": string or null, "borrowFrom": exact look name or null, "borrow": subset of ["photo","palette","fonts"]}
+Return ONLY JSON: {"targetLook": exact look name or null, "adjustments": [{"type": one of lighten|darken|more-contrast|less-contrast|saturate|desaturate|warmer|cooler|bigger-text|smaller-text|more-space|less-space|more-color|less-busy|daylight, "amount": "slight"|"medium"|"strong"}], "copy": {"headline"?: string, "lead"?: string} or null, "photo": string or null, "borrowFrom": exact look name or null, "borrow": subset of ["photo","palette","fonts"]}
 Rules:
 - targetLook only when the feedback names or clearly points at one look (its name, its style such as "Dark Premium" or "editorial", "the second one", "the dark one", "this one" = the currently previewed look). Otherwise null.
 - "Use X's picture on Y" / "give Y X's colors": targetLook = Y (the look that changes), borrowFrom = X, borrow = what moves; then "photo" is null (no search: the picture comes from X).
 - "a little", "a bit", "slightly", "just a touch" = slight; no qualifier = medium; "much", "way", "a lot" = strong.
 - "too dark" = lighten; "too bright"/"washed out" = darken; "too busy" = less-busy; "hard to read" = more-contrast.
-- copy only when the owner dictates new words for the hero headline or intro; photo only when they ask for a different hero photo (the subject, 2-6 words).
+- "make the image daylight" / "sunny" / "daytime" = daylight (the SAME photo, brighter and sunnier); "adjust the text to show contrast" = more-contrast.
+- copy only when the owner dictates new words for the hero headline or intro; photo only when they ask for a DIFFERENT hero photo or subject (the subject, 2-6 words), never for lighting or color changes to the current photo.
 - Never invent changes the owner did not ask for.`,
         },
         { role: "user", content: text.slice(0, 400) },
@@ -105,11 +117,15 @@ Rules:
     const c = (raw.copy && typeof raw.copy === "object" ? raw.copy : {}) as Record<string, unknown>;
     const clip = (v: unknown, n: number) => (typeof v === "string" ? v.replace(/\s+/g, " ").trim().slice(0, n) : "");
     const copy = { headline: clip(c.headline, 120) || undefined, lead: clip(c.lead, 300) || undefined };
-    const photo = clip(raw.photo, 80) || undefined;
+    // A new photo only when the owner asked for a different one; "make the image daylight" adjusts the current photo.
+    const asked = clip(raw.photo, 80);
+    const photo = asked && wantsNewPhoto(text) && !lightingOnly(asked) ? asked : undefined;
+    if (asked && !photo) console.info(`[refine] planner photo “${asked}” ignored: the owner asked to adjust the current photo, not for a new one`);
     return {
       targetId,
       how: rules.how ?? (aiTarget ? `named “${aiTarget.name}” (AI)` : undefined),
-      adjustments: adjustments.length ? adjustments : rules.adjustments,
+      // The planner's reading, plus anything the wording rules caught that it missed ("daylight", "text contrast").
+      adjustments: adjustments.length ? [...adjustments, ...rules.adjustments.filter((r) => !adjustments.some((a) => a.type === r.type))].slice(0, 6) : rules.adjustments,
       copy: copy.headline || copy.lead ? copy : undefined,
       // A borrowed picture comes from the other look, never from a new search.
       photo: borrow?.assets.includes("photo") ? undefined : photo,
@@ -214,6 +230,15 @@ export async function buildEdits(stored: StoredSite, edit: LookEdit, feedback: s
   // Colors borrowed from another look become this look's new base (later tweaks are computed from them).
   const basePalette = borrowed.includes("palette") && lender ? { ...lender.palette } : (design.tune?.base.palette ?? stored.palette);
   const base: LookTune["base"] = { ...(design.tune?.base ?? { palette: stored.palette, motifs: [...design.motifs], name: design.name }), palette: basePalette };
+  // An explicit style switch from the card's own box ("make it Bold Photo"): same photo, copy, colors and sections,
+  // in the new style's type, motifs, corners and buttons; the card then goes by the new style's name.
+  const { PRESETS } = await import("./design.ts");
+  const { lookName } = await import("./archetype-label.ts");
+  const preset = edit.restyle && !stored.custom ? PRESETS[edit.restyle] : undefined;
+  if (preset) {
+    base.name = lookName(preset.archetype);
+    base.motifs = [...preset.motifs];
+  }
   const intensity = edit.adjustments.length > 0;
   // The from-scratch look is edited once, in place, by Grok (no three variations: each would be a full AI call).
   const scales = intensity ? (stored.custom ? [variationScales(edit.adjustments)[0]] : variationScales(edit.adjustments)) : [1];
@@ -261,6 +286,10 @@ export async function buildEdits(stored: StoredSite, edit: LookEdit, feedback: s
       fonts = { ...lender.design.fonts };
       notes.push(`fonts from “${lenderName}”`);
     }
+    if (preset) {
+      if (!borrowed.includes("fonts")) fonts = { ...preset.fonts };
+      notes.push(`style switched to ${base.name}, as asked (same photo, words and colors)`);
+    }
     if (hero && edit.photo) {
       const found = await findEditPhoto(stored, edit.photo, step);
       if (found) {
@@ -278,8 +307,15 @@ export async function buildEdits(stored: StoredSite, edit: LookEdit, feedback: s
       id,
       createdAt: new Date().toISOString(),
       palette,
-      fonts: borrowed.includes("fonts") ? fonts : stored.fonts,
-      design: { ...design, palette, fonts, motifs: (levels["less-busy"] ?? 0) > 0 ? [] : (base.motifs as typeof design.motifs), tune },
+      fonts: borrowed.includes("fonts") || preset ? fonts : stored.fonts,
+      design: {
+        ...design,
+        ...(preset ? { archetype: preset.archetype, name: base.name, radius: preset.radius, buttons: preset.buttons } : {}),
+        palette,
+        fonts,
+        motifs: (levels["less-busy"] ?? 0) > 0 ? [] : (base.motifs as typeof design.motifs),
+        tune,
+      },
       images,
       pages,
       facts: stored.facts ? { ...stored.facts, feedback } : stored.facts,

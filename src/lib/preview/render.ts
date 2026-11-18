@@ -2,6 +2,7 @@
 import { escapeHtml } from "./sanitize.ts";
 import { darkSurface, designClasses, fontsHref, siteCss } from "./theme.ts";
 import { logoTreatment } from "./logo.ts";
+import { customTuneCss } from "./look-edit.ts";
 import { legacyCss } from "./legacy-theme.ts";
 import { renderSection, type RenderContext } from "./sections.ts";
 import { customFontsHref, paletteVars, type CustomDesign, type CustomMockup } from "./custom-design.ts";
@@ -305,6 +306,7 @@ ${paletteVars(site.palette, custom.fonts)}
 .logo{display:inline-block}.logo img{display:block;height:46px;width:auto;max-width:200px;object-fit:contain}.logo.multiply img{mix-blend-mode:multiply}.logo.knockout-white img{filter:brightness(0) invert(1)}.logo.knockout-black img{filter:brightness(0)}.logo.plate{background:var(--plate);padding:7px 14px;border-radius:12px;box-shadow:0 1px 2px rgba(0,0,0,.18),0 6px 18px -8px rgba(0,0,0,.35)}.logo.plate img{height:36px;max-width:180px}.wordmark{font-family:var(--font-heading);font-weight:700;font-size:1.3rem;letter-spacing:-.01em}
 </style>
 <style>${css}</style>
+${site.design?.tune ? `<style>${customTuneCss(site.design.tune)}</style>` : ""}
 <style>.preview-ribbon{position:relative;z-index:2147483000;background:#111;color:#fff;font:600 12px/1.4 system-ui,sans-serif;text-align:center;padding:6px 10px}.rx-legal{display:flex;flex-wrap:wrap;gap:.4rem 1.2rem;justify-content:center;padding:14px 16px;background:#111;color:#e8e8e8;font:12px/1.5 system-ui,sans-serif}.rx-legal a{color:#fff}.rx-legal .photo-credit{opacity:.85}</style>
 </head>
 <body class="custom-look">

@@ -290,13 +290,18 @@ export const previewCustom = createServerFn({ method: "POST" })
  * looks as before (mode "new"). Never sends the form.
  */
 export const previewRefine = createServerFn({ method: "POST" })
-  .validator((input: { text?: string; ids?: unknown; focused?: string; feedback?: unknown }) => {
+  .validator((input: { text?: string; ids?: unknown; focused?: string; feedback?: unknown; card?: { id?: unknown; index?: unknown; style?: unknown } }) => {
     const text = typeof input?.text === "string" ? input.text.replace(/\s+/g, " ").trim().slice(0, 400) : "";
     if (!text) throw new Error("Tell us what to change.");
     const ids = (Array.isArray(input?.ids) ? input.ids : []).map(String).filter((id) => /^[a-f0-9]{16}$/.test(id)).slice(0, 3);
     const focused = typeof input?.focused === "string" && /^[a-f0-9]{16}$/.test(input.focused) ? input.focused : undefined;
     const feedback = (Array.isArray(input?.feedback) ? input.feedback : []).map((f) => String(f).replace(/\s+/g, " ").trim().slice(0, 400)).filter(Boolean).slice(-5);
-    return { text, ids, focused, feedback };
+    // The card's own "Change this look" box: that card's id (+ its index and style name, for the log), explicitly.
+    const cardId = typeof input?.card?.id === "string" && /^[a-f0-9]{16}$/.test(input.card.id) && ids.includes(input.card.id) ? input.card.id : undefined;
+    const card = cardId
+      ? { id: cardId, index: typeof input.card?.index === "number" ? Math.max(0, Math.min(2, Math.floor(input.card.index))) : undefined, style: typeof input.card?.style === "string" ? input.card.style.slice(0, 60) : undefined }
+      : undefined;
+    return { text, ids, focused, feedback, card };
   })
   .handler(async ({ data }): Promise<PreviewStepResult<{ mode: "new" } | { mode: "none"; note: string } | { mode: "edit"; looks: LookInfo[]; target: string; targetId: string; how: string; note?: string }>> => {
     if (await limited("refine", 40)) return { ok: false, error: "Too many changes from this network in the last hour. Try again shortly." };
@@ -307,16 +312,17 @@ export const previewRefine = createServerFn({ method: "POST" })
       const { lookRefs, planEdit, buildEdits } = await import("./preview/look-edit.server");
       const { aiAvailable, isMockMode } = await import("./ai-provider.server");
       const refs = lookRefs(sites);
-      const edit = await planEdit(data.text, refs, data.focused, !isMockMode() && aiAvailable());
       const nameOf = (id: string | undefined) => refs.find((r) => r.id === id)?.name;
+      const edit = await planEdit(data.text, refs, data.focused, !isMockMode() && aiAvailable(), data.card?.id);
+      if (data.card) console.info(`[refine] card box: card ${(data.card.index ?? 0) + 1} “${data.card.style ?? nameOf(data.card.id)}” (${data.card.id}) asked “${data.text.slice(0, 120)}”${edit.restyle ? ` · explicit style switch to ${edit.restyle}` : " · style kept"}`);
       console.info(
-        `[refine] "${data.text.slice(0, 120)}" -> ${edit.targetId ? `edit ${nameOf(edit.targetId)} only (${edit.how}); unchanged: ${refs.filter((r) => r.id !== edit.targetId).map((r) => r.name).join(", ") || "none"}` : "no look named: 3 new looks"} · adjustments ${JSON.stringify(edit.adjustments)}${edit.copy ? " · copy" : ""}${edit.photo ? ` · photo "${edit.photo}"` : ""}${edit.borrow ? ` · borrow ${edit.borrow.assets.join("+")} from ${nameOf(edit.borrow.fromId)}` : ""} · read by ${edit.from}`,
+        `[refine] "${data.text.slice(0, 120)}" -> ${edit.targetId ? `edit ${nameOf(edit.targetId)} only (${edit.how}); unchanged (byte-identical): ${refs.filter((r) => r.id !== edit.targetId).map((r) => r.name).join(", ") || "none"}` : "no look named: 3 new looks"} · adjustments ${JSON.stringify(edit.adjustments)}${edit.copy ? " · copy" : ""}${edit.photo ? ` · photo "${edit.photo}"` : ""}${edit.borrow ? ` · borrow ${edit.borrow.assets.join("+")} from ${nameOf(edit.borrow.fromId)}` : ""} · read by ${edit.from}`,
       );
       if (!edit.targetId) return { ok: true, mode: "new" };
       const target = sites.find((s) => s.id === edit.targetId)!;
       const lender = edit.borrow ? sites.find((s) => s.id === edit.borrow!.fromId) : undefined;
       const name = nameOf(edit.targetId)!;
-      if (!edit.adjustments.length && !edit.copy && !edit.photo && !lender) {
+      if (!edit.adjustments.length && !edit.copy && !edit.photo && !lender && !edit.restyle) {
         return {
           ok: true,
           mode: "none",
@@ -340,7 +346,8 @@ export const previewRefine = createServerFn({ method: "POST" })
           url: `${publicBase()}/made/${site.id}`,
           // Same card, same place, same name: only this look changes on screen.
           index: targetIndex,
-          name,
+          // The style name stays; only an explicit style switch from the card's box renames it.
+          name: edit.restyle ? (design.tune?.base.name ?? design.name) : name,
           mood: design.mood,
           archetype: design.archetype,
           palette: site.palette,
@@ -348,7 +355,7 @@ export const previewRefine = createServerFn({ method: "POST" })
           images: { generated: images.filter((img) => img.source === "generated").length, photos },
           mock: site.mock,
           request: data.text,
-          photos: photosLine(site.trace, photos),
+          photos: (site.custom && !design.custom?.failed ? site.custom.photoLine : undefined) ?? photosLine(site.trace, photos),
           layout: site.custom && !design.custom?.failed ? customLayoutLine(site.custom.brief) : layoutLine(design, site.trace?.layout?.hero),
           custom:
             site.custom && !design.custom?.failed
@@ -364,7 +371,7 @@ export const previewRefine = createServerFn({ method: "POST" })
           edit: { variant: e.variant, changed: e.changed, from: target.id, how: edit.how ?? "" },
         };
       });
-      return { ok: true, mode: "edit", looks, target: name, targetId: target.id, how: edit.how ?? "" };
+      return { ok: true, mode: "edit", looks, target: looks[0]?.name ?? name, targetId: target.id, how: edit.how ?? "" };
     } catch (error) {
       console.error("[refine] failed", error instanceof Error ? error.message : error);
       return { ok: false, error: error instanceof Error ? error.message : "That change could not be made." };
