@@ -52,6 +52,53 @@ function DesignVsBuilt({ look }: { look: LookInfo }) {
 }
 
 /**
+ * "Change this look": a box at the bottom of EACH card. What's typed there edits only that card (its id, index and
+ * style name go to the server explicitly, so no name matching); the other cards stay exactly as they are.
+ */
+function CardEditBox({ look, disabled, working, onSubmit }: { look: LookInfo; disabled: boolean; working: boolean; onSubmit: (text: string) => void }) {
+  const [text, setText] = useState("");
+  const inputId = `card-edit-${look.id}`;
+  function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const wish = text.trim();
+    if (!wish || disabled) return;
+    onSubmit(wish);
+    setText("");
+  }
+  return (
+    <form onSubmit={submit} data-card-edit={look.id} data-card-index={look.index} data-card-style={look.name} className="rounded-lg border border-border bg-surface p-2.5">
+      <label htmlFor={inputId} className="block text-sm font-semibold text-ink">
+        Change this look
+      </label>
+      <div className="mt-1.5 flex gap-2">
+        <input
+          id={inputId}
+          type="text"
+          value={text}
+          maxLength={400}
+          disabled={disabled}
+          onChange={(event) => setText(event.target.value.slice(0, 400))}
+          placeholder="e.g. make the photo daylight, more contrast"
+          aria-label={`Change the ${look.name} look`}
+          data-card-edit-text
+          className="min-w-0 flex-1 rounded-md border border-border bg-bg px-2.5 py-2 text-base text-fg outline-none placeholder:text-faint focus-visible:ring-2 focus-visible:ring-ring/70 disabled:opacity-50 sm:text-sm"
+        />
+        <button
+          type="submit"
+          disabled={disabled || !text.trim()}
+          data-card-edit-submit
+          className="inline-flex h-10 shrink-0 items-center justify-center gap-1.5 rounded-md bg-ink px-3 text-sm font-semibold text-white disabled:opacity-50"
+        >
+          <Wand2 className={`size-4 ${working ? "animate-pulse" : ""}`} aria-hidden />
+          {working ? "Working…" : "Change"}
+        </button>
+      </div>
+      <p className="mt-1 text-[11px] leading-snug text-muted">Only this card changes; it keeps its style and photo unless you ask for a new one.</p>
+    </form>
+  );
+}
+
+/**
  * The visitor's choice of homepage looks. Each card is a real, live homepage in
  * a different design direction. "Choose this look" is the main call to action: it builds every page
  * in that style and sends the brief (with a picture of the chosen homepage) — nothing is sent before.
@@ -72,6 +119,8 @@ export function LooksPicker({
   onRefine,
   editedName = "",
   onVariant,
+  onEditCard,
+  editingId = "",
 }: {
   looks: LookInfo[];
   focused: string;
@@ -93,6 +142,10 @@ export function LooksPicker({
   editedName?: string;
   /** Swap an edited card to another of its variations. */
   onVariant?: (card: LookInfo, pick: LookInfo) => void;
+  /** A card's own "Change this look" box: edit only that card. */
+  onEditCard?: (card: LookInfo, text: string) => void;
+  /** The card being edited from its own box (shows "Working…" there). */
+  editingId?: string;
 }) {
   const [draft, setDraft] = useState("");
   const roundsLeft = maxFeedback - feedback.length;
@@ -276,6 +329,9 @@ export function LooksPicker({
                   </p>
                 ) : null}
                 <div className="mt-auto flex flex-col gap-2 pt-1">
+                  {onEditCard && !sent ? (
+                    <CardEditBox look={look} disabled={refining || busy || roundsLeft <= 0} working={editingId === look.id} onSubmit={(text) => onEditCard(look, text)} />
+                  ) : null}
                   <button
                     type="button"
                     disabled={busy || (isChosen && sent)}
@@ -305,7 +361,7 @@ export function LooksPicker({
             Not quite right? What would you like to see different?
           </label>
           <p className="mt-1 text-sm text-muted">
-            Tell us in your own words (colors, mood, photos, sections, wording). Name a look to change just that one (“Dark Premium, a little lighter”, “the second one, bigger text”, “use Editorial's picture on Dark Premium”); the other looks stay as they are. Otherwise we'll make 3 new looks using your original note plus this. Nothing is sent until you choose a look.
+            Tell us in your own words (colors, mood, photos, sections, wording). To change just one look, use the “Change this look” box on that card (or name it here: “Dark Premium, a little lighter”, “use Editorial's picture on Dark Premium”); the other looks stay as they are. Otherwise we'll make 3 new looks using your original note plus this. Nothing is sent until you choose a look.
           </p>
           <textarea
             id="refine-text"

@@ -267,6 +267,8 @@ export function HomePage() {
   const [leadSent, setLeadSent] = useState(false);
   const [feedback, setFeedback] = useState<string[]>([]);
   const [refining, setRefining] = useState(false);
+  /** The card being changed from its own "Change this look" box. */
+  const [editingId, setEditingId] = useState("");
   /** The look the last refine edited in place ("" after a full new round). */
   const [editedName, setEditedName] = useState("");
   /** Every look id shown this session (oldest first). */
@@ -608,7 +610,7 @@ export function HomePage() {
    * (capped at MAX_FEEDBACK). Same browser-orchestrated steps as the first looks, so each request stays
    * inside the step budget. Never sends the form — that only happens on "Choose this look".
    */
-  async function refineLooks(text: string) {
+  async function refineLooks(text: string, card?: LookInfo) {
     const wish = text.replace(/\s+/g, " ").trim().slice(0, 400);
     if (!wish || !facts || refining || retrying || working) return;
     if (feedback.length >= MAX_FEEDBACK) {
@@ -621,12 +623,21 @@ export function HomePage() {
     setError("");
     setRefining(true);
     setRetrying(true);
+    setEditingId(card?.id ?? "");
     try {
       // Feedback that names a look ("The Night Brick is best, just a little too dark") edits THAT look:
       // same name, layout, photo and copy, only the requested change, as three close variations.
-      const routed = await previewRefine({ data: { text: wish, ids: (looks ?? []).map((l) => l.id), focused: focusedLook, feedback } }).catch(() => undefined);
+      // A card's own box sends that card's identity explicitly (id, index, style name): it always wins targeting.
+      const routed = await previewRefine({
+        data: { text: wish, ids: (looks ?? []).map((l) => l.id), focused: focusedLook, feedback, card: card ? { id: card.id, index: card.index, style: card.name } : undefined },
+      }).catch(() => undefined);
       if (routed?.ok && routed.mode === "none") {
         setError(routed.note);
+        return;
+      }
+      if (card && !(routed?.ok && routed.mode === "edit" && routed.looks.length)) {
+        // A per-card request never turns into three new looks.
+        setError(routed && !routed.ok ? routed.error : `That change to ${card.name} could not be made. Try again.`);
         return;
       }
       if (routed?.ok && routed.mode === "edit" && routed.looks.length) {
@@ -657,6 +668,7 @@ export function HomePage() {
     } finally {
       setRefining(false);
       setRetrying(false);
+      setEditingId("");
       setStage("");
     }
   }
@@ -1026,6 +1038,8 @@ export function HomePage() {
                   maxFeedback={MAX_FEEDBACK}
                   refining={refining}
                   onRefine={facts ? (text) => void refineLooks(text) : undefined}
+                  onEditCard={facts ? (card, text) => void refineLooks(text, card) : undefined}
+                  editingId={editingId}
                   editedName={editedName}
                   onVariant={(card, pick) => {
                     const swapped: LookInfo = { ...pick, edit: { ...pick.edit!, alternatives: card.edit?.alternatives } };
