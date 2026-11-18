@@ -68,7 +68,7 @@ export function CardEditBox({ look, disabled, working, onSubmit, where = "card" 
           placeholder="e.g. make the photo daylight, more contrast"
           aria-label={`Change the ${look.name} look`}
           data-card-edit-text
-          className="h-11 min-w-0 flex-1 rounded-md border border-border bg-bg px-3 text-base text-fg outline-none placeholder:text-faint focus-visible:ring-2 focus-visible:ring-ring/70 disabled:opacity-50 sm:text-sm"
+          className="h-11 w-full min-w-0 shrink-0 rounded-md min-[420px]:w-auto min-[420px]:flex-1 border border-border bg-bg px-3 text-base text-fg outline-none placeholder:text-faint focus-visible:ring-2 focus-visible:ring-ring/70 disabled:opacity-50 sm:text-sm"
         />
         <button
           type="submit"

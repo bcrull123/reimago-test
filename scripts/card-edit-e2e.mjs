@@ -154,6 +154,8 @@ await page.screenshot({ path: join(outDir, "01b-phone-card-box.png") });
 const bb = await box2.boundingBox();
 const btn = box2.locator("[data-card-edit-submit]");
 const btnText = (await btn.innerText()).trim();
+const fieldBox = await box2.locator("[data-card-edit-text]").boundingBox();
+check(fieldBox && fieldBox.height >= 40 && fieldBox.width > 250, `phone: the text field is full size (${fieldBox ? `${Math.round(fieldBox.width)}x${Math.round(fieldBox.height)}` : "none"})`);
 const btnBox = await btn.boundingBox();
 check(btnText === "Change" && btnBox && btnBox.width > 80 && btnBox.height >= 40, `phone: the Change button shows its label (“${btnText}”, ${btnBox ? `${Math.round(btnBox.width)}x${Math.round(btnBox.height)}` : "none"})`);
 check(bb && bb.width > 300 && bb.x >= 0 && bb.x + bb.width <= 390, `phone: the box fits the screen (${bb ? `${Math.round(bb.x)}+${Math.round(bb.width)}` : "none"})`);

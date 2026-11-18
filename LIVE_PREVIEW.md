@@ -358,7 +358,7 @@ Bob ran 52fb142 on bob.me. The Imagine mockup was bold, but the built Custom Des
 Bob: "I tried to change the middle one and it changed the picture. What I would like to see is a box in each sample site at the bottom so it is more clear to the system which one is being modified."
 
 - **Why the middle card changed style and photo:** "Use Bold Photo and make the image in daylight…" went into the shared box. No card on screen was called "Bold Photo" (the middle one was Dark Premium), so the request named no look and became a whole new round, and the word "bold" steered the new middle look to the Bold Photo style. The planner also read "make the image in daylight" as a request for a different photo ("daylight scene"), so a new Google photo replaced the current one instead of brightening it.
-- **The box:** every card has "Change this look" at the bottom, above "Choose this look" (`CardEditBox` in `looks-picker.tsx`, `data-card-edit`), with the placeholder "e.g. make the photo daylight, more contrast" and a Change button. It is full width on phones.
+- **The box:** every card has "Change this look" (round 8b: "What would you change?", moved up under the colors) (`CardEditBox` in `looks-picker.tsx`, `data-card-edit`), with the placeholder "e.g. make the photo daylight, more contrast" and a Change button. It is full width on phones.
 - **Explicit target:** the box sends `card: {id, index, style}` to `previewRefine`; `planEdit(…, cardId)` uses that card as the target (no name matching), even when the words name another look. A per-card request never turns into three new looks. The global box still works as before, as a fallback.
 - **Only that card changes:** the edited copies replace that card only; the other two keep their ids and their homepage HTML byte for byte (the e2e checks this with a hash of each page).
 - **Same style, same photo:**
@@ -374,6 +374,17 @@ Bob: "I tried to change the middle one and it changed the picture. What I would 
   - Bob's exact words in the middle box: it switches to Bold Photo with the same photo.
 
   After every edit, it checks that the other two cards are byte-identical. Unit tests are in `card-edit.test.ts`.
+
+### Round 8b: the box where Bob looks, and a build stamp
+
+Bob on aceee96: "It still doesn't have the what would you change box in the renderings. You can remove the images in the Custom design and place a box there as well."
+
+- **Why he likely missed it:** in aceee96 the box was only on the small cards, at the very bottom of each card, under the long details (photo credits, layout, "How your request was used"). On a tall card it sat below the fold, and the Custom Design card was the tallest because of its two thumbnails. The full-size rendering under the cards (the "Choose this look" bar and the live page) had no box at all, only a "Change something" link to the shared box at the bottom. The box needed no refine, flag or special state: it rendered on every card in round 1, as long as the looks came from a live run (`facts`) and no look had been chosen and sent yet.
+- **Placement:** the box is now labelled **"What would you change?"** (with "(<style> only)"). It keeps the placeholder "e.g. make the photo daylight, more contrast", has a 2 px primary border and a light tint, and sits right under each card's description and colors, so it is visible without scrolling. The e2e checks that the box ends within the first 1000 px of each card.
+- **Custom Design card:** the two thumbnails ("Design · Grok Imagine" and "Built page · Grok") and their captions are gone. The box takes their place, as on the other cards. `design_mockup_url` still goes to Formcarry and the webhook (`look.custom.mockupUrl`), and the `[imagine]` / `[design]` logs are unchanged.
+- **Full-size rendering:** the look being previewed gets the same box (`data-preview-edit`) between its "Choose this look" bar and the live page. It edits only that look, like the card's own box. The preview pages themselves (`/made/<id>`, "Open full site") ship no JavaScript, so they have no box.
+- **Phone:** under 420 px wide, the field and the Change button stack. The button is primary-colored, at least 6.5rem wide and 44 px tall, with `whitespace-nowrap`, so its label always shows (the e2e checks the label text and size at 390 px).
+- **Build stamp:** the site footer shows `Build <short commit> · <build time> UTC` (`data-build-stamp`). It comes from `BUILD_COMMIT`, `VERCEL_GIT_COMMIT_SHA` or `GITHUB_SHA`, else `git rev-parse --short HEAD`, read at build time (`vite.config.ts` `define: __BUILD_STAMP__`). With `npm run dev`, it is read when the server starts.
 
 ### Editing one look from feedback ("Make Dark Premium lighter", "Use editorials picture on dark premium")
 
