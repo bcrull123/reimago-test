@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { Check, ExternalLink, Monitor, Smartphone } from "lucide-react";
 import type { PreviewInfo } from "@/lib/preview/types";
 
@@ -9,7 +9,15 @@ import type { PreviewInfo } from "@/lib/preview/types";
  * Formcarry in a new tab (allow-forms + allow-popups).
  */
 /** The "Choose this look" bar shown above a look's preview; it sticks to the top while the visitor scrolls the page. */
-export type PreviewChoice = { lookName: string; onChoose: () => void; disabled?: boolean; chosen?: boolean; onChangeRequest?: () => void };
+export type PreviewChoice = {
+  lookName: string;
+  onChoose: () => void;
+  disabled?: boolean;
+  chosen?: boolean;
+  onChangeRequest?: () => void;
+  /** The look's own "What would you change?" box, shown with the full-size rendering (edits only this look). */
+  editBox?: ReactNode;
+};
 
 export function LivePreview({ preview, host, choice }: { preview: PreviewInfo; host: string; choice?: PreviewChoice }) {
   const [device, setDevice] = useState<"desktop" | "mobile">("desktop");
@@ -53,6 +61,7 @@ export function LivePreview({ preview, host, choice }: { preview: PreviewInfo; h
           </div>
         </div>
       ) : null}
+      {choice?.editBox ? <div className="mb-3">{choice.editBox}</div> : null}
     <div className="overflow-hidden rounded-2xl border border-border bg-surface shadow-2xl">
       <div className="flex flex-wrap items-center gap-3 border-b border-border px-4 py-3">
         <span className="flex gap-1.5" aria-hidden>

@@ -91,6 +91,7 @@ export function SiteShell({ children }: { children: ReactNode }) {
           <div className="mx-auto flex max-w-6xl flex-col gap-2 px-4 py-5 text-xs text-faint sm:flex-row sm:items-center sm:justify-between sm:px-6">
             <p>© 2006–2026 Reimago, Inc. All rights reserved.</p>
             <p>REIMAGO, Inc., a subsidiary of Catalog.com, Inc.</p>
+            <p data-build-stamp className="font-mono text-[10px] text-faint">Build {typeof __BUILD_STAMP__ === "string" ? __BUILD_STAMP__ : "dev"}</p>
           </div>
         </div>
       </footer>

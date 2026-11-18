@@ -8,7 +8,7 @@ import { cursorStatus, previewCustom, previewDirections, previewImagine, preview
 import { capturePreviewPicture, pictureFileName } from "@/lib/preview-picture";
 import { notifyReplyWebhook } from "@/lib/reply-webhook.functions";
 import { LivePreview } from "@/components/live-preview";
-import { LooksPicker } from "@/components/looks-picker";
+import { CardEditBox, LooksPicker } from "@/components/looks-picker";
 import type { LookInfo, PreviewInfo, SiteFacts } from "@/lib/preview/types";
 import type { DomainOffer } from "@/lib/logicboxes-types";
 import type { ReimagineOk } from "@/lib/reimagine-types";
@@ -1069,6 +1069,18 @@ export function HomePage() {
                           disabled: retrying || working || (focused.id === chosenLook && leadSent),
                           chosen: focused.id === chosenLook,
                           onChangeRequest: facts ? goToRefine : undefined,
+                          // The same per-look box as on the card, with the full-size rendering.
+                          editBox:
+                            facts && !leadSent ? (
+                              <CardEditBox
+                                key={`preview-box-${focused.id}`}
+                                look={focused}
+                                where="preview"
+                                disabled={refining || retrying || working || feedback.length >= MAX_FEEDBACK}
+                                working={editingId === focused.id}
+                                onSubmit={(text) => void refineLooks(text, focused)}
+                              />
+                            ) : undefined,
                         }}
                       />
                     );

@@ -31,33 +31,13 @@ function Thumb({ look, mini = false }: { look: LookInfo; mini?: boolean }) {
   );
 }
 
-/** The Custom Design card: Grok Imagine's design mockup next to the page Grok built from it (to judge fidelity). */
-function DesignVsBuilt({ look }: { look: LookInfo }) {
-  const url = look.custom?.mockupUrl;
-  if (!url) return null;
-  return (
-    <div className="grid grid-cols-2 gap-2" data-look-mockup={url}>
-      <figure className="m-0">
-        <a href={url} target="_blank" rel="noreferrer" className="block" aria-label="Open the Grok Imagine design mockup full size">
-          <img src={url} alt={`Grok Imagine design mockup for ${look.name}`} className="aspect-[16/9] w-full rounded-md border border-border object-cover object-top" loading="lazy" />
-        </a>
-        <figcaption className="mt-1 text-[10px] leading-tight text-muted">Design · Grok Imagine{look.custom?.mockupStale ? " (before your edit)" : ""}</figcaption>
-      </figure>
-      <figure className="m-0">
-        <Thumb look={look} mini />
-        <figcaption className="mt-1 text-[10px] leading-tight text-muted">Built page · Grok</figcaption>
-      </figure>
-    </div>
-  );
-}
-
 /**
  * "Change this look": a box at the bottom of EACH card. What's typed there edits only that card (its id, index and
  * style name go to the server explicitly, so no name matching); the other cards stay exactly as they are.
  */
-function CardEditBox({ look, disabled, working, onSubmit }: { look: LookInfo; disabled: boolean; working: boolean; onSubmit: (text: string) => void }) {
+export function CardEditBox({ look, disabled, working, onSubmit, where = "card" }: { look: LookInfo; disabled: boolean; working: boolean; onSubmit: (text: string) => void; where?: "card" | "preview" }) {
   const [text, setText] = useState("");
-  const inputId = `card-edit-${look.id}`;
+  const inputId = `${where}-edit-${look.id}`;
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const wish = text.trim();
@@ -66,11 +46,18 @@ function CardEditBox({ look, disabled, working, onSubmit }: { look: LookInfo; di
     setText("");
   }
   return (
-    <form onSubmit={submit} data-card-edit={look.id} data-card-index={look.index} data-card-style={look.name} className="rounded-lg border border-border bg-surface p-2.5">
-      <label htmlFor={inputId} className="block text-sm font-semibold text-ink">
-        Change this look
+    <form
+      onSubmit={submit}
+      {...(where === "card" ? { "data-card-edit": look.id } : { "data-preview-edit": look.id })}
+      data-card-index={look.index}
+      data-card-style={look.name}
+      className="rounded-xl border-2 border-primary bg-primary/5 p-3 shadow-sm"
+    >
+      <label htmlFor={inputId} className="block text-base font-bold text-ink">
+        What would you change?
+        <span className="ml-1 text-xs font-normal text-muted">({look.name} only)</span>
       </label>
-      <div className="mt-1.5 flex gap-2">
+      <div className="mt-2 flex flex-col gap-2 min-[420px]:flex-row">
         <input
           id={inputId}
           type="text"
@@ -81,19 +68,19 @@ function CardEditBox({ look, disabled, working, onSubmit }: { look: LookInfo; di
           placeholder="e.g. make the photo daylight, more contrast"
           aria-label={`Change the ${look.name} look`}
           data-card-edit-text
-          className="min-w-0 flex-1 rounded-md border border-border bg-bg px-2.5 py-2 text-base text-fg outline-none placeholder:text-faint focus-visible:ring-2 focus-visible:ring-ring/70 disabled:opacity-50 sm:text-sm"
+          className="h-11 min-w-0 flex-1 rounded-md border border-border bg-bg px-3 text-base text-fg outline-none placeholder:text-faint focus-visible:ring-2 focus-visible:ring-ring/70 disabled:opacity-50 sm:text-sm"
         />
         <button
           type="submit"
           disabled={disabled || !text.trim()}
           data-card-edit-submit
-          className="inline-flex h-10 shrink-0 items-center justify-center gap-1.5 rounded-md bg-ink px-3 text-sm font-semibold text-white disabled:opacity-50"
+          className="inline-flex h-11 min-w-[6.5rem] shrink-0 items-center justify-center gap-1.5 whitespace-nowrap rounded-md bg-primary px-4 text-sm font-semibold leading-none text-primary-fg disabled:cursor-not-allowed disabled:bg-primary/60"
         >
-          <Wand2 className={`size-4 ${working ? "animate-pulse" : ""}`} aria-hidden />
-          {working ? "Working…" : "Change"}
+          <Wand2 className={`size-4 shrink-0 ${working ? "animate-pulse" : ""}`} aria-hidden />
+          <span>{working ? "Working…" : "Change"}</span>
         </button>
       </div>
-      <p className="mt-1 text-[11px] leading-snug text-muted">Only this card changes; it keeps its style and photo unless you ask for a new one.</p>
+      <p className="mt-1.5 text-[11px] leading-snug text-muted">Only this look changes; it keeps its style and photo unless you ask for a new one.</p>
     </form>
   );
 }
@@ -232,6 +219,10 @@ export function LooksPicker({
                     <span key={`${color}-${i}`} title={color} className="size-5 rounded-full border border-border" style={{ background: color }} />
                   ))}
                 </div>
+                {/* Right under the description and colors, so it is visible without scrolling (Bob, round 8b). */}
+                {onEditCard && !sent ? (
+                  <CardEditBox look={look} disabled={refining || busy || roundsLeft <= 0} working={editingId === look.id} onSubmit={(text) => onEditCard(look, text)} />
+                ) : null}
                 <p className="text-xs text-muted">
                   {look.fonts.heading} / {look.fonts.body}
                   {look.images.generated || look.images.photos
@@ -278,7 +269,6 @@ export function LooksPicker({
                     {look.layout}
                   </p>
                 ) : null}
-                {look.custom && look.custom.status !== "fallback" ? <DesignVsBuilt look={look} /> : null}
                 {look.custom ? (
                   <p className={`text-[11px] leading-snug ${look.custom.status === "fallback" ? "text-amber-800" : "text-muted"}`} data-look-custom={look.custom.status} data-look-custom-source={look.custom.source ?? ""}>
                     {look.custom.status === "fallback"
@@ -329,9 +319,6 @@ export function LooksPicker({
                   </p>
                 ) : null}
                 <div className="mt-auto flex flex-col gap-2 pt-1">
-                  {onEditCard && !sent ? (
-                    <CardEditBox look={look} disabled={refining || busy || roundsLeft <= 0} working={editingId === look.id} onSubmit={(text) => onEditCard(look, text)} />
-                  ) : null}
                   <button
                     type="button"
                     disabled={busy || (isChosen && sent)}
