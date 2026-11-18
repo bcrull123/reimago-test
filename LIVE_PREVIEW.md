@@ -386,6 +386,66 @@ Bob on aceee96: "It still doesn't have the what would you change box in the rend
 - **Phone:** under 420 px wide, the field and the Change button stack. The button is primary-colored, at least 6.5rem wide and 44 px tall, with `whitespace-nowrap`, so its label always shows (the e2e checks the label text and size at 390 px).
 - **Build stamp:** the site footer shows `Build <short commit> · <build time> UTC` (`data-build-stamp`). It comes from `BUILD_COMMIT`, `VERCEL_GIT_COMMIT_SHA` or `GITHUB_SHA`, else `git rev-parse --short HEAD`, read at build time (`vite.config.ts` `define: __BUILD_STAMP__`). With `npm run dev`, it is read when the server starts.
 
+### Round 8c: "change the photo to one of the brick streets, maybe Pine Street"
+
+Bob typed that in Editorial's box and got "Editorial · new photo: downtown Pauls Valley", a generic town photo.
+The cause had three parts:
+
+- The wording rules didn't see "change the photo to …" as a request for a new photo.
+- So the AI planner's one-line summary was used, and it had turned his words into the town's generic subject,
+  "downtown Pauls Valley". That is the same query round 1 used.
+- The edit's photo search had no subject check and no way to skip the current photo.
+
+Now a new-photo request keeps the owner's own subject. The same logic covers other wordings, e.g. "a photo of
+our blue truck", "the patio at night", or "swap the hero image for the courthouse":
+
+- **Reading the request** (`readPhotoRequest`, look-edit.ts): the subject is "brick streets" and the named
+  place is "Pine Street". The text after "maybe / like / or" is read as a named place.
+  - `mergePhotoRequest` puts the owner's words first. The planner's subject is used only when it shares a
+    content word with what the owner typed. Its "downtown Pauls Valley" is logged and dropped.
+  - Lighting and contrast tweaks ("a photo with more contrast", "make the image daylight") are still
+    adjustments, not new photos.
+- **Searching specific first, then looser** (`photoRequestQueries`):
+  - `"Pine Street" Pauls Valley brick`
+  - `"Pine Street" Pauls Valley Oklahoma`
+  - `"brick street" Pauls Valley Oklahoma`
+  - `brick street Pauls Valley`
+  - `brick street Oklahoma`
+  - `brick street`
+
+  It never falls back to the town's generic query. It stops early once a few photos match by their titles.
+  Each query writes a `[photo-search] q=…` line.
+- **Own photos first** (`findRequestedPhoto`, photo-request.server.ts): the site's own photos and the photos
+  the other looks already show are checked too. A matching one beats Google.
+- **Vision judges the subject** (`judgeSubject`): for each photo it answers whether the photo shows the named
+  place, the subject, or neither, plus a 1-10 hero rating (minimum 5) and a few words on what it shows.
+  - A photo that shows the request beats a prettier one that doesn't.
+  - Without vision, the caption decides.
+- **Never the same photo**: the current hero is excluded by URL and by perceptual hash (≤10 bits). Near-duplicates
+  of each other are collapsed.
+- **Honest wording**: the change line comes from `photoOutcomeNote` and the card label from `photoVariantLabel`.
+
+  | Result | Card label | Change line |
+  |---|---|---|
+  | Named place found | `new photo: brick street (Pine St)` | — |
+  | Subject found, named place not | `new photo: brick street (no Pine St found)` | "couldn't find Pine Street; used a brick street photo (…)" |
+  | Nothing shows the subject | `new photo: closest to brick street` | "no brick street photo found; used the closest match: …" (taken from the subject searches, not a random site photo) |
+  | Nothing found at all | — | the current photo is kept, and the line says so |
+
+- **Logs**:
+  - `[refine] photo request: subject “brick streets”, named “Pine Street” · planner said “downtown Pauls Valley” (kept the owner's words)`
+  - `[photo-search] requested photo …`, then one `q=` line per query
+  - `[photo] candidate …` for each photo checked, with its vision verdict
+  - `[photo] requested “brick street (Pine St)” -> …` with the pick and the card line
+- **Tests**:
+  - `src/lib/preview/photo-request.test.ts` covers parsing, the merge, query order, the label, caption
+    matching, honest notes, specific-first search, named over prettier, the quality minimum, skipping the
+    current photo or a near-duplicate, own photos first, the closest match, and keeping the photo when nothing
+    is found.
+  - `scripts/card-edit-e2e.mjs` step 5 types Bob's sentence in Editorial's box. The mock search has nothing for
+    Pine Street, so the expected result is a different brick-street hero labelled "brick street (no Pine St
+    found)", the "couldn't find Pine Street" line, and the other cards byte-identical.
+
 ### Editing one look from feedback ("Make Dark Premium lighter", "Use editorials picture on dark premium")
 
 When the refine feedback names a look, that look is EDITED in place instead of making three new ones (`previewRefine`, `look-edit.ts`, `look-edit.server.ts`). **Only that card changes**: same place, same name. The other two cards stay exactly as they were (same ids, same renders). The banner reads "Edited Dark Premium only, as you asked (round n of 5) … The other looks are unchanged."

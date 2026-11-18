@@ -87,7 +87,8 @@ function results(q) {
   const s = q.toLowerCase().trim();
   const list =
     ROUND1[s] ??
-    (/brick/.test(s) ? BRICKS : /pauls valley/.test(s) ? [GRAVEL, ...TOWN] : /plumb|bathroom|technician|drain|water heater|home/.test(s) ? PLUMB : /restaurant|dining|dish|patio|cafe|food|bistro|grill|kitchen/.test(s) ? FOOD : /startup|founder|entrepreneur|coworking/.test(s) ? STARTUP : []);
+    // Round 8c: nothing on the web names Pine Street in Pauls Valley (the honest "couldn't find" path).
+    (/pine street/.test(s) ? [GRAVEL, ...TOWN] : /brick/.test(s) ? BRICKS : /pauls valley/.test(s) ? [GRAVEL, ...TOWN] : /plumb|bathroom|technician|drain|water heater|home/.test(s) ? PLUMB : /restaurant|dining|dish|patio|cafe|food|bistro|grill|kitchen/.test(s) ? FOOD : /startup|founder|entrepreneur|coworking/.test(s) ? STARTUP : []);
   return list.map((x, i) => ({ ...x, thumbnailUrl: "https://encrypted-tbn0.gstatic.com/images?q=tbn:mock", googleUrl: "https://www.google.com/imgres", position: i + 1 }));
 }
 
