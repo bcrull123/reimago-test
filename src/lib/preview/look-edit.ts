@@ -46,6 +46,8 @@ export type LookEdit = {
   photo?: string;
   /** "Use Editorial's picture on Dark Premium": take these assets from another look on screen. */
   borrow?: { fromId: string; assets: BorrowAsset[] };
+  /** The owner's own new-photo request, subject words kept ("brick streets", maybe "Pine Street"). */
+  photoRequest?: PhotoRequest;
   /** Only when the owner explicitly asked this card for another style ("make it Bold Photo"): its new archetype. */
   restyle?: Archetype;
   from: "AI planner" | "wording";
@@ -697,11 +699,160 @@ export function requestedStyle(raw: string, current: Archetype): Archetype | und
 
 /** Whether the owner asked for a DIFFERENT photo (not just to adjust the current one: daylight, brighter…). */
 export function wantsNewPhoto(raw: string): boolean {
+  if (readPhotoRequest(raw)) return true;
   const text = raw.toLowerCase();
-  return /\b(?:new|different|another|other|replace|swap|switch)\b[^.]{0,24}\b(?:photo|picture|image|pic|shot|background)s?\b|\b(?:photo|picture|image|pic|shot)s?\s+of\b|\buse\s+(?:a|an|the)\s+(?:photo|picture|image|pic|shot)\b|\b(?:photo|picture|image)\s+(?:with|showing)\b/.test(text);
+  return /\b(?:new|different|another|other|replace|swap|switch)\b[^.]{0,24}\b(?:photo|picture|image|pic|shot|background)s?\b|\b(?:photo|picture|image|pic|shot)s?\s+of\b|\buse\s+(?:a|an|the)\s+(?:photo|picture|image|pic|shot)\b/.test(text);
 }
 
 /** A planner "photo" that only names lighting ("daylight scene", "sunny") is an adjustment, not a new photo. */
 export function lightingOnly(subject: string): boolean {
   return /^(?:(?:a|the|in|at|bright|brighter|sunny|sunlit|daylight|daytime|day|light|lighter|morning|midday|noon|scene|photo|image|picture|version|shot|of|time)\s*)+$/i.test(subject.trim());
+}
+
+// ------------------------------------------------------------------------------------------- a requested photo
+
+/**
+ * What the owner asked a NEW photo to show, in their own words (round 8c, Bob: "change the photo to one of the
+ * brick streets, maybe Pine Street"): the core subject ("brick streets") and any specific names they offered
+ * ("Pine Street"). Never collapsed into the town's generic subject.
+ */
+export type PhotoRequest = { subject: string; named: string[] };
+
+const PHOTO_WORD = String.raw`(?:photo|picture|image|pic|shot|background|hero(?:\s+(?:photo|image|picture))?|banner)s?`;
+const PHOTO_TRIGGERS = [
+  // "change/swap/replace/make the photo (to|with) …", "the picture should show …"
+  new RegExp(String.raw`\b(?:change|swap|switch|replace|update|make|set|turn)\s+(?:the\s+|this\s+|our\s+|its\s+|that\s+)?(?:main\s+|hero\s+|top\s+)?${PHOTO_WORD}\s+(?:to|with|into|for|of|showing|so\s+it\s+shows)\s+(.+)$`),
+  // "a photo of …", "a picture showing …", "photo with …"
+  new RegExp(String.raw`\b${PHOTO_WORD}\s+(?:of|showing|that\s+shows|with)\s+(.+)$`),
+  // "use / show / put (in) / give it … as the photo", "use our blue truck for the photo"
+  new RegExp(String.raw`\b(?:use|show|put\s+in|put|give\s+it)\s+(.+?)\s+(?:as|for|in)\s+(?:the\s+)?${PHOTO_WORD}\b`),
+];
+const FILLER_LEAD = /^(?:(?:one|some|any)\s+of\s+(?:the\s+|our\s+|its\s+)?|a\s+|an\s+|the\s+|some\s+|our\s+|my\s+|their\s+|its\s+|this\s+|that\s+|those\s+|these\s+|nice\s+|good\s+|real\s+|actual\s+)+/;
+const FILLER_TAIL = /\s*(?:\b(?:instead|please|thanks|thank\s+you|if\s+possible|if\s+you\s+can|for\s+the\s+(?:background|hero|top|header)|as\s+the\s+(?:background|hero|main\s+photo)|on\s+(?:the\s+)?(?:hero|top|header|background))\b.*)?[\s.,!;:]*$/;
+const ALTERNATE = /,?\s*\b(?:maybe|perhaps|possibly|ideally|preferably|like|such\s+as|especially|e\.g\.|for\s+example|or|say)\b\s*/;
+const STREET = /\b(street|st|avenue|ave|road|rd|boulevard|blvd|lane|ln|drive|dr|highway|hwy|square|park|plaza)\b/;
+
+function cleanPart(part: string): string {
+  return part.replace(FILLER_TAIL, "").replace(FILLER_LEAD, "").replace(/^[\s,.;:-]+|[\s,.;:-]+$/g, "").replace(/\s+/g, " ").trim();
+}
+
+function titleCase(s: string): string {
+  return s.replace(/\b([a-z])([a-z]*)/g, (_, a: string, b: string) => a.toUpperCase() + b);
+}
+
+/** The owner's own photo request, read from their words (no AI). Undefined when they didn't ask for a new photo. */
+export function readPhotoRequest(raw: string): PhotoRequest | undefined {
+  const sentences = raw.replace(/[’']/g, "'").split(/(?<=[.!?;\n])\s+/);
+  for (const sentence of sentences) {
+    const lower = sentence.toLowerCase();
+    for (const trigger of PHOTO_TRIGGERS) {
+      const m = trigger.exec(lower);
+      if (!m?.[1]) continue;
+      const at = lower.indexOf(m[1], m.index);
+      const original = sentence.slice(at, at + m[1].length);
+      const parts = original.split(new RegExp(ALTERNATE.source, "i")).map(cleanPart).filter(Boolean);
+      const subject = parts[0] ?? "";
+      if (!subject || lightingOnly(subject) || /^(?:daylight|brighter|lighter|darker|it|this|that)$/i.test(subject)) continue;
+      // "a photo with more contrast" is a tweak, not a subject.
+      if (readAdjustments(subject).length || /^(?:more|less|better|higher|lower)\b/i.test(subject)) continue;
+      const named = parts.slice(1).filter((p) => !lightingOnly(p)).map((p) => (/[A-Z]/.test(p) ? p : titleCase(p))).slice(0, 3);
+      // A specific name inside the subject itself ("Pine Street bricks"): keep it as named too.
+      const proper = original.match(/\b[A-Z][a-z]+(?:\s+[A-Z][a-z]+)*\s+(?:Street|St|Avenue|Ave|Road|Rd|Boulevard|Blvd|Park|Square|Plaza|Lane|Drive)\b/g) ?? [];
+      for (const p of proper) if (!named.some((n) => n.toLowerCase() === p.toLowerCase()) && !subject.toLowerCase().startsWith(p.toLowerCase())) named.push(p);
+      return { subject: subject.slice(0, 80), named };
+    }
+  }
+  return undefined;
+}
+
+const GENERIC_PHOTO = new Set(["photo", "photos", "picture", "pictures", "image", "images", "scene", "view", "shot", "the", "and", "with", "of", "a", "an", "in", "at", "on", "our", "one"]);
+export function contentWords(s: string): string[] {
+  return s
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .filter((w) => w.length > 2 && !GENERIC_PHOTO.has(w))
+    .map((w) => (w.length > 4 ? w.replace(/(?:es|s)$/, "") : w));
+}
+
+/**
+ * The request to search for: the owner's own words win. The planner's subject counts only when the owner's
+ * words gave none AND it shares a real word with what they typed (so "downtown Pauls Valley" can never replace
+ * "brick streets, maybe Pine Street").
+ */
+export function mergePhotoRequest(text: string, planner: string | undefined): PhotoRequest | undefined {
+  const words = readPhotoRequest(text);
+  if (words) return words;
+  if (!planner || lightingOnly(planner)) return undefined;
+  const typed = new Set(contentWords(text));
+  return contentWords(planner).some((w) => typed.has(w)) ? { subject: planner.slice(0, 80), named: [] } : undefined;
+}
+
+function singular(phrase: string): string {
+  return phrase.replace(/\b([a-z]{3,})(?<!s)s\b/gi, "$1");
+}
+
+/** The card's short label: "brick street (Pine St)". */
+export function photoRequestLabel(req: PhotoRequest): string {
+  const abbr = (n: string) => n.replace(/\bStreet\b/i, "St").replace(/\bAvenue\b/i, "Ave").replace(/\bRoad\b/i, "Rd").replace(/\bBoulevard\b/i, "Blvd");
+  return `${singular(req.subject)}${req.named.length ? ` (${req.named.slice(0, 2).map(abbr).join(", ")})` : ""}`;
+}
+
+/**
+ * Searches from most specific to looser, always with the owner's subject words (never the town's generic query):
+ *   "Pine Street" Pauls Valley brick · "Pine Street" Pauls Valley Oklahoma · "brick street" Pauls Valley Oklahoma ·
+ *   brick street Pauls Valley · brick street Oklahoma · brick street
+ */
+export function photoRequestQueries(req: PhotoRequest, place: { city: string; state: string } | undefined): string[] {
+  const core = singular(req.subject).toLowerCase();
+  const city = place?.city ?? "";
+  const state = place?.state ?? "";
+  const out: string[] = [];
+  for (const n of req.named.slice(0, 2)) {
+    const extra = contentWords(core).filter((w) => !contentWords(n).includes(w) && !STREET.test(w))[0] ?? "";
+    out.push([`"${n}"`, city, extra].filter(Boolean).join(" "));
+    out.push([`"${n}"`, city, state].filter(Boolean).join(" "));
+  }
+  out.push([`"${core}"`, city, state].filter(Boolean).join(" "));
+  if (city) out.push(`${core} ${city}`);
+  if (state) out.push(`${core} ${state}`);
+  out.push(core);
+  return [...new Set(out.map((q) => q.replace(/\s+/g, " ").trim()))].slice(0, 7);
+}
+
+const SYNONYMS: Record<string, string[]> = { street: ["street", "road", "avenue", "st", "ave", "lane", "alley", "paved", "main"], brick: ["brick", "bricks", "cobblestone"], truck: ["truck", "pickup", "van"], patio: ["patio", "terrace", "deck", "outdoor seating"], night: ["night", "dusk", "evening"] };
+
+/** How well a caption / title / alt text names the request: "named" (a specific name), "subject", or "none". */
+export function captionMatch(caption: string, req: PhotoRequest): "named" | "subject" | "none" {
+  const text = ` ${caption.toLowerCase().replace(/[^a-z0-9]+/g, " ")} `;
+  const has = (w: string) => (SYNONYMS[w] ?? [w]).some((s) => new RegExp(`\\b${s}(?:s|es)?\\b`).test(text));
+  for (const n of req.named) {
+    const words = contentWords(n);
+    const distinct = words.filter((w) => !STREET.test(w));
+    if (distinct.length && distinct.every((w) => text.includes(` ${w}`)) && words.every((w) => has(w))) return "named";
+  }
+  const core = contentWords(req.subject);
+  if (!core.length) return "none";
+  const hits = core.filter((w) => has(w)).length;
+  return has(core[0]!) && hits >= Math.ceil(core.length / 2) ? "subject" : "none";
+}
+
+/** The card's honest change line for a requested photo. */
+export function photoOutcomeNote(req: PhotoRequest, match: "named" | "subject" | "none" | "nothing", what?: string): string {
+  const label = photoRequestLabel(req);
+  const core = singular(req.subject);
+  if (match === "named") return `new photo: ${label}`;
+  if (match === "subject") return req.named.length ? `couldn't find ${req.named[0]}; used a ${core} photo${what ? ` (${what})` : ""}` : `new photo: ${label}`;
+  if (match === "none") return `no ${core} photo found; used the closest match${what ? `: ${what}` : ""}`;
+  return `couldn't find a photo of ${label}; kept the current one`;
+}
+
+/** The card's short label for a requested photo: "new photo: brick street (Pine St)", honest when it fell short. */
+export function photoVariantLabel(req: PhotoRequest, match: "named" | "subject" | "none" | "nothing"): string {
+  const label = photoRequestLabel(req);
+  const core = singular(req.subject);
+  const abbr = (req.named[0] ?? "").replace(/\bStreet\b/i, "St").replace(/\bAvenue\b/i, "Ave").replace(/\bRoad\b/i, "Rd");
+  if (match === "named") return `new photo: ${label}`;
+  if (match === "subject") return req.named.length ? `new photo: ${core} (no ${abbr} found)` : `new photo: ${label}`;
+  if (match === "none") return `new photo: closest to ${core}`;
+  return `same photo (no ${core} found)`;
 }

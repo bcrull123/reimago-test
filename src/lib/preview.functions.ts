@@ -330,7 +330,7 @@ export const previewRefine = createServerFn({ method: "POST" })
         };
       }
       const feedback = [...data.feedback, data.text].slice(-5);
-      const edits = await buildEdits(target, edit, feedback, lender);
+      const edits = await buildEdits(target, edit, feedback, lender, sites);
       const targetIndex = refs.find((r) => r.id === edit.targetId)?.index ?? 0;
       const { publicBase } = await import("./publish.server");
       const { photosLine } = await import("./preview/image-prompts");

@@ -18,7 +18,11 @@ import {
   findLookRefs,
   findTargetLook,
   lightingOnly,
+  mergePhotoRequest,
+  photoRequestLabel,
+  photoVariantLabel,
   readAdjustments,
+  readPhotoRequest,
   requestedStyle,
   wantsNewPhoto,
   tuneNumbers,
@@ -56,6 +60,10 @@ export function editByWording(text: string, looks: LookRef[], focusedId?: string
     how: target?.how,
     adjustments: readAdjustments(text),
     borrow: borrow && borrow.targetId === target?.id ? { fromId: borrow.fromId, assets: borrow.assets } : undefined,
+    ...(() => {
+      const req = borrow?.assets.includes("photo") ? undefined : readPhotoRequest(text);
+      return req ? { photoRequest: req, photo: photoRequestLabel(req) } : {};
+    })(),
     from: "wording",
   };
 }
@@ -119,8 +127,16 @@ Rules:
     const copy = { headline: clip(c.headline, 120) || undefined, lead: clip(c.lead, 300) || undefined };
     // A new photo only when the owner asked for a different one; "make the image daylight" adjusts the current photo.
     const asked = clip(raw.photo, 80);
-    const photo = asked && wantsNewPhoto(text) && !lightingOnly(asked) ? asked : undefined;
-    if (asked && !photo) console.info(`[refine] planner photo “${asked}” ignored: the owner asked to adjust the current photo, not for a new one`);
+    const plannerPhoto = asked && wantsNewPhoto(text) && !lightingOnly(asked) ? asked : undefined;
+    if (asked && !plannerPhoto) console.info(`[refine] planner photo “${asked}” ignored: the owner asked to adjust the current photo, not for a new one`);
+    // The owner's own subject words win over the planner's summary (which once turned "the brick streets, maybe
+    // Pine Street" into the town's generic "downtown Pauls Valley").
+    const photoRequest = borrow?.assets.includes("photo") ? undefined : mergePhotoRequest(text, plannerPhoto);
+    const photo = photoRequest ? photoRequestLabel(photoRequest) : undefined;
+    if (photoRequest || plannerPhoto)
+      console.info(
+        `[refine] photo request: ${photoRequest ? `subject “${photoRequest.subject}”${photoRequest.named.length ? `, named ${photoRequest.named.map((n) => `“${n}”`).join(", ")}` : ""}` : "none"}${plannerPhoto ? ` · planner said “${plannerPhoto}”${photoRequest && photoRequest.subject !== plannerPhoto ? " (kept the owner's words)" : ""}` : ""}`,
+      );
     return {
       targetId,
       how: rules.how ?? (aiTarget ? `named “${aiTarget.name}” (AI)` : undefined),
@@ -128,7 +144,8 @@ Rules:
       adjustments: adjustments.length ? [...adjustments, ...rules.adjustments.filter((r) => !adjustments.some((a) => a.type === r.type))].slice(0, 6) : rules.adjustments,
       copy: copy.headline || copy.lead ? copy : undefined,
       // A borrowed picture comes from the other look, never from a new search.
-      photo: borrow?.assets.includes("photo") ? undefined : photo,
+      photo,
+      photoRequest,
       borrow,
       from: adjustments.length || copy.headline || copy.lead || photo || (borrow && !rules.borrow) ? "AI planner" : "wording",
     };
@@ -199,6 +216,10 @@ async function copyImages(from: StoredSite, toId: string): Promise<void> {
 }
 
 /** A different hero photo for the edit ("…but use the depot photo"): Google Images, then free-license photos. */
+function hero0(site: StoredSite) {
+  return site.pages.find((p) => p.slug === "home")?.sections?.[0];
+}
+
 async function findEditPhoto(site: StoredSite, subject: string, step: number): Promise<{ bytes: Buffer; type: string; image: StoredImage } | undefined> {
   if (!site.facts) return undefined;
   const { findGooglePhotos, photoSearchEnabled } = await import("./google-photo.server.ts");
@@ -219,10 +240,65 @@ async function findEditPhoto(site: StoredSite, subject: string, step: number): P
 }
 
 /**
+ * Round 8c: the owner's requested photo ("one of the brick streets, maybe Pine Street"), searched by their own
+ * subject words — the site's photos and the photos the other looks show first, then Google most-specific-first —
+ * judged by vision for whether it SHOWS the request, never the current photo. Returns the honest card line.
+ */
+async function findRequestHero(site: StoredSite, req: NonNullable<LookEdit["photoRequest"]>, others: StoredSite[]): Promise<{ bytes: Buffer; type: string; image: StoredImage; note: string; label: string; match: string } | { note: string; label: string; match: "nothing" }> {
+  const { readImage } = await import("@/lib/pages.server");
+  const { findRequestedPhoto, judgeSubject, storedHeroFor } = await import("./photo-request.server.ts");
+  const { measurePhoto, siteHeroPhotos } = await import("./hero-pick.server.ts");
+  const { fetchPhoto, imageSize } = await import("./images.server.ts");
+  const { googleImages, photoSearchEnabled, photoSearchMode } = await import("./google-photo.server.ts");
+  const { placeOf } = await import("./web-photo.ts");
+  const deadline = Date.now() + 45_000;
+  const heroName = site.pages.find((p) => p.slug === "home")?.sections?.[0]?.image;
+  const heroImg = heroName ? site.images?.[heroName] : undefined;
+  const heroBytes = heroName ? await readImage(site.id, heroName) : undefined;
+  const current = {
+    urls: [heroImg?.temporary?.imageUrl, heroImg?.temporary?.sourcePage, heroImg?.credit?.sourceUrl].filter((u): u is string => Boolean(u)),
+    hash: heroBytes ? measurePhoto(heroBytes.bytes, heroBytes.type)?.hash : undefined,
+  };
+  type Own = Parameters<typeof findRequestedPhoto>[2]["own"][number];
+  const own: Own[] = [];
+  const asPhoto = (url: string, b: { bytes: Buffer; type: string }) => {
+    const size = imageSize(b.bytes) ?? { width: 0, height: 0 };
+    return { url, bytes: b.bytes, type: b.type, ...size };
+  };
+  // The site's own photos (already fetched in round 1, so this is the cache).
+  if (site.facts) {
+    const siteOwn = await Promise.race([siteHeroPhotos(site.facts).catch(() => []), new Promise<[]>((r) => setTimeout(() => r([]), 10_000))]);
+    for (const s of siteOwn) own.push({ id: s.candidate.id, from: "your site", caption: s.candidate.text, photo: asPhoto(s.candidate.id, s), hash: s.candidate.hash, level: 0, caption_match: "none" });
+  }
+  // The photos the other looks already show.
+  for (const o of others) {
+    const name = o.pages.find((p) => p.slug === "home")?.sections?.[0]?.image;
+    const img = name ? o.images?.[name] : undefined;
+    const bytes = name ? await readImage(o.id, name) : undefined;
+    if (!img || !bytes) continue;
+    const id = img.temporary?.imageUrl ?? img.credit?.sourceUrl ?? `${o.id}/${name}`;
+    const caption = [img.temporary?.title, img.alt, img.credit?.title].filter(Boolean).join(" · ") || "photo";
+    own.push({ id, from: "another look", caption, photo: asPhoto(id, bytes), hash: measurePhoto(bytes.bytes, bytes.type)?.hash, level: 0, caption_match: "none", ...(img.credit ? { credit: img.credit } : {}) });
+  }
+  const { aiAvailable, isMockMode } = await import("@/lib/ai-provider.server");
+  const useVision = process.env.PREVIEW_PHOTO_VISION !== "0" && !isMockMode() && aiAvailable();
+  const result = await findRequestedPhoto(req, site.facts ? placeOf(site.facts) : undefined, { own, current }, {
+    search: googleImages,
+    fetch: (u) => fetchPhoto(u),
+    hash: (b, t) => measurePhoto(b, t)?.hash,
+    judge: useVision ? judgeSubject : undefined,
+    log: (l) => console.info(l),
+  }, { deadline, googleEnabled: photoSearchEnabled() });
+  if (!result.pick) return { note: result.note, label: result.label, match: "nothing" };
+  const via = photoSearchMode()?.mode === "proxy" ? "photo-search proxy" : "Serper";
+  return { bytes: result.pick.photo.bytes, type: result.pick.photo.type, image: storedHeroFor(result.pick, via), note: result.note, label: result.label, match: result.match };
+}
+
+/**
  * Three stored edits of `stored` (as asked, a half step more, a full step more), each a full look the owner
  * can preview and choose. Everything but the requested change is copied as is.
  */
-export async function buildEdits(stored: StoredSite, edit: LookEdit, feedback: string[], lender?: StoredSite): Promise<EditedLook[]> {
+export async function buildEdits(stored: StoredSite, edit: LookEdit, feedback: string[], lender?: StoredSite, others: StoredSite[] = []): Promise<EditedLook[]> {
   const { newPageId, readImage, saveImage, saveSite } = await import("@/lib/pages.server");
   const design = stored.design!;
   const borrowed = lender && edit.borrow ? edit.borrow.assets : [];
@@ -255,6 +331,8 @@ export async function buildEdits(stored: StoredSite, edit: LookEdit, feedback: s
   const heroBytes = lenderBytes ?? (heroName ? await readImage(stored.id, heroName) : undefined);
   const luma = heroBytes ? heroLuma(heroBytes.bytes, heroBytes.type, cinematic ? { x0: 0, x1: 0.5, y0: 0.2, y1: 0.85 } : { x0: 0, x1: 1, y0: 0.45, y1: 0.95 }) : undefined;
   const out: EditedLook[] = [];
+  // A requested photo is found once (by the owner's own words) and shared by the steps.
+  const requested = hero0(stored) && edit.photoRequest ? await findRequestHero(stored, edit.photoRequest, others.filter((o) => o.id !== stored.id)) : undefined;
   for (const [step, scale] of scales.entries()) {
     const id = newPageId();
     await copyImages(stored, id);
@@ -290,7 +368,14 @@ export async function buildEdits(stored: StoredSite, edit: LookEdit, feedback: s
       if (!borrowed.includes("fonts")) fonts = { ...preset.fonts };
       notes.push(`style switched to ${base.name}, as asked (same photo, words and colors)`);
     }
-    if (hero && edit.photo) {
+    if (hero && requested) {
+      if ("bytes" in requested) {
+        await saveImage(id, "hero", requested.type, requested.bytes);
+        images.hero = requested.image;
+        hero.image = "hero";
+      }
+      notes.push(requested.note);
+    } else if (hero && edit.photo) {
       const found = await findEditPhoto(stored, edit.photo, step);
       if (found) {
         await saveImage(id, "hero", found.type, found.bytes);
@@ -299,7 +384,8 @@ export async function buildEdits(stored: StoredSite, edit: LookEdit, feedback: s
         notes.push(`new photo: ${edit.photo}`);
       } else notes.push(`couldn't find a photo of “${edit.photo}”, kept the current one`);
     }
-    const variant = variantLabel(edit.adjustments, Math.min(step, 2) as 0 | 1 | 2, !intensity ? notes[0] : undefined);
+    const photoLabel = requested && edit.photoRequest ? photoVariantLabel(edit.photoRequest, requested.match as "named" | "subject" | "none" | "nothing") : undefined;
+    const variant = variantLabel(edit.adjustments, Math.min(step, 2) as 0 | 1 | 2, photoLabel ?? (!intensity ? notes[0] : undefined));
     const changed = changedLine(edit.adjustments, scale, photoHero, notes);
     const tune: LookTune = { levels, base, scrimMin: Math.round(scrimMin * 1000) / 1000, variant, changed };
     const site: StoredSite = {
