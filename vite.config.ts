@@ -1,3 +1,4 @@
+import { execSync } from "node:child_process";
 import { readdirSync } from "node:fs";
 import { join } from "node:path";
 import type { Plugin } from "vite";
@@ -142,6 +143,23 @@ function authPopupPlugin(): Plugin {
   };
 }
 
+/**
+ * The build stamp shown in the site footer (Bob can check which build he's on): the short commit hash from the
+ * host's env (Vercel / GitHub), else `git rev-parse`, plus the build date (UTC).
+ */
+function buildStamp(): string {
+  const env = process.env.BUILD_COMMIT || process.env.VERCEL_GIT_COMMIT_SHA || process.env.GITHUB_SHA || "";
+  let sha = env.slice(0, 7);
+  if (!sha) {
+    try {
+      sha = execSync("git rev-parse --short=7 HEAD", { stdio: ["ignore", "pipe", "ignore"] }).toString().trim();
+    } catch {
+      sha = "unknown";
+    }
+  }
+  return `${sha} · ${new Date().toISOString().slice(0, 16).replace("T", " ")} UTC`;
+}
+
 // `0.0.0.0:8080` is the live-preview contract — don't change host/port.
 // The dev server starts once `src/router.tsx` and `src/routes/` exist — see
 // AGENTS.md § "First scaffold".
@@ -157,6 +175,7 @@ export default defineConfig(({ command, isPreview }) => ({
     strictPort: true,
   },
   resolve: { tsconfigPaths: true },
+  define: { __BUILD_STAMP__: JSON.stringify(buildStamp()) },
   plugins: [
     pgliteBootstrapPlugin(),
     // Before tanstackStart so /auth/popup never falls through to the SPA.

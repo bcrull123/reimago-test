@@ -118,23 +118,49 @@ await page.locator("[data-look]").nth(2).waitFor({ timeout: 400_000 });
 await page.locator('[role="status"]').waitFor({ state: "detached", timeout: 200_000 }).catch(() => undefined);
 await page.waitForTimeout(3000);
 const round1 = await readCards();
-await page.locator("[data-card-edit]").first().scrollIntoViewIfNeeded();
+await page.locator("[data-look]").first().evaluate((el) => el.scrollIntoView({ block: "start" }));
+await page.waitForTimeout(800);
 await page.screenshot({ path: join(outDir, "01-round1-card-boxes.png") });
 await page.locator("[data-look]").first().scrollIntoViewIfNeeded();
 await page.screenshot({ path: join(outDir, "01-round1-cards.png"), fullPage: true });
 check(round1.length === 3 && round1.every((c) => c.box), `every card has its own “Change this look” box (${round1.map((c) => c.box).join(",")})`);
 check(round1.every((c) => c.boxStyle === c.name), "each box carries its card's style name");
+// Round 8b: labelled "What would you change?", right under the description and colors (visible without scrolling).
+const labels = await page.locator("[data-card-edit] label").allTextContents();
+check(labels.length === 3 && labels.every((l) => /What would you change\?/.test(l)), `box label: ${labels.map((l) => l.trim()).join(" | ")}`);
+const placement = await page.locator("[data-look]").evaluateAll((cards) =>
+  cards.map((card) => {
+    const top = card.getBoundingClientRect().top;
+    const box = card.querySelector("[data-card-edit]")?.getBoundingClientRect();
+    return box ? Math.round(box.bottom - top) : -1;
+  }),
+);
+check(placement.every((d) => d > 0 && d < 1000), `box is within the first 1000 px of each card (bottom edge at ${placement.join(", ")} px)`);
+check((await page.locator("[data-look-mockup]").count()) === 0, "Custom Design card shows no mockup / built thumbnails");
+const pbox = page.locator("[data-preview-edit]");
+check((await pbox.count()) === 1, "the full-size rendering has its own “What would you change?” box");
+check((await pbox.getAttribute("data-card-style")) === round1[0].name, `…for the look being previewed (${await pbox.getAttribute("data-card-style")})`);
+await pbox.scrollIntoViewIfNeeded();
+await page.screenshot({ path: join(outDir, "01c-rendering-box.png") });
+const stamp = (await page.locator("[data-build-stamp]").textContent())?.trim();
+check(/^Build [0-9a-f]{7} /.test(stamp ?? ""), `footer build stamp: ${stamp}`);
 check(await page.locator("#refine-text").count() === 1, "the global refine box is still there (fallback)");
 // Phone: the box sits under each card, full width.
 await page.setViewportSize({ width: 390, height: 844 });
-await page.waitForTimeout(800);
+await page.waitForTimeout(2500);
 const box2 = page.locator("[data-card-edit]").nth(1);
 await box2.scrollIntoViewIfNeeded();
 await page.screenshot({ path: join(outDir, "01b-phone-card-box.png") });
 const bb = await box2.boundingBox();
+const btn = box2.locator("[data-card-edit-submit]");
+const btnText = (await btn.innerText()).trim();
+const btnBox = await btn.boundingBox();
+check(btnText === "Change" && btnBox && btnBox.width > 80 && btnBox.height >= 40, `phone: the Change button shows its label (“${btnText}”, ${btnBox ? `${Math.round(btnBox.width)}x${Math.round(btnBox.height)}` : "none"})`);
 check(bb && bb.width > 300 && bb.x >= 0 && bb.x + bb.width <= 390, `phone: the box fits the screen (${bb ? `${Math.round(bb.x)}+${Math.round(bb.width)}` : "none"})`);
+await page.locator("[data-look]").first().scrollIntoViewIfNeeded();
+await page.screenshot({ path: join(outDir, "01d-phone-round1.png") });
 await page.setViewportSize({ width: 1400, height: 1100 });
-await page.waitForTimeout(800);
+await page.waitForTimeout(1500);
 
 // ---- 2. middle card: daylight + contrast, same photo.
 const mid = await editCard(1, cardText, "02-middle");
