@@ -539,7 +539,11 @@ http
           if (/too bright|darker/.test(text)) adjustments.push({ type: "darken", amount });
           if (/bigger text|larger text/.test(text)) adjustments.push({ type: "bigger-text", amount });
           if (/too busy|less busy/.test(text)) adjustments.push({ type: "less-busy", amount });
-          out = { targetLook, adjustments, copy: null, photo: null };
+          if (/contrast/.test(text)) adjustments.push({ type: "more-contrast", amount });
+          // Like Bob's real run (round 8): "make the image in daylight" read as a NEW photo "daylight scene" (the server
+          // must ignore that and adjust the current photo instead).
+          const photo = /daylight/.test(text) ? "daylight scene" : null;
+          out = { targetLook, adjustments, copy: null, photo };
           log("edit plan", JSON.stringify(out));
         } else if (system.includes("Rate EVERY photo as a homepage hero")) {
           // The hero quality gate. Like a model looking at each photo, rate it from what it shows (the caption):
