@@ -542,9 +542,25 @@ http
           if (/contrast/.test(text)) adjustments.push({ type: "more-contrast", amount });
           // Like Bob's real run (round 8): "make the image in daylight" read as a NEW photo "daylight scene" (the server
           // must ignore that and adjust the current photo instead).
-          const photo = /daylight/.test(text) ? "daylight scene" : null;
+          // Like the live planner in round 8c: a new-photo request summarized as the town's generic subject (the
+          // server must keep the owner's own words instead).
+          const photo = /daylight/.test(text) ? "daylight scene" : /\b(?:photo|picture|image)\b.*\b(?:to|with|of)\b/i.test(text) ? "downtown Pauls Valley" : null;
           out = { targetLook, adjustments, copy: null, photo };
           log("edit plan", JSON.stringify(out));
+        } else if (system.includes("Does each photo SHOW what the owner asked for")) {
+          // Round 8c subject check: read what each photo shows off its caption, like a model would see it.
+          const captionParts = (json.messages[0].content ?? []).filter((p) => p?.type === "text" && /^Photo \d+/.test(p.text));
+          const captions = captionParts.map((p) => p.text.match(/"(.*)"/)?.[1] ?? "");
+          const named = (system.match(/\(ideally ([^)]+)\)/)?.[1] ?? "").toLowerCase();
+          out = {
+            photos: captions.map((c, i) => ({
+              n: i + 1,
+              shows: named && c.toLowerCase().includes(named) ? "named" : /\bbrick/i.test(c) ? "subject" : "no",
+              rating: /shutterstock|istock|getty|watermark/i.test(c) ? 3 : /\bbrick/i.test(c) ? 7 : 8,
+              what: c.replace(/,?\s*Pauls Valley,?( Oklahoma)?/gi, "").trim().toLowerCase().split(/\s+/).slice(0, 5).join(" ") || "photo",
+            })),
+          };
+          log("vision subject", captions.map((c, i) => `${i + 1}:${out.photos[i].shows}/${out.photos[i].rating}`).join(" "));
         } else if (system.includes("Rate EVERY photo as a homepage hero")) {
           // The hero quality gate. Like a model looking at each photo, rate it from what it shows (the caption):
           // unappealing / off-topic subjects low, attractive on-topic scenes high. FAKE_RATING=none: no answer.

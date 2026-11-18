@@ -28,6 +28,7 @@ const note = process.env.NOTE ?? "";
 const cardText = process.env.CARD_EDIT ?? "make the image daylight and raise text contrast";
 const customText = process.env.CUSTOM_EDIT ?? "make the photo daylight, more contrast";
 const styleText = process.env.STYLE_EDIT ?? "Use Bold Photo and make the image in daylight. adjust the text to show contrast.";
+const photoText = process.env.PHOTO_EDIT ?? "change the photo to one of the brick streets, maybe Pine Street";
 mkdirSync(outDir, { recursive: true });
 
 const browser = await chromium.launch({ executablePath: process.env.CHROME_PATH || undefined });
@@ -192,9 +193,22 @@ check(sty.after[1].name === "Bold Photo", `asked for Bold Photo in the middle bo
 check(sty.afterPrints[1].hero === sty.prints[1].hero, "…and it keeps the same hero photo");
 check(!/new photo/i.test(sty.after[1].changed ?? ""), `…with no new photo search: ${sty.after[1].changed}`);
 
+// ---- 5. Round 8c: Bob's Editorial box asks for a brick street, maybe Pine Street -> a NEW photo of a brick
+// street (mock search has none of Pine Street), labelled with his subject, said honestly; others untouched.
+const edIndex = Math.max(0, sty.after.findIndex((c) => c.name === "Editorial"));
+const pho = await editCard(edIndex, photoText, "05-editorial-brick-street");
+const p1 = pho.after[edIndex];
+const p1Text = `${p1.title ?? ""} ${p1.variants.join(" | ")} ${p1.changed ?? ""} ${p1.html ?? ""}`;
+check(p1.name === pho.before[edIndex].name, `Editorial keeps its style name (${p1.name})`);
+check(pho.afterPrints[edIndex].hero && pho.afterPrints[edIndex].hero !== pho.prints[edIndex].hero, `Editorial got a different hero photo (${pho.prints[edIndex].hero} -> ${pho.afterPrints[edIndex].hero})`);
+check(!pho.prints.some((p, i) => i !== edIndex && p.hero === pho.afterPrints[edIndex].hero), "…not a photo another card already shows");
+check(/brick street/i.test(p1Text), `the card names the requested subject: ${p1.variants.join(" | ")} · ${p1.changed}`);
+check(/couldn.t find Pine Street/i.test(p1Text) || /Pine St\)/.test(p1Text), "…and says honestly whether Pine Street was found");
+check(!/downtown Pauls Valley/i.test(p1.changed ?? ""), `…never the generic “downtown Pauls Valley”: ${p1.changed}`);
+
 check(sent.length === 0, `no Formcarry calls (${sent.length})`);
 const strip = (cards) => cards.map((c) => ({ ...c, html: undefined }));
-writeFileSync(join(outDir, "summary.json"), JSON.stringify({ target, steps: [cardText, customText, styleText], formcarryCalls: sent.length, failures, round1: strip(round1), middle: strip(mid.after), custom: cus ? strip(cus.after) : null, style: strip(sty.after) }, null, 2));
-console.log(JSON.stringify({ failures, round1: round1.map((c) => c.name), middle: mid.after.map((c) => `${c.name}${c.changed ? ` [${c.changed}]` : ""}`), custom: cus?.after.map((c) => c.name), style: sty.after.map((c) => c.name) }, null, 2));
+writeFileSync(join(outDir, "summary.json"), JSON.stringify({ target, steps: [cardText, customText, styleText, photoText], formcarryCalls: sent.length, failures, round1: strip(round1), middle: strip(mid.after), custom: cus ? strip(cus.after) : null, style: strip(sty.after), photo: strip(pho.after) }, null, 2));
+console.log(JSON.stringify({ failures, round1: round1.map((c) => c.name), middle: mid.after.map((c) => `${c.name}${c.changed ? ` [${c.changed}]` : ""}`), custom: cus?.after.map((c) => c.name), style: sty.after.map((c) => c.name), photo: pho.after.map((c) => `${c.name}${c.changed ? ` [${c.changed}]` : ""}`) }, null, 2));
 await browser.close();
 process.exit(failures.length ? 1 : 0);
