@@ -386,6 +386,47 @@ Bob on aceee96: "It still doesn't have the what would you change box in the rend
 - **Phone:** under 420 px wide, the field and the Change button stack. The button is primary-colored, at least 6.5rem wide and 44 px tall, with `whitespace-nowrap`, so its label always shows (the e2e checks the label text and size at 390 px).
 - **Build stamp:** the site footer shows `Build <short commit> · <build time> UTC` (`data-build-stamp`). It comes from `BUILD_COMMIT`, `VERCEL_GIT_COMMIT_SHA` or `GITHUB_SHA`, else `git rev-parse --short HEAD`, read at build time (`vite.config.ts` `define: __BUILD_STAMP__`). With `npm run dev`, it is read when the server starts.
 
+### Round 9: the first round uses the site's own pictures (any business)
+
+Bob's Pauls Valley run showed Editorial and Dark Premium with Google Images photos even though the site has
+plenty of its own; only Custom Design used one. Round 1 now looks through the site first for every look. Nothing
+is tied to a particular site, business or keyword: the crawl is generic, and the vision model judges what is
+appealing and on-topic for the business type it detected.
+
+- **Crawling deeper** (scrape.server.ts, site-art.ts):
+  - Up to 10 key pages (about, gallery, services, menu, events…), then a second hop to up to 4 photo pages
+    linked from them (gallery / photos / portfolio / parks / attractions / events / rooms / projects…).
+  - Every picture form counts: `img` src and the largest `srcset` entry, `picture/source`, CSS
+    `background-image`, `og:image` / `twitter:image`, lazy attributes (`data-src`, `data-lazy-src`,
+    `data-original`, `data-bg`, `data-bg-src`…), and links straight to full-size `.jpg/.png/.webp` files.
+  - Logos, icons, social badges, sprites, tracking pixels, SVG/GIF/ICO and declared sizes under 200px are skipped.
+- **Measuring** (site-photos.ts, site-photos.server.ts `scanSitePhotos`): up to 40 candidates, 6 at a time,
+  15 s budget, cached 15 minutes per site. Squarespace / Shopify / WordPress full-size variants are tried first.
+  Usable = at least 640x360; hero-sized = at least 800px wide landscape, or 1000px square / portrait.
+  Transparent PNGs are cutouts, not photos. Duplicates (same picture at another size) collapse to the biggest.
+  Log: `[photo-search] site photos: read N pages, X pictures seen, Y candidates, Z usable photos (≥640px),
+  H hero-sized …` plus one `site photo HERO|section WxH “label” url` line each.
+- **A lower bar for the site's own photos**: the vision gate passes them at 5/10 (Google needs more) and rejects
+  only truly bad ones (blurry, screenshots of text, watermarked stock, blog cover graphics, off-topic).
+  A photo under 1400px wide gets the "small" treatment: a light duotone, a gradient overlay and a framed width.
+- **A different photo per look**: the site photos are ranked by the vision verdict and shared out between
+  Editorial and Dark Premium, one each (the photo the assignment gave the look, else the best free one). When there
+  are fewer good site photos than looks, a look is not given a repeat: it gets the signature graphic below or
+  Grok Imagine art. The Custom Design builds with Imagine from all the site's own assets, so it may use a photo a
+  template look also leads with (a one-photo site). Supporting sections use the remaining site photos.
+- **Google Images is the last resort** for template looks: Imagine first, Google only if Imagine fails. Each
+  fallback logs why, e.g. `[photo] look 2: no hero-sized photo on your site → Grok Imagine art (Google Images
+  only if Imagine fails)`.
+- **Signature graphic reimagined** (signature-hero.server.ts): when a site has no hero photo but one strong
+  graphic (a mascot, an illustration, a rocket…), Imagine gets it as a reference image and makes a cinematic
+  hero version with the same identity and colours. The original is the fallback. Only PNG/JPEG/WebP are used
+  (an SVG icon sprite is not a signature). The logo is used this way only when the site has no usable photo at
+  all. Card: "Art: your rocket, reimagined by Grok Imagine". Turn it off with `PREVIEW_SIGNATURE_HERO=0`.
+- **Card line**: "Photo: your site's own (“label”) · 30 photos found on your site, 4 used here".
+- Tests: `site-photos.test.ts` (srcset, page art kinds, filtering, full-size URLs, size classes, cutouts,
+  assignment before Google, card lines, signature subject and prompt). e2e with the stand-in AI on a town site,
+  a restaurant, bob.me, a plumber and a text-only blog.
+
 ### Round 8c: "change the photo to one of the brick streets, maybe Pine Street"
 
 Bob typed that in Editorial's box and got "Editorial · new photo: downtown Pauls Valley", a generic town photo.
