@@ -573,7 +573,8 @@ http
           out = {
             photos: captions.map((c, i) => ({
               n: i + 1,
-              shows: named && c.toLowerCase().includes(named) ? "named" : /\bbrick/i.test(c) ? "subject" : "no",
+              // Like a model looking at the picture: what it mainly shows (the caption's main clause), not a detail.
+              shows: named && c.toLowerCase().includes(named) ? "named" : /\bbrick/i.test(c.split(/,| with | and | featuring | in the /i)[0]) ? "subject" : "no",
               rating: /shutterstock|istock|getty|watermark/i.test(c) ? 3 : /\bbrick/i.test(c) ? 7 : 8,
               what: c.replace(/,?\s*Pauls Valley,?( Oklahoma)?/gi, "").trim().toLowerCase().split(/\s+/).slice(0, 5).join(" ") || "photo",
             })),

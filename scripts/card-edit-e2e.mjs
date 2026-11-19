@@ -200,10 +200,19 @@ const pho = await editCard(edIndex, photoText, "05-editorial-brick-street");
 const p1 = pho.after[edIndex];
 const p1Text = `${p1.title ?? ""} ${p1.variants.join(" | ")} ${p1.changed ?? ""} ${p1.html ?? ""}`;
 check(p1.name === pho.before[edIndex].name, `Editorial keeps its style name (${p1.name})`);
-check(pho.afterPrints[edIndex].hero && pho.afterPrints[edIndex].hero !== pho.prints[edIndex].hero, `Editorial got a different hero photo (${pho.prints[edIndex].hero} -> ${pho.afterPrints[edIndex].hero})`);
-check(!pho.prints.some((p, i) => i !== edIndex && p.hero === pho.afterPrints[edIndex].hero), "…not a photo another card already shows");
+const heroChanged = Boolean(pho.afterPrints[edIndex].hero && pho.afterPrints[edIndex].hero !== pho.prints[edIndex].hero);
+// Round 9b: never the same picture labelled as a new photo.
+check(!(!heroChanged && /new photo/i.test(`${p1.variants.join(" | ")} ${p1.changed ?? ""}`)), `round 9b: no "new photo" claim on an unchanged picture (changed: ${heroChanged}; ${p1.variants.join(" | ")} · ${p1.changed})`);
+check(heroChanged || /so I kept your current photo/.test(p1Text), `round 9b: either a different picture or an honest "kept your current photo": ${p1.changed}`);
+const outcome = process.env.EXPECT_PHOTO_OUTCOME ?? "photo";
+if (outcome === "illustrated") {
+  check(heroChanged && /Art: brick street, illustrated by Grok Imagine \(not a real photo of Pine Street\)/.test(p1Text), `round 9b (no Google): a labelled Imagine illustration: ${p1.variants.join(" | ")} · ${p1.changed}`);
+} else if (outcome === "photo") {
+  check(heroChanged, `Editorial got a different hero photo (${pho.prints[edIndex].hero} -> ${pho.afterPrints[edIndex].hero})`);
+  check(/couldn.t find Pine Street/i.test(p1Text) || /Pine St\)/.test(p1Text), "…and says honestly whether Pine Street was found");
+}
+if (heroChanged) check(!pho.prints.some((p, i) => i !== edIndex && p.hero === pho.afterPrints[edIndex].hero), "…not a photo another card already shows");
 check(/brick street/i.test(p1Text), `the card names the requested subject: ${p1.variants.join(" | ")} · ${p1.changed}`);
-check(/couldn.t find Pine Street/i.test(p1Text) || /Pine St\)/.test(p1Text), "…and says honestly whether Pine Street was found");
 check(!/downtown Pauls Valley/i.test(p1.changed ?? ""), `…never the generic “downtown Pauls Valley”: ${p1.changed}`);
 
 check(sent.length === 0, `no Formcarry calls (${sent.length})`);

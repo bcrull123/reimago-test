@@ -31,6 +31,7 @@ export const previewRead = createServerFn({ method: "POST" })
     return { url, notes };
   })
   .handler(async ({ data }): Promise<PreviewStepResult<{ facts: SiteFacts }>> => {
+    (await import("./env.server")).logKeyPresenceOnce();
     const { rateLimited, requestIp } = await import("./reimagine.server");
     if (rateLimited(requestIp())) {
       return { ok: false, error: "Too many previews from this network in the last hour. Try again shortly." };
@@ -54,6 +55,7 @@ export const previewFromBrief = createServerFn({ method: "POST" })
     return { brief: input.brief };
   })
   .handler(async ({ data }): Promise<PreviewStepResult<{ facts: SiteFacts }>> => {
+    (await import("./env.server")).logKeyPresenceOnce();
     const { rateLimited, requestIp } = await import("./reimagine.server");
     if (rateLimited(requestIp())) {
       return { ok: false, error: "Too many drafts from this network in the last hour. Try again shortly." };
@@ -81,6 +83,7 @@ export const previewDirections = createServerFn({ method: "POST" })
     current: (Array.isArray(input?.current) ? input.current : []).filter((x): x is string => typeof x === "string" && /^[a-f0-9]{16}$/.test(x)).slice(0, 3),
   }))
   .handler(async ({ data }): Promise<PreviewStepResult<{ plan: SitePlan; directions: DesignDirection[]; note?: string }>> => {
+    (await import("./env.server")).logKeyPresenceOnce();
     if (await limited("dir", 20)) return { ok: false, error: "Too many previews from this network in the last hour. Try again shortly." };
     try {
       const { planSite, directionsFor, prefetchForPlan, stepBudgetMs } = await import("./preview/builder.server");
@@ -102,9 +105,16 @@ export const previewDirections = createServerFn({ method: "POST" })
       // It also waits for the looks' archetypes, so each look's photo can suit its mood (dark premium: night, …).
       const archetypesP = looksP.then((l) => l.directions.map((d) => d.archetype)).catch(() => undefined);
       const prefetchP = planP.then((p) => prefetchForPlan(data.facts, p.plan, started + Math.max(20_000, stepBudgetMs() - 15_000), archetypesP));
+      let tPlan = 0;
+      let tLooks = 0;
+      let tPhotos = 0;
+      void planP.then(() => (tPlan = Date.now() - started)).catch(() => undefined);
+      void looksP.then(() => (tLooks = Date.now() - started)).catch(() => undefined);
+      void prefetchP.then(() => (tPhotos = Date.now() - started)).catch(() => undefined);
       const [planned, looks] = await Promise.all([planP, looksP]);
       // Give a running search a few more seconds to finish and store its ranking (each look can redo it if not).
       await Promise.race([prefetchP, new Promise((r) => setTimeout(r, Math.max(0, Math.min(12_000, started + stepBudgetMs() - 10_000 - Date.now()))))]);
+      console.info(`[timing] directions: plan ${tPlan}ms, looks ${tLooks}ms, site photos + vision gate ${tPhotos ? `${tPhotos}ms` : "still running (each look reads the stored ranking or redoes it)"}, total ${Date.now() - started}ms`);
       const note = [planned.note, looks.note].filter(Boolean).join(" ") || undefined;
       let directions = looks.directions;
       if (briefP && directions.length >= 3) {
@@ -129,6 +139,7 @@ export const previewLook = createServerFn({ method: "POST" })
     variation: variationOf(input?.variation),
   }))
   .handler(async ({ data }): Promise<PreviewStepResult<{ look: LookInfo; note?: string }>> => {
+    (await import("./env.server")).logKeyPresenceOnce();
     if (await limited("look", 45)) return { ok: false, error: "Too many previews from this network in the last hour. Try again shortly." };
     try {
       const { normalizePlan, buildLook } = await import("./preview/builder.server");
@@ -140,7 +151,9 @@ export const previewLook = createServerFn({ method: "POST" })
       if (rawPlan && typeof rawPlan === "object" && rawPlan.mock) plan.mock = true;
       const direction = normalizeDirection(data.direction, data.index, data.facts);
       const id = newPageId();
+      const tLook = Date.now();
       const { site, ai, aiError, aiWarning, generated, photos } = await buildLook(id, data.facts, plan, direction, data.index);
+      console.info(`[timing] look ${data.index + 1} "${direction.name}": built in ${Date.now() - tLook}ms`);
       await saveSite(site);
       const look: LookInfo = {
         id,
@@ -190,6 +203,7 @@ export const previewImagine = createServerFn({ method: "POST" })
     return { id };
   })
   .handler(async ({ data }): Promise<PreviewStepResult<{ mockupUrl?: string; note?: string }>> => {
+    (await import("./env.server")).logKeyPresenceOnce();
     if (await limited("imagine", 30)) return { ok: false, error: "Too many previews from this network in the last hour. Try again shortly." };
     try {
       const { readSite, saveSite } = await import("./pages.server");
@@ -222,6 +236,7 @@ export const previewCustom = createServerFn({ method: "POST" })
     return { id };
   })
   .handler(async ({ data }): Promise<PreviewStepResult<{ custom: NonNullable<LookInfo["custom"]>; name: string; layout?: string }>> => {
+    (await import("./env.server")).logKeyPresenceOnce();
     if (await limited("custom", 30)) return { ok: false, error: "Too many previews from this network in the last hour. Try again shortly." };
     try {
       const { readSite, saveSite, readImage } = await import("./pages.server");
@@ -304,6 +319,8 @@ export const previewRefine = createServerFn({ method: "POST" })
     return { text, ids, focused, feedback, card };
   })
   .handler(async ({ data }): Promise<PreviewStepResult<{ mode: "new" } | { mode: "none"; note: string } | { mode: "edit"; looks: LookInfo[]; target: string; targetId: string; how: string; note?: string }>> => {
+    (await import("./env.server")).logKeyPresenceOnce();
+    const tRefine = Date.now();
     if (await limited("refine", 40)) return { ok: false, error: "Too many changes from this network in the last hour. Try again shortly." };
     try {
       const { readSite } = await import("./pages.server");
@@ -371,6 +388,7 @@ export const previewRefine = createServerFn({ method: "POST" })
           edit: { variant: e.variant, changed: e.changed, from: target.id, how: edit.how ?? "" },
         };
       });
+      console.info(`[timing] refine: ${Date.now() - tRefine}ms (${looks.length} look${looks.length === 1 ? "" : "s"})`);
       return { ok: true, mode: "edit", looks, target: looks[0]?.name ?? name, targetId: target.id, how: edit.how ?? "" };
     } catch (error) {
       console.error("[refine] failed", error instanceof Error ? error.message : error);
@@ -390,6 +408,7 @@ export const previewRetryAi = createServerFn({ method: "POST" })
     return { id };
   })
   .handler(async ({ data }): Promise<PreviewStepResult<{ fixed: string[]; errors: Record<string, string>; note?: string; result?: ReimagineOk }>> => {
+    (await import("./env.server")).logKeyPresenceOnce();
     if (await limited("retry", 20)) return { ok: false, error: "Too many retries from this network in the last hour. Try again shortly." };
     try {
       const { readSite, saveSite } = await import("./pages.server");
@@ -417,6 +436,7 @@ export const previewFinish = createServerFn({ method: "POST" })
     return { id };
   })
   .handler(async ({ data }): Promise<PreviewStepResult<{ result: ReimagineOk }>> => {
+    (await import("./env.server")).logKeyPresenceOnce();
     try {
       const { readSite, saveSite } = await import("./pages.server");
       const { publicBase } = await import("./publish.server");
@@ -442,6 +462,7 @@ export const previewFinish = createServerFn({ method: "POST" })
 
 /** Whether the server can launch a Cursor cloud agent (CURSOR_API_KEY set). */
 export const cursorStatus = createServerFn({ method: "GET" }).handler(async () => {
+    (await import("./env.server")).logKeyPresenceOnce();
   const { cursorConfigured } = await import("./reimagine.server");
   return { api: cursorConfigured() };
 });
@@ -460,6 +481,7 @@ export const savePreviewPicture = createServerFn({ method: "POST" })
     return { id, png };
   })
   .handler(async ({ data }): Promise<PreviewStepResult<{ url: string }>> => {
+    (await import("./env.server")).logKeyPresenceOnce();
     try {
       if (await limited("picture", 30)) return { ok: false, error: "Too many pictures from this network in the last hour." };
       const { readSite, saveImage } = await import("./pages.server");
