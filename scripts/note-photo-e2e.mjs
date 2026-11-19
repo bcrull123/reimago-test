@@ -100,14 +100,36 @@ if (process.env.EXPECT_DISTINCT_HEROES === "1") {
     const log = process.env.SERVER_LOG ? readFileSync(process.env.SERVER_LOG, "utf8") : "";
     const line = log.split("\n").reverse().find((l) => l.startsWith("[photo] look") && l.includes(`"${card.name}"`));
     // The business's own photo (preferred over Google since round 6) has no Google subject: it counts as its own.
-    card.pickedSubject = line?.match(/picked for this look: .*?subject: ([a-z ]+)/)?.[1]?.trim() ?? (line?.includes("hero = your site") ? `own photo ${card.heroSha1}` : null);
+    card.pickedSubject = line?.match(/picked for this look: .*?subject: ([a-z ]+)/)?.[1]?.trim() ?? (line?.includes("hero = your site") ? `own photo ${card.heroSha1}` : /hero = (?:AI image|your signature)/.test(line ?? "") ? `Imagine art ${card.heroSha1}` : null);
   }
   const subjects = cards.map((c) => c.pickedSubject);
   distinct = { hashes, subjects, ok: new Set(hashes).size === cards.length && new Set(subjects).size === cards.length && !subjects.includes("sign") && !subjects.includes(null) };
   console.log(`[check] distinct non-sign heroes: ${distinct.ok ? "PASS" : "FAIL"} ${JSON.stringify(distinct)}`);
   if (!distinct.ok) process.exitCode = 1;
 }
-const summary = { target, note, formcarryCalls: sent.length, distinct, cards };
+// Round 9: EXPECT_SITE_PHOTOS=N — at least N looks show the site's own photo ("Photo: your site's own …", with
+// counts); EXPECT_SIGNATURE=1 — a look's hero is the site's signature graphic reimagined by Grok Imagine;
+// EXPECT_NO_GOOGLE=1 — no look uses Google Images (Imagine fills the gaps).
+const round9 = {};
+if (process.env.EXPECT_SITE_PHOTOS) {
+  const own = cards.filter((c) => /^Photo: your site's own/.test(c.photos ?? "") || /your site's own/.test(c.photos ?? ""));
+  round9.ownPhotoLooks = own.length;
+  const ok = own.length >= Number(process.env.EXPECT_SITE_PHOTOS) && own.every((c) => /\d+ photos? found on your site, \d+ used/.test(c.photos ?? "") || /Grok Imagine for this design/.test(c.photos ?? ""));
+  console.log(`[check] ${own.length} look(s) use the site's own photo (want ≥${process.env.EXPECT_SITE_PHOTOS}), with counts: ${ok ? "PASS" : "FAIL"} ${JSON.stringify(cards.map((c) => c.photos))}`);
+  if (!ok) process.exitCode = 1;
+}
+if (process.env.EXPECT_SIGNATURE === "1") {
+  const sig = cards.filter((c) => /^Art: your [a-z ]+, reimagined by Grok Imagine/.test(c.photos ?? ""));
+  round9.signatureLooks = sig.length;
+  console.log(`[check] signature graphic reimagined as a hero: ${sig.length ? "PASS" : "FAIL"} ${JSON.stringify(cards.map((c) => c.photos))}`);
+  if (!sig.length) process.exitCode = 1;
+}
+if (process.env.EXPECT_NO_GOOGLE === "1") {
+  const g = cards.filter((c) => /Google Images \(preview only/.test(c.photos ?? ""));
+  console.log(`[check] no Google Images heroes: ${g.length ? "FAIL" : "PASS"} ${JSON.stringify(cards.map((c) => c.photos))}`);
+  if (g.length) process.exitCode = 1;
+}
+const summary = { target, note, formcarryCalls: sent.length, distinct, round9, cards };
 writeFileSync(join(outDir, "summary.json"), JSON.stringify(summary, null, 2));
 console.log(JSON.stringify(summary, null, 2));
 await browser.close();

@@ -419,6 +419,24 @@ http
           json.prompt = json.prompt ?? "";
           log("imagine art (edits)", `${refs} reference image(s)`, json.aspect_ratio, (json.prompt.match(/^[^:.]*/) ?? [""])[0].slice(0, 60));
           req.fakeArt = true;
+        } else if (req.url.endsWith("/images/edits") && /REIMAGINE THE SIGNATURE/.test(json.prompt ?? "")) {
+          // Round 9: the site's signature graphic (bob.me's rocket) reimagined as hero art, from the real file.
+          const refs = Array.isArray(json.images) ? json.images.length : json.image ? 1 : 0;
+          if (process.env.FAKE_IMAGINE === "fail" || process.env.FAKE_IMAGINE === "sigfail") {
+            log("imagine signature hero (edits)", "FAIL");
+            res.writeHead(500, { "content-type": "application/json" });
+            res.end(JSON.stringify({ error: "fake imagine failure" }));
+            return;
+          }
+          await sleep(1500);
+          const subject = (json.prompt.match(/the same ([a-z ]+),/) ?? ["", "rocket"])[1];
+          // Each look's prompt names its own style, so (like the real Imagine) each look gets its own rendition.
+          const style = (json.prompt.match(/a ([a-z-]+) website for/) ?? ["", ""])[1];
+          const art = await photoFor(`${subject} ${style} cinematic dramatic sky`, true);
+          log("imagine signature hero (edits)", `${refs} reference image(s)`, json.aspect_ratio, subject);
+          res.writeHead(200, { "content-type": "application/json" });
+          res.end(JSON.stringify({ data: [{ b64_json: art.toString("base64") }] }));
+          return;
         } else if (req.url.endsWith("/images/edits")) {
           res.writeHead(400, { "content-type": "application/json" });
           res.end(JSON.stringify({ error: "fake: edits only for mockups and art" }));
@@ -567,16 +585,18 @@ http
           const captionParts = (json.messages[0].content ?? []).filter((p) => p?.type === "text" && /^Photo \d+/.test(p.text));
           const captions = captionParts.map((p) => p.text.match(/"(.*)"/)?.[1] ?? "");
           const own = captionParts.map((p) => /the business's own site/.test(p.text));
-          const BAD = /\b(airport|runway|antenna|library|reading|sitting|taking notes|desks?|meeting|gravel|parking|lot|rv park|utility|pole|wires|clutter|dirty|clog|leak|pipes under|drain cleaning|storage|dumpster|sign|logo|menu|plaque|seal|truck wrap|van)\b/i;
+          const BAD = /\b(cover image|bp cover|blog|keys to|steps to|how to|tips for|guide to|airport|runway|antenna|library|reading|sitting|taking notes|desks?|meeting|gravel|parking|lot|rv park|utility|pole|wires|clutter|dirty|clog|leak|pipes under|drain cleaning|storage|dumpster|sign|logo|menu|plaque|seal|truck wrap|van)\b/i;
           const GOOD = /\b(downtown|historic|main street|courthouse|landmark|aerial|skyline|depot|station|brick|park|festival|night|dusk|dining|plated|dish|patio|pasta|burger|steak|bathroom|kitchen remodel|finished|technician|modern|renovated|interior|team)\b/i;
           out = process.env.FAKE_RATING === "none" ? {} : {
             photos: captions.map((c, i) => {
-              const bad = BAD.test(c);
+              // Like a model looking at the picture: its MAIN subject decides (a park "with a historic sign" is a park).
+              const main = c.split(/,| with | and | in the /i)[0] ?? c;
+              const bad = BAD.test(main);
               const good = GOOD.test(c);
               const rating = bad ? 3 : good ? (/\b(night|dusk|aerial|plated|finished|renovated)\b/i.test(c) ? 9 : 8) : 5;
               // The business's own ordinary photo is usable (6); a visible stock watermark is flagged.
               const r = own[i] && !bad ? Math.max(rating, 6) : rating;
-              return { n: i + 1, rating: r, subject: c.replace(/,?\s*Pauls Valley,?( Oklahoma)?/gi, "").trim().toLowerCase().slice(0, 40) || "photo", note: bad ? "unappealing / off-topic hero" : good ? "attractive on-topic scene" : own[i] ? "the business's own, usable" : "ordinary", sign: /\b(sign|logo|plaque)\b/i.test(c), watermark: /\b(watermark|vecteezy|shutterstock|istock|getty)\b/i.test(c) };
+              return { n: i + 1, rating: r, subject: c.replace(/,?\s*Pauls Valley,?( Oklahoma)?/gi, "").trim().toLowerCase().slice(0, 40) || "photo", note: bad ? "unappealing / off-topic hero" : good ? "attractive on-topic scene" : own[i] ? "the business's own, usable" : "ordinary", sign: /\b(sign|logo|plaque)\b/i.test(main), watermark: /\b(watermark|vecteezy|shutterstock|istock|getty)\b/i.test(c) };
             }),
           };
           log("vision rate", captions.map((c, i) => `${i + 1}:${out.photos?.[i]?.rating}`).join(" "));

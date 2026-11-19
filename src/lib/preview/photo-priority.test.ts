@@ -6,9 +6,10 @@ import { rejectReason, watermarkedSource } from "./google-photo.ts";
 const cand = (over: Partial<HeroCandidate>): HeroCandidate => ({ id: "x", source: "google", text: "photo", width: 1800, height: 1000, relevance: 2, ...over });
 
 describe("the business's own photos come first (Bob: use the actual photos on the site)", () => {
-  it("a site photo rated 6/10 passes; a Google photo rated 6/10 does not", () => {
-    assert.equal(SITE_BAR, 6);
-    assert.equal(passesBar(heroScore(cand({ source: "site", appeal: 6, text: "our team at work" }))), true);
+  it("a site photo rated 5/10 passes (round 9); a Google photo rated 6/10 does not", () => {
+    assert.equal(SITE_BAR, 5);
+    assert.equal(passesBar(heroScore(cand({ source: "site", appeal: 5, text: "our team at work" }))), true);
+    assert.equal(passesBar(heroScore(cand({ source: "site", appeal: 4, text: "our team at work" }))), false);
     assert.equal(passesBar(heroScore(cand({ source: "google", appeal: 6, text: "team at work" }))), false);
   });
   it("a passing site photo wins over a better-rated Google photo", () => {
