@@ -161,7 +161,7 @@ export async function rateHeroes(brief: HeroBrief, name: string, about: string, 
         `Judge BUSINESS FIT first: would this photo make a visitor understand what THIS business does? A photo that only shares a word with the business NAME (a person, pet or place that happens to be called the same), a vintage/archival photo, or a portrait of an unrelated person is off-topic: rate it 1-3 however good it looks. ` +
         `A great hero for this kind of business shows ${brief.good}. Rate low: ${brief.avoid}; also anything dim, murky, flat or low-saturation, blurry or low-resolution, cluttered, mostly sky/grass/pavement, a sign, logo or text, a stock-looking scene unrelated to this business, or an off-topic subject for it. ` +
         `For each photo give "rating" 1-10 = would a top designer use this as the hero of a beautiful homepage for THIS business (${HERO_BAR}+ = yes, gladly), a 2-5 word "subject", a 2-6 word "note" on why, "sign" (true when it is mainly a sign, plaque, logo or text), and "watermark" (true when a stock-photo watermark or a stock site's name/logo is visible anywhere on the photo, e.g. Vecteezy, Shutterstock, iStock, Getty Images, Alamy, Dreamstime, Adobe Stock: such a photo can never be used). ` +
-        `Photos from "the business's own site" are the real business: rate them on the same scale (6+ means usable). ` +
+        `Photos from "the business's own site" are the real business: rate them on the same scale; ${SITE_BAR}+ means usable, and the owner wants their own photos used, so rate one low only when it is truly bad (blurry, a screenshot of text or a document, a visible stock watermark, a sign or logo, or off-topic for the business). ` +
         `Answer only JSON: {"photos": [{"n": 1, "rating": 8, "subject": "...", "note": "...", "sign": false, "watermark": false}, ...]}.`,
     },
   ];
@@ -405,10 +405,11 @@ export async function prefetchPlannedPhotos(
   for (const c of [...photos.map((p) => p.candidate!), ...site]) if (brief.offTopic.test(`${c.visionSubject ?? ""} ${c.text}`)) c.offTopic = true;
   // A Google result whose title matches only the brand name ("Bob" for Bob.me) is not about the business.
   for (const c of photos.map((p) => p.candidate!)) if (brandOnlyMatch(c.text, facts, queries)) c.offTopic = true;
+  // The site's own photos are rated first (round 9: they are the first choice; Google fills only what they can't).
   const rateItems = [
-    ...found.photos.map((p, i) => ({ c: photos[i]!.candidate!, bytes: p.photo.bytes, type: p.photo.type, title: p.temp.title, source: `Google Images, ${p.temp.domain}` })),
     ...sitePhotos.map((p) => ({ c: p.candidate, bytes: p.bytes, type: p.type, title: p.candidate.text, source: "the business's own site" })),
-  ].filter((x) => x.bytes.length < 2_500_000).slice(0, 16);
+    ...found.photos.map((p, i) => ({ c: photos[i]!.candidate!, bytes: p.photo.bytes, type: p.photo.type, title: p.temp.title, source: `Google Images, ${p.temp.domain}` })),
+  ].filter((x) => x.bytes.length < 2_500_000).slice(0, 22);
   let rated = false;
   const applyRatings = async (items: typeof rateItems) => {
     if (!useVision || !items.length || Date.now() > deadline - 4000) return;

@@ -121,6 +121,11 @@ export function hamming(a: string, b: string): number {
 export const SIGN_WORDS =
   /\b(?:welcome\s+(?:to\b|sign)|city\s+limits?|town\s+limits?|(?:entrance|entry|gateway|monument|welcome|city|town|road|street|highway|historical?|marquee)\s+signs?|signs?|signage|plaques?|historical\s+markers?|markers?|billboards?|logos?|seal|emblem|placards?|letters?|lettering|text)\b/i;
 
+/** The main clause of a caption ("A park with a flower bed and a historic sign" -> "A park"). */
+export function mainSubject(text: string): string {
+  return text.split(/,|\s·\s|\s+(?:with|and|featuring|beside|next to|in front of|in the)\s+/i)[0] ?? text;
+}
+
 export function isSignLike(text: string): boolean {
   return SIGN_WORDS.test(text);
 }
@@ -189,10 +194,11 @@ export type HeroCandidate = {
 /** Minimum vision rating for a hero (out of 10). */
 export const HERO_BAR = 7;
 /**
- * The business's OWN photos need a little less (Bob: "use the actual photos on the site if available"): 6/10, still
- * on-topic, sharp (the rating) and not a sign / utility shot.
+ * The business's OWN photos need less (Bob: "use the actual photos on the site if available"; round 9: "look
+ * through the site for pictures instead of finding random ones on the web"): a modest 5/10, still on-topic, not
+ * blurry, not a sign / screenshot / watermarked stock / utility shot.
  */
-export const SITE_BAR = 6;
+export const SITE_BAR = 5;
 /** How much a passing site photo is preferred over a Google / free-license one on the same score. */
 export const SITE_BONUS = 4;
 
@@ -216,7 +222,9 @@ const fmt = (n: number) => (n > 0 ? `+${n}` : `${n}`);
 /** One hero score per candidate, with the reasons (for the log and the card trace). */
 export function heroScore(c: HeroCandidate): Scored {
   const words = `${c.visionSubject ?? ""} ${c.text}`;
-  const sign = Boolean(c.visionSign) || isSignLike(words);
+  // A site photo the vision model has looked at is a sign only when vision says so (round 9: "a park with a flower
+  // bed and a historic sign" is a park: only the caption's main subject counts); others go by all their words.
+  const sign = Boolean(c.visionSign) || isSignLike(c.source === "site" && c.appeal !== undefined ? mainSubject(c.text) : words);
   const subject = sign ? "sign" : subjectOf(words);
   const why: string[] = [];
   let score = 0;
@@ -297,6 +305,9 @@ export function sameSubject(a: Scored, b: Scored): boolean {
   if (a.id === b.id) return true;
   if (a.sign && b.sign) return true;
   if (a.hash && b.hash && hamming(a.hash, b.hash) <= 10) return true;
+  // Two different photos of the business's own (two dishes, two parks) are different pictures: each look may
+  // lead with one (round 9). Only identical / near-identical ones count as the same.
+  if (a.source === "site" && b.source === "site") return false;
   return Boolean(a.subject) && a.subject === b.subject;
 }
 

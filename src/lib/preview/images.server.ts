@@ -122,18 +122,23 @@ export async function fetchLogoFile(url: string): Promise<LogoFile | null> {
   return null;
 }
 
-/** Fetch and measure the scraped photos; keep the ones big enough for a modern site, best first. */
+/**
+ * The site's own photos, best first (round 9: every page the scraper read, full-size variants, ≥640px; see
+ * site-photos.server.ts). Each photo's words are kept in facts.imageText under the URL it was loaded from.
+ */
 export async function goodPhotos(facts: SiteFacts, max = 5): Promise<Photo[]> {
-  const candidates = facts.images.filter((u) => /^https?:\/\//.test(u) && u !== facts.logo).slice(0, 8);
-  const photos = (await Promise.all(candidates.map(fetchPhoto))).filter((p): p is Photo => Boolean(p));
-  return photos
-    .filter((p) => p.width >= 640 && p.height >= 400 && p.width / p.height < 3 && p.height / p.width < 2)
-    .sort((a, b) => b.width * b.height - a.width * a.height)
-    .slice(0, max);
+  const { scanSitePhotos } = await import("./site-photos.server.ts");
+  const scan = await scanSitePhotos(facts);
+  facts.imageText = facts.imageText ?? {};
+  for (const p of scan.photos) if (p.label && !facts.imageText[p.loaded]) facts.imageText[p.loaded] = p.label;
+  return scan.photos.slice(0, max).map((p) => ({ ...p.photo, url: p.loaded }));
 }
 
+/** Hero-sized (round 9, site-photos.ts sizeClass): ≥800px wide landscape, or a big square / portrait photo. */
 export function heroWorthy(photo: Photo | undefined): boolean {
-  return Boolean(photo && photo.width >= 1100 && photo.width / photo.height >= 1.2);
+  if (!photo) return false;
+  const r = photo.width / photo.height;
+  return (photo.width >= 800 && r >= 1.15) || (photo.width >= 1000 && r >= 0.66);
 }
 
 /** Store the business's own photos with the site as photo-1..n. */
@@ -144,7 +149,7 @@ export async function storePhotos(siteId: string, photos: Photo[], facts: SiteFa
       const name = `photo-${i + 1}`;
       try {
         await saveImage(siteId, name, photo.type, photo.bytes);
-        out[name] = { name, type: photo.type, source: "photo", alt: `${facts.name}`, width: photo.width, height: photo.height };
+        out[name] = { name, type: photo.type, source: "photo", alt: (facts.imageText?.[photo.url] ?? "").slice(0, 120) || `${facts.name}`, width: photo.width, height: photo.height };
       } catch {
         // Skip a photo that cannot be stored.
       }

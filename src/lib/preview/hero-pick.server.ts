@@ -47,11 +47,11 @@ export async function siteHeroCandidates(facts: SiteFacts): Promise<HeroCandidat
   return (await siteHeroPhotos(facts)).map((p) => p.candidate);
 }
 
-/** The same, with each photo's bytes (for the vision rating; never stored). */
+/** The same, with each photo's bytes (for the vision rating; never stored). Round 9: up to 12, from every page. */
 export async function siteHeroPhotos(facts: SiteFacts): Promise<{ candidate: HeroCandidate; bytes: Buffer; type: string }[]> {
   const { goodPhotos, heroWorthy } = await import("@/lib/preview/images.server");
   const civic = isCivic(facts);
-  const photos = (await goodPhotos(facts, 8)).filter((p) => heroWorthy(p));
+  const photos = (await goodPhotos(facts, 28)).filter((p) => heroWorthy(p)).slice(0, 14);
   return photos.map((p) => {
     const m = measurePhoto(p.bytes, p.type);
     const suit = heroSuitability(p.url, facts.imageText?.[p.url] ?? "", civic);
