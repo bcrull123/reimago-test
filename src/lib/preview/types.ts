@@ -170,7 +170,7 @@ export type Section = {
   align?: "left" | "center";
   reverse?: boolean;
   /** "cutout": the image is an illustration / transparent art, shown whole on a color panel (no crop, no duotone). */
-  fit?: "cutout";
+  fit?: "cutout" | "small";
 };
 
 export type StoredImage = {
@@ -205,7 +205,9 @@ export type ImageTrace = {
   slot: "hero" | "feature" | "service";
   scene: string;
   prompt: string;
-  status: "generated" | "failed" | "not generated (mock mode / images off)" | "your site's photo" | "web photo" | "skipped" | "kept from your site" | "not found on your site" | "preview photo (Google Images)";
+  status: "generated" | "failed" | "not generated (mock mode / images off)" | "your site's photo" | "web photo" | "skipped" | "kept from your site" | "not found on your site" | "preview photo (Google Images)" | "signature reimagined" | "signature original";
+  /** Round 9: the signature graphic / logo the hero art was made from ("rocket"). */
+  signature?: { subject: string; from: "signature graphic" | "logo" };
   /** How the hero photo was found: the site's own matching photo, a web search, or AI. */
   source?: "your site" | "web search" | "AI";
   /** Web search words and what came back (no secrets). */
@@ -227,6 +229,8 @@ export type PreviewTrace = {
   };
   steps: { step: string; ai: boolean; ownerRequest: boolean }[];
   images: ImageTrace[];
+  /** Round 9: the site's own photos — usable ones found on the site, hero-sized ones, and how many this look uses. */
+  sitePhotos?: { found: number; heroSized: number; used: number; heroOwn: boolean };
   /** What makes this look different from the other two (hero treatment, header, buttons, footer, section order, photo). */
   layout?: { hero: string; header: string; buttons: string; footer: string; sections: string; photo: string };
 };

@@ -660,7 +660,13 @@ export function stepBudgetMs(): number {
   return Number.isFinite(raw) && raw >= 20_000 ? raw : 85_000;
 }
 
+/** Round 9: how many of the site's own photos each look stores (photo-1..n) for its hero and sections. */
+const OWN_MAX = 8;
+
 /** Homepage-only site for one direction. Images and homepage copy are produced in parallel. */
+/** The from-scratch Custom Design is the third look (custom-design.server.ts asCustomDirection). */
+const CUSTOM_LOOK = 2;
+
 export async function buildLook(
   id: string,
   rawFacts: SiteFacts,
@@ -678,15 +684,34 @@ export async function buildLook(
   // The site's own photos, best hero candidates first (alt text / file name / page URL cues), not just the biggest.
   // Documents, logos and headshots stay off the homepage; so do pipes and utility photos on a town's site.
   const civic = isCivic(facts);
-  const scored = (await goodPhotos(facts, 8))
+  // Round 1 with no subject: the planner's proactive photo ranking (Google + the site's own photos, vision-rated
+  // for THIS business type), prefetched by the plan step. Started first: its ratings order the site's photos too.
+  const want0 = requestedPhoto(facts);
+  const photoDeadline = stepStart + Math.max(10_000, Math.min(40_000, budget - 25_000));
+  const prePromise =
+    !(want0.subject && (want0.intent === "find" || want0.intent === "keep")) && photoSearchEnabled() && plan.imageQueries?.length
+      ? (await import("@/lib/preview/google-photo.server")).plannedPhotos(facts, proactiveQueries(facts, plan), useAi, photoDeadline, plan.avoidPhotos).catch(() => undefined)
+      : Promise.resolve(undefined);
+  const pre0 = await prePromise;
+  // Round 9: the vision verdicts (appetizing dish, attractive scene… for this business type) order the site's own
+  // photos for the hero AND the supporting sections; failed ones go last. Without ratings, the words decide.
+  const rated = new Map((pre0?.site ?? []).map((c) => [c.id, c] as const));
+  const failedIds = new Set(pre0?.bar?.failed ?? []);
+  const verdict = (url: string) => (failedIds.has(url) ? -1 : (rated.get(url)?.appeal ?? 0));
+  const scored = (await goodPhotos(facts, 14))
     .map((photo, i) => ({ photo, i, score: heroSuitability(photo.url, facts.imageText?.[photo.url] ?? "", civic) }))
-    .filter((p) => p.score > -3)
-    .sort((a, b) => b.score - a.score || a.i - b.i);
-  const photos = scored.slice(0, 5).map((p) => p.photo);
+    .filter((p) => p.score > -3 || (rated.get(p.photo.url)?.appeal ?? 0) >= 5)
+    .sort((a, b) => verdict(b.photo.url) - verdict(a.photo.url) || b.score - a.score || a.i - b.i);
+  const photos = scored.slice(0, OWN_MAX).map((p) => p.photo);
   const images: Record<string, StoredImage> = await storePhotos(id, photos, facts);
   // Suitable hero photos are photo-1..n (sorted above); each look leads with a different one when there are several.
-  const suitable = scored.slice(0, 5).map((p, i) => (p.score > 0 && images[`photo-${i + 1}`] ? `photo-${i + 1}` : "")).filter(Boolean);
-  const ownHero = suitable.length ? suitable[photoRank(design, index) % suitable.length] : undefined;
+  // Round 9: a hero needs a hero-sized photo that passed the vision gate (or, unrated, good words).
+  const heroOk = (p: (typeof scored)[number]) => heroWorthy(p.photo) && !failedIds.has(p.photo.url) && (rated.has(p.photo.url) || p.score > 0);
+  const suitable = scored.slice(0, OWN_MAX).map((p, i) => (heroOk(p) && images[`photo-${i + 1}`] ? `photo-${i + 1}` : "")).filter(Boolean);
+  // Each look leads with its own site photo; with fewer photos than looks, a look gets the site's signature graphic
+  // reimagined / Imagine art instead of repeating one (repeats only when AI images are off).
+  const ownRank = photoRank(design, index);
+  const ownHero = suitable.length && (ownRank < suitable.length || !imagesEnabled()) ? suitable[ownRank % suitable.length] : undefined;
   const pending: ImageInfo[] = [];
   const jobs: Promise<void>[] = [];
   // The owner's words decide the photos first: a named scene ("use the brick streets") or feedback about
@@ -728,11 +753,7 @@ export async function buildLook(
   const town = placeOf(facts);
   const bestOwn = scored[0];
   // Round 1 with no subject: the planner's proactive Google Images searches (prefetched by the plan step).
-  const photoDeadline = stepStart + Math.max(10_000, Math.min(40_000, budget - 25_000));
-  const pre =
-    !asked0 && !keepSubject && photoSearchEnabled() && plan.imageQueries?.length
-      ? await (await import("@/lib/preview/google-photo.server")).plannedPhotos(facts, proactiveQueries(facts, plan), useAi, photoDeadline, plan.avoidPhotos).catch(() => undefined)
-      : undefined;
+  const pre = !asked0 && !keepSubject ? pre0 : undefined;
   const autoScene = !pre?.photos.length && !asked0 && !keepSubject && !wantsNewPhotos(facts) && town?.city && (!bestOwn || bestOwn.score <= 0 || !heroWorthy(bestOwn.photo)) && civic ? `downtown ${town.city}` : undefined;
   const scene = asked0 ?? autoScene;
   // Image prompts read the subject from the facts; an automatic town subject is not the owner's request.
@@ -748,7 +769,7 @@ export async function buildLook(
     images: [],
   };
   const kind = facts.industry || "the business";
-  const wantImage = (name: string, slot: ImageTrace["slot"], aspect: "16:9" | "4:3", describe: string, before?: () => Promise<boolean>, preset?: ImageTrace, aiFallback = true) => {
+  const wantImage = (name: string, slot: ImageTrace["slot"], aspect: "16:9" | "4:3", describe: string, before?: () => Promise<boolean>, preset?: ImageTrace, aiFallback = true, lastResort?: () => Promise<boolean>) => {
     const shown = sceneFor(slot, imgFacts, design) || (slot === "hero" ? kind : `${kind} at work`);
     const prompt = imagePrompt(slot, imgFacts, design);
     const entry: ImageTrace = preset ?? { name, slot, scene: shown, prompt, status: "not generated (mock mode / images off)" };
@@ -764,11 +785,33 @@ export async function buildLook(
           entry.search = `${entry.search ? `${entry.search} · ` : ""}${IMAGINE_NOTE}`;
           return;
         }
+        // Round 9: no site photo for this hero, but the site has a signature graphic (bob.me's rocket) or a logo:
+        // Grok Imagine reimagines it into the hero art (the original file is the fallback). Before plain AI / Google.
+        if (name === "hero" && !scene && !keepSubject && !freshPhotos && process.env.PREVIEW_SIGNATURE_HERO !== "0") {
+          const { signatureHero } = await import("@/lib/preview/signature-hero.server");
+          const sig = await signatureHero(id, facts, design, aspect === "4:3" ? "4:3" : "16:9", Math.min(50_000, budget - 10_000)).catch(() => undefined);
+          if (sig) {
+            images.hero = sig.image;
+            Object.assign(entry, {
+              status: sig.how === "reimagined" ? "signature reimagined" : "signature original",
+              source: sig.how === "reimagined" ? "AI" : "your site",
+              scene: sig.subject,
+              signature: { subject: sig.subject, from: sig.from },
+              search: `${entry.search ? `${entry.search} · ` : ""}${sig.how === "reimagined" ? `your ${sig.from} (${sig.subject}) sent to Grok Imagine as the reference and reimagined as the hero` : `your ${sig.from} (${sig.subject}) shown as the hero (Imagine ${imagesEnabled() ? "failed" : "is off"})`}`,
+            } satisfies Partial<ImageTrace>);
+            console.info(`[photo] look ${index + 1} "${design.name}": hero = your ${sig.from} “${sig.subject}” ${sig.how === "reimagined" ? "reimagined by Grok Imagine" : "(original file; Imagine unavailable)"} — no site photo for this hero`);
+            return;
+          }
+        }
         if (!imagesEnabled()) return;
         entry.status = "failed";
         entry.source = "AI";
         const img = await generateAndStore(id, name, prompt, aspect, shown, Math.min(50_000, budget - 10_000));
-        if (!img) return;
+        if (!img) {
+          // Round 9: Google Images only as the last resort, after the site's photos and Grok Imagine.
+          if (lastResort) await lastResort();
+          return;
+        }
         images[name] = img;
         entry.status = "generated";
       })(),
@@ -867,13 +910,13 @@ export async function buildLook(
       const file = decodeURIComponent(url.split(/[?#]/)[0]!.split("/").pop() ?? "").replace(/\.[a-z0-9]+$/i, "").replace(/[-_+]+/g, " ").trim();
       return file && /[a-z]{3}/i.test(file) && !/^(img|dsc|image|photo)?\s*\d+$/i.test(file) ? file.slice(0, 60) : "your homepage";
     };
-    const strong = scored.slice(0, 5).flatMap((p, i) => (p.score >= 2 && heroWorthy(p.photo) && images[`photo-${i + 1}`] ? [{ own: `photo-${i + 1}`, score: p.score, what: describe(p.photo.url) }] : []));
+    const strong = scored.slice(0, OWN_MAX).flatMap((p, i) => (p.score >= 2 && heroWorthy(p.photo) && images[`photo-${i + 1}`] ? [{ own: `photo-${i + 1}`, score: p.score, what: describe(p.photo.url) }] : []));
     const weak = suitable.filter((n) => !strong.some((x) => x.own === n)).map((own) => ({ own, score: 0, what: describe(scored[Number(own.slice(6)) - 1]?.photo.url ?? "") }));
     const google = pre.photos.map((g) => ({ g }));
     // The site's single best photo can still win one look; strong Google results take the others, then the rest.
     const pool: ({ own: string; score: number; what: string } | { g: (typeof pre.photos)[number] })[] = freshPhotos
       ? [...google, ...strong, ...weak]
-      : [...strong.slice(0, 1), ...google, ...strong.slice(1), ...weak];
+      : [...strong, ...weak, ...google];
     const rank = photoRank(design, index);
     // The round's assignment (hero-pick.ts): one photo per look, no two of the same subject, each suiting its look's
     // mood, site photos only where they beat Google on the same score. Made once by the plan step when it knew the
@@ -881,7 +924,8 @@ export async function buildLook(
     const { assignHeroes } = await import("@/lib/preview/hero-pick");
     const stored = pre.assign && pre.assign.archetypes[index] === design.archetype ? pre.assign.picks : undefined;
     const cands = [...pre.photos.flatMap((p) => (p.candidate ? [p.candidate] : [])), ...(freshPhotos ? [] : (pre.site ?? [])), ...(pre.web ?? []).map((w) => w.candidate)];
-    const mine = (stored ?? (cands.length ? assignHeroes(cands, [undefined, undefined, undefined]) : [])).find((p) => p.index === index);
+    const allPicks = stored ?? (cands.length ? assignHeroes(cands, [undefined, undefined, undefined]) : []);
+    const mine = allPicks.find((p) => p.index === index);
     type Option = { own: string; score: number; what: string } | { g: (typeof pre.photos)[number] } | { siteUrl: string; what: string } | { w: NonNullable<typeof pre.web>[number] };
     let first: Option | undefined;
     if (mine?.source === "web") {
@@ -891,7 +935,7 @@ export async function buildLook(
       const g = pre.photos.find((p) => p.temp.imageUrl === mine.id);
       if (g) first = { g };
     } else if (mine?.source === "site") {
-      const at = scored.slice(0, 5).findIndex((p) => p.photo.url === mine.id);
+      const at = scored.slice(0, OWN_MAX).findIndex((p) => p.photo.url === mine.id);
       first = at >= 0 && images[`photo-${at + 1}`] ? { own: `photo-${at + 1}`, score: scored[at]!.score, what: describe(mine.id) } : { siteUrl: mine.id, what: describe(mine.id) };
     }
     const entry: ImageTrace = {
@@ -907,7 +951,7 @@ export async function buildLook(
     const failed = new Set(pre.bar?.failed ?? []);
     // Remember each site photo's gate verdict and what it shows: the Custom Design gets only the ones that passed.
     if (pre.bar)
-      for (const [i, p] of scored.slice(0, 5).entries()) {
+      for (const [i, p] of scored.slice(0, OWN_MAX).entries()) {
         const im = images[`photo-${i + 1}`];
         if (!im) continue;
         im.gate = failed.has(p.photo.url) ? "failed" : pre.bar.passed.includes(p.photo.url) ? "passed" : undefined;
@@ -916,17 +960,73 @@ export async function buildLook(
       }
     // Nothing passed the gate for this look: an AI photo of a good scene beats an unappealing real one.
     if (mine && failed.has(mine.id) && imagesEnabled()) first = undefined;
+    // Round 9: a photo another look already leads with is not repeated while Imagine can fill this look.
+    // Round 9: the site's own photos first, then Grok Imagine art; Google Images only when both are unavailable.
+    const imagineBeforeGoogle = imagesEnabled() && !freshPhotos && !imagineFirst && process.env.PREVIEW_GOOGLE_BEFORE_IMAGINE !== "1";
+    const noRepeats = imagesEnabled() && !freshPhotos;
+    if (mine && /reused:/.test(mine.reason) && noRepeats) first = undefined;
     const urlOf = (o: (typeof pool)[number]) => ("g" in o ? o.g.temp.imageUrl : (scored[Number(o.own.slice(6)) - 1]?.photo.url ?? ""));
-    const passing = pool.filter((o) => !failed.has(urlOf(o)));
+    // Round 9: the site's passing photos are shared out between the template looks, one each (their assigned site
+    // photo, else the next free one, best-rated first); a look never repeats another's while Imagine can fill it.
+    // The from-scratch Custom Design (look 3) builds with Imagine from all the site's own assets, so its pick does not
+    // take a photo away from a template look.
+    const siteOwner = new Map<string, number>();
+    if (noRepeats) {
+      const templates = [0, 1, 2].filter((i) => i !== CUSTOM_LOOK);
+      const free = (pre.site ?? [])
+        .filter((c) => !failed.has(c.id))
+        .sort((a, b) => (b.appeal ?? 0) - (a.appeal ?? 0))
+        .map((c) => c.id);
+      const owned = new Map<number, string>();
+      for (const i of templates) {
+        const p = allPicks.find((q) => q.index === i);
+        if (p?.source === "site" && !/reused:/.test(p.reason) && !failed.has(p.id) && ![...owned.values()].includes(p.id)) owned.set(i, p.id);
+      }
+      for (const i of templates) {
+        if (owned.has(i) || allPicks.find((q) => q.index === i && q.source !== "site" && !imagineBeforeGoogle)) continue;
+        const next = free.find((id) => ![...owned.values()].includes(id));
+        if (next) owned.set(i, next);
+      }
+      for (const [i, url] of owned) siteOwner.set(url, i);
+      const mineSite = owned.get(index);
+      if (mineSite && !design.custom) {
+        const option = pool.find((o) => urlOf(o) === mineSite);
+        if (option) first = option;
+      }
+    }
+    const taken = (o: (typeof pool)[number]) => !design.custom && siteOwner.has(urlOf(o)) && siteOwner.get(urlOf(o)) !== index;
+    const passing = pool.filter((o) => !failed.has(urlOf(o)) && !taken(o));
     const order: Option[] = [...(first ? [first] : []), ...passing.slice(rank), ...passing.slice(0, rank)].filter((o) => !imagineFirst || "own" in o || "siteUrl" in o);
     const picked = (option: Option) => (option === first && mine ? ` · picked for this look: ${mine.reason}` : first ? " · (assigned photo unavailable; next in the pool)" : "");
+    const sitePassed = (pre.site ?? []).filter((c) => !failed.has(c.id)).length;
+    const whyNoSite = () =>
+      !(pre.site ?? []).length
+        ? "no hero-sized photo on your site"
+        : !sitePassed
+          ? `none of your site's ${(pre.site ?? []).length} hero-sized photos passed the quality bar`
+          : `all ${sitePassed} of your site's passing photos are used by the other looks`;
+    let skippedGoogle: Option | undefined;
+    const heroFromGoogle = async (option: Extract<Option, { g: unknown }>): Promise<boolean> => {
+      const photo = await fetchPhoto(option.g.temp.imageUrl);
+      if (!photo || photo.width < 1000) return false;
+      await saveImage(id, "hero", photo.type, photo.bytes);
+      images.hero = { name: "hero", type: photo.type, source: "web", alt: option.g.temp.title, width: photo.width, height: photo.height, credit: googleCredit(option.g.temp), temporary: option.g.temp };
+      Object.assign(entry, { status: "preview photo (Google Images)", source: "web search", credit: googleCredit(option.g.temp), scene: option.g.temp.query, search: `${entry.search}${picked(option)}` } satisfies Partial<ImageTrace>);
+      googleHero = option.g.temp.query;
+      console.info(`[photo] look ${index + 1} "${design.name}": Google Images hero because ${whyNoSite()}${imagineBeforeGoogle ? " and Grok Imagine failed" : imagesEnabled() ? "" : " and AI images are off"}`);
+      return true;
+    };
     const choose = async (): Promise<boolean> => {
       for (const option of order) {
+        if ("g" in option && imagineBeforeGoogle) {
+          skippedGoogle = skippedGoogle ?? option;
+          continue;
+        }
         if ("siteUrl" in option) {
           const photo = await fetchPhoto(option.siteUrl);
-          if (!photo || photo.width < 1000) continue;
+          if (!photo || photo.width < 800) continue;
           await saveImage(id, "hero", photo.type, photo.bytes);
-          images.hero = { name: "hero", type: photo.type, source: "photo", alt: facts.name, width: photo.width, height: photo.height };
+          images.hero = { name: "hero", type: photo.type, source: "photo", alt: (facts.imageText?.[option.siteUrl] ?? "").slice(0, 120) || facts.name, width: photo.width, height: photo.height, credit: { title: option.what, author: "", license: "", licenseUrl: "", sourceUrl: option.siteUrl, provider: "your site" } };
           Object.assign(entry, { status: "your site's photo", source: "your site", scene: option.what, search: `${entry.search}${picked(option)}` } satisfies Partial<ImageTrace>);
           return true;
         }
@@ -943,18 +1043,23 @@ export async function buildLook(
           Object.assign(entry, { status: "your site's photo", source: "your site", scene: option.what, search: `${entry.search} · chose your site's photo${picked(option) || ` (relevance ${option.score})`}` } satisfies Partial<ImageTrace>);
           return true;
         }
-        const photo = await fetchPhoto(option.g.temp.imageUrl);
-        if (!photo || photo.width < 1000) continue;
-        await saveImage(id, "hero", photo.type, photo.bytes);
-        images.hero = { name: "hero", type: photo.type, source: "web", alt: option.g.temp.title, width: photo.width, height: photo.height, credit: googleCredit(option.g.temp), temporary: option.g.temp };
-        Object.assign(entry, { status: "preview photo (Google Images)", source: "web search", credit: googleCredit(option.g.temp), scene: option.g.temp.query, search: `${entry.search}${picked(option)}` } satisfies Partial<ImageTrace>);
-        googleHero = option.g.temp.query;
-        return true;
+        if ("g" in option) {
+          if (await heroFromGoogle(option)) return true;
+          continue;
+        }
+      }
+      if (skippedGoogle) {
+        console.info(`[photo] look ${index + 1} "${design.name}": no site photo for this look (${whyNoSite()}) → Grok Imagine art instead of Google Images (Google only if Imagine fails)`);
+        entry.search = `${entry.search} · ${whyNoSite()}, so Grok Imagine makes this hero (Google Images only as a last resort)`;
       }
       return false;
     };
-    wantImage("hero", "hero", heroAspect, `generated hero photo: ${design.heroSubject || kind}`, choose, entry, !imagineFirst);
-  } else if (!heroWorthy(photos[0]) || freshPhotos || (weakHero && photoSearchEnabled())) {
+    const lastResort = async (): Promise<boolean> => {
+      for (const option of order) if ("g" in option && (await heroFromGoogle(option))) return true;
+      return false;
+    };
+    wantImage("hero", "hero", heroAspect, `generated hero photo: ${design.heroSubject || kind}`, choose, entry, !imagineFirst, imagineBeforeGoogle ? lastResort : undefined);
+  } else if (!ownHero || freshPhotos || (weakHero && photoSearchEnabled())) {
     // No good hero photo on the site (or a weak one, with PHOTO_SEARCH_WEAK_HEROES=1): Google Images of the
     // business type in its town when photo search is on (each look a different one), else an AI photo.
     const tryGoogle = photoSearchEnabled() && !keepSubject && !imagineFirst
@@ -973,7 +1078,12 @@ export async function buildLook(
         }
       : undefined;
     if (imagineFirst) trace.images.push({ name: "hero", slot: "hero", scene: kind, prompt: "", status: "skipped", search: IMAGINE_NOTE });
-    else if (!heroWorthy(photos[0]) || freshPhotos || tryGoogle) wantImage("hero", "hero", heroAspect, `generated hero photo: ${design.heroSubject || kind}`, tryGoogle);
+    else if (!heroWorthy(photos[0]) || freshPhotos || tryGoogle) {
+      // Round 9: no usable site photo for the hero → Grok Imagine first; Google Images only if Imagine fails.
+      const imagineBeforeGoogle = imagesEnabled() && !freshPhotos && process.env.PREVIEW_GOOGLE_BEFORE_IMAGINE !== "1";
+      if (imagineBeforeGoogle && tryGoogle) console.info(`[photo] look ${index + 1} "${design.name}": no hero-sized photo on your site → Grok Imagine art (Google Images only if Imagine fails)`);
+      wantImage("hero", "hero", heroAspect, `generated hero photo: ${design.heroSubject || kind}`, imagineBeforeGoogle ? undefined : tryGoogle, undefined, true, imagineBeforeGoogle ? tryGoogle : undefined);
+    }
   }
   if ((photos.length < 2 || freshPhotos) && !imagineFirst) {
     wantImage("feature", "feature", "4:3", `generated photo: ${design.featureScene || `${kind} work in progress`}`);
@@ -1000,6 +1110,17 @@ export async function buildLook(
   if (proactiveOwn && sections[0]?.type.startsWith("hero-") && !images.hero) sections[0] = { ...sections[0], image: proactiveOwn };
   // Each look: its own hero treatment, section order and section variants (kept art shown whole, as a cutout).
   sections.splice(0, sections.length, ...arrangeSections(sections, design, available, facts.services, Boolean(images.hero?.cutout && sections[0]?.image === "hero")));
+  // Round 9: a site photo under 1400px wide in the hero gets a treatment (tinted overlay / framed, not stretched).
+  {
+    const heroImg = sections[0]?.image ? images[sections[0].image] : undefined;
+    if (sections[0]?.type.startsWith("hero-") && heroImg?.source === "photo" && !heroImg.cutout && sections[0].fit !== "cutout" && (heroImg.width ?? 9999) < 1400) sections[0] = { ...sections[0], fit: "small" };
+    const used = new Set<string>();
+    for (const s of sections) for (const n of [s.image, ...(s.items ?? []).map((it) => it.image)]) if (n && images[n]?.source === "photo") used.add(n === "hero" ? (images.hero?.credit?.sourceUrl ?? "hero") : n);
+    const { scanSitePhotos } = await import("@/lib/preview/site-photos.server");
+    const scan = await scanSitePhotos(facts).catch(() => undefined);
+    trace.sitePhotos = { found: scan?.photos.length ?? photos.length, heroSized: scan?.photos.filter((p) => p.hero).length ?? 0, used: used.size, heroOwn: Boolean(sections[0]?.image && images[sections[0].image]?.source === "photo") };
+    console.info(`[photo] look ${index + 1} "${design.name}": site photos ${trace.sitePhotos.found} found (${trace.sitePhotos.heroSized} hero-sized), ${used.size} used in this look${trace.sitePhotos.heroOwn ? `, hero = your site's “${(images[sections[0]!.image!]?.alt ?? "").slice(0, 60)}”${sections[0]?.fit === "small" ? " (small: tinted / framed treatment)" : ""}` : ""}`);
+  }
   trace.layout = lookSignature(design, sections, images.hero?.credit?.sourceUrl ?? sections[0]?.image);
   logHeroChoice(index, design.name, sections[0]?.image, images, trace, photoSearchEnabled());
   trace.steps.push({ step: "homepage sections", ai: result.ai, ownerRequest: Boolean(result.ownerRequest) });

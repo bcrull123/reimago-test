@@ -123,7 +123,8 @@ async function prepareSignature(site: StoredSite): Promise<boolean> {
 }
 
 /** Words that make a failed site photo unusable even as a collage tile or texture. */
-const NEVER_SECONDARY = /\b(?:signs?|signage|lettering|logos?|documents?|maps?|screenshots?|charts?|menu\s+boards?|flyers?|posters?|forms?|watermark)\b/i;
+// Round 9: blog / article cover graphics ("5 Keys to Choosing…", "How to…") are text cards, not photos.
+const NEVER_SECONDARY = /\b(?:signs?|signage|lettering|logos?|documents?|maps?|screenshots?|charts?|menu\s+boards?|flyers?|posters?|forms?|watermark|infographics?|blog|cover image|keys to|steps to|ways to|how to|tips for|guide to)\b/i;
 
 /**
  * Names of the photos the template homepage features (a section's own photo: hero, feature split). Gallery items are
