@@ -836,23 +836,52 @@ export function captionMatch(caption: string, req: PhotoRequest): "named" | "sub
   return has(core[0]!) && hits >= Math.ceil(core.length / 2) ? "subject" : "none";
 }
 
-/** The card's honest change line for a requested photo. */
-export function photoOutcomeNote(req: PhotoRequest, match: "named" | "subject" | "none" | "nothing", what?: string): string {
+/** How a requested photo turned out (round 9b adds "weak" and "illustrated"; "none" is treated as "nothing"). */
+export type PhotoOutcome = "named" | "subject" | "weak" | "none" | "nothing" | "illustrated";
+
+/** The card's honest change line for a requested photo. Never claims a new photo when the picture didn't change. */
+export function photoOutcomeNote(req: PhotoRequest, match: PhotoOutcome, what?: string): string {
   const label = photoRequestLabel(req);
   const core = singular(req.subject);
+  const asked = `${core}${req.named.length ? ` / ${req.named[0]}` : ""}`;
   if (match === "named") return `new photo: ${label}`;
   if (match === "subject") return req.named.length ? `couldn't find ${req.named[0]}; used a ${core} photo${what ? ` (${what})` : ""}` : `new photo: ${label}`;
-  if (match === "none") return `no ${core} photo found; used the closest match${what ? `: ${what}` : ""}`;
-  return `couldn't find a photo of ${label}; kept the current one`;
+  if (match === "weak") return `new photo: its caption says ${core}${what ? ` (${what})` : ""}, but it may not show it clearly`;
+  if (match === "illustrated") return `Art: ${core}, illustrated by Grok Imagine (not a real photo${req.named.length ? ` of ${req.named[0]}` : ""})`;
+  return `Couldn't find a ${asked} photo, so I kept your current photo`;
 }
 
 /** The card's short label for a requested photo: "new photo: brick street (Pine St)", honest when it fell short. */
-export function photoVariantLabel(req: PhotoRequest, match: "named" | "subject" | "none" | "nothing"): string {
+export function photoVariantLabel(req: PhotoRequest, match: PhotoOutcome): string {
   const label = photoRequestLabel(req);
   const core = singular(req.subject);
   const abbr = (req.named[0] ?? "").replace(/\bStreet\b/i, "St").replace(/\bAvenue\b/i, "Ave").replace(/\bRoad\b/i, "Rd");
   if (match === "named") return `new photo: ${label}`;
   if (match === "subject") return req.named.length ? `new photo: ${core} (no ${abbr} found)` : `new photo: ${label}`;
-  if (match === "none") return `new photo: closest to ${core}`;
+  if (match === "weak") return `new photo: ${core}? (caption match)`;
+  if (match === "illustrated") return `art: ${core} (illustrated)`;
   return `same photo (no ${core} found)`;
+}
+
+/**
+ * Round 9b: may a request be shown as an illustration when no real photo shows it? Places, scenes and things
+ * yes ("brick street", "the patio at night"); people, the owner's own specific things ("our blue truck", "my
+ * dog"), logos, signs, menus and documents no: an illustration of those would pass itself off as the real one.
+ */
+export function illustrationFits(req: PhotoRequest): boolean {
+  const s = req.subject.toLowerCase();
+  if (/\b(?:our|my|his|her|their|the owner'?s?)\b/.test(s)) return false;
+  if (/\b(?:me|us|owners?|team|staff|crew|employees?|family|people|person|customers?|portrait|headshot|selfie|face|kids?|chef|doctor|lawyer|logo|sign|signage|menu|document|screenshot|text|words?|map)s?\b/.test(s)) return false;
+  return contentWords(req.subject).length > 0;
+}
+
+/** The Imagine prompt for an illustrated stand-in: clearly an illustration, the subject only, never the named place. */
+export function illustrationPrompt(req: PhotoRequest, place: { city?: string; state?: string } | undefined, kind?: string): string {
+  const core = singular(req.subject);
+  const where = place?.state ? ` in a small ${place.state} town` : "";
+  return (
+    `An ILLUSTRATION (clearly a painted / drawn illustration, not a photograph) of a ${core}${where}, for a website hero${kind ? ` (${kind})` : ""}. ` +
+    "Wide 16:9 composition, calm open area on the left for a headline, warm natural light, tasteful muted colors. " +
+    "No text, no readable signs or street names, no logos, no people in focus, no watermark."
+  );
 }

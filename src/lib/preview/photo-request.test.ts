@@ -10,10 +10,12 @@ import {
   readAdjustments,
   readPhotoRequest,
   wantsNewPhoto,
+  illustrationFits,
+  illustrationPrompt,
   type LookRef,
 } from "./look-edit.ts";
 import { planEdit } from "./look-edit.server.ts";
-import { findRequestedPhoto, type RequestCandidate, type RequestDeps } from "./photo-request.server.ts";
+import { findRequestedPhoto, sameAsCurrent, sha1Of, type RequestCandidate, type RequestDeps } from "./photo-request.server.ts";
 import type { GoogleImage } from "./google-photo.ts";
 
 // Round 8c: Bob's Editorial box on paulsvalley.
@@ -63,11 +65,15 @@ describe("round 8c: reading a new-photo request", () => {
     const r = readPhotoRequest(bob)!;
     assert.equal(photoOutcomeNote(r, "named"), "new photo: brick street (Pine St)");
     assert.match(photoOutcomeNote(r, "subject", "red brick road"), /^couldn't find Pine Street; used a brick street photo/);
-    assert.match(photoOutcomeNote(r, "none", "downtown"), /^no brick street photo found; used the closest match/);
-    assert.match(photoOutcomeNote(r, "nothing"), /kept the current one/);
+    assert.equal(photoOutcomeNote(r, "nothing"), "Couldn't find a brick street / Pine Street photo, so I kept your current photo");
+    assert.equal(photoOutcomeNote(r, "none"), photoOutcomeNote(r, "nothing"));
+    assert.equal(photoOutcomeNote(r, "illustrated"), "Art: brick street, illustrated by Grok Imagine (not a real photo of Pine Street)");
+    assert.match(photoOutcomeNote(r, "weak", "brick building"), /^new photo: its caption says brick street/);
     assert.equal(photoVariantLabel(r, "named"), "new photo: brick street (Pine St)");
     assert.equal(photoVariantLabel(r, "subject"), "new photo: brick street (no Pine St found)");
-    assert.equal(photoVariantLabel(r, "none"), "new photo: closest to brick street");
+    assert.equal(photoVariantLabel(r, "none"), "same photo (no brick street found)");
+    assert.equal(photoVariantLabel(r, "nothing"), "same photo (no brick street found)");
+    assert.equal(photoVariantLabel(r, "illustrated"), "art: brick street (illustrated)");
   });
 });
 
@@ -136,23 +142,35 @@ describe("round 8c: findRequestedPhoto", () => {
     const r = await findRequestedPhoto(req, place, { own: [own], current: { urls: [] } }, deps({ '"brick street" Pauls Valley Oklahoma': [g("Brick road", 14)] }), { deadline: deadline(), googleEnabled: true });
     assert.equal(r.pick?.from, "your site");
   });
-  it("keeps the closest match and says so when nothing shows the subject", async () => {
+  it("round 9b: never swaps in a photo that doesn't show the request (no 'closest match')", async () => {
     const r = await findRequestedPhoto(req, place, { own: [], current: { urls: [] } }, deps({ "brick street": [g("Downtown Pauls Valley at dusk", 15)] }), { deadline: deadline(), googleEnabled: true });
-    assert.equal(r.match, "none");
-    assert.match(r.note, /^no brick street photo found; used the closest match/);
+    assert.equal(r.match, "nothing");
+    assert.equal(r.pick, undefined);
+    assert.equal(r.note, "Couldn't find a brick street / Pine Street photo, so I kept your current photo");
   });
-  it("the closest match is what the subject search found, not an unrelated site photo", async () => {
-    const pipes: RequestCandidate = { id: "https://site.example/pipes.jpg", from: "your site", caption: "A network of white industrial pipes", photo: { url: "p", bytes: Buffer.from("own 16.jpg"), type: "image/jpeg", width: 1600, height: 1000 }, level: 0, caption_match: "none" };
-    const judge: RequestDeps["judge"] = async (_r, _c, items) => items.map(() => ({ shows: "none" as const, rating: 8 }));
-    const r = await findRequestedPhoto(req, place, { own: [pipes], current: { urls: [] } }, deps({ '"brick street" Pauls Valley Oklahoma': [g("Downtown Pauls Valley main street", 17)] }, judge), { deadline: deadline(), googleEnabled: true });
-    assert.equal(r.match, "none");
-    assert.equal(r.pick?.from, "Google Images");
+  it("round 9b: a caption that names it but vision says no is a weak match, used only after real matches", async () => {
+    const mk = (n: number, caption: string): RequestCandidate => ({ id: `https://site.example/${n}.jpg`, from: "your site", caption, photo: { url: `https://site.example/${n}.jpg`, bytes: Buffer.from(`own ${n}.jpg`), type: "image/jpeg", width: 1600, height: 1000 }, level: 0, caption_match: "none" });
+    const weak = mk(31, "Historic brick street sign at the depot");
+    const real = mk(32, "Main Street storefronts");
+    const lines: string[] = [];
+    const judge: RequestDeps["judge"] = async (_r, _c, items) => items.map((c) => (c.id === real.id ? { shows: "subject" as const, rating: 7 } : { shows: "none" as const, rating: 8 }));
+    const d = { ...deps({}, judge), log: (l: string) => lines.push(l) };
+    const r1 = await findRequestedPhoto(req, place, { own: [weak, real], current: { urls: [] } }, d, { deadline: deadline(), googleEnabled: false });
+    assert.equal(r1.pick?.id, real.id);
+    assert.ok(lines.some((l) => /caption names it \(subject\) but vision says none → weak match/.test(l)));
+    const r2 = await findRequestedPhoto(req, place, { own: [weak], current: { urls: [] } }, deps({}, judge), { deadline: deadline(), googleEnabled: false });
+    assert.equal(r2.match, "weak");
+    assert.equal(r2.pick?.id, weak.id);
+    // A passing mention ("a water park with … a brick wall") is not even a weak match.
+    const park = mk(33, "A water park with water slides beside a brick wall");
+    const r3 = await findRequestedPhoto(req, place, { own: [park], current: { urls: [] } }, deps({}, judge), { deadline: deadline(), googleEnabled: false });
+    assert.equal(r3.pick, undefined);
   });
   it("keeps the current photo when nothing at all turns up", async () => {
     const r = await findRequestedPhoto(req, place, { own: [], current: { urls: [] } }, deps({}), { deadline: deadline(), googleEnabled: true });
     assert.equal(r.match, "nothing");
     assert.equal(r.pick, undefined);
-    assert.match(r.note, /kept the current one/);
+    assert.match(r.note, /so I kept your current photo/);
   });
 });
 
@@ -161,5 +179,66 @@ describe("round 8c: card wording", () => {
     const { shortWhat } = await import("./photo-request.server.ts");
     assert.equal(shortWhat("brick-paved streets, downtown historic district"), "brick-paved streets, downtown historic");
     assert.equal(shortWhat("red brick road"), "red brick road");
+  });
+});
+
+// ---- Round 9b: Bob's real run (f6c6f14 paste-in on 1523036): the welcome sign was already the Editorial hero ----
+describe("round 9b: the current hero is never the 'new' photo", () => {
+  const site = (n: string, caption: string, bytes = `site ${n}`): RequestCandidate => ({ id: `https://images.squarespace-cdn.com/content/v1/abc/${n}.jpg?format=1500w`, from: "your site", caption, photo: { url: `https://images.squarespace-cdn.com/content/v1/abc/${n}.jpg?format=1500w`, bytes: Buffer.from(bytes), type: "image/webp", width: 1500, height: 998 }, level: 0, caption_match: "none" });
+  const sign = site("sign", "A large white sign with black lettering welcoming visitors to Pauls Valley", "WELCOME-SIGN-BYTES");
+  const others = [
+    site("pipes", "A network of white industrial pipes with flanged joints"),
+    site("people", "People sitting in a row, reading books and taking notes"),
+    site("boutique", "Interior of a boutique shop with clothing, accessories"),
+    site("airport", "Front view of Pauls Valley Municipal Airport with building"),
+  ];
+  // Vision (as in Bob's log): none of them shows a brick street; the sign rates 6.
+  const judge: RequestDeps["judge"] = async (_r, _c, items) => items.map((c) => ({ shows: "none" as const, rating: /sign/.test(c.id) ? 6 : /people/.test(c.id) ? 4 : 7 }));
+  const noHash: RequestDeps = { ...deps({}, judge), hash: () => undefined };
+  it("Bob's exact case: a WebP hero (no image hash), alt = the town name, no URL stored — excluded by its bytes; current photo kept", async () => {
+    const lines: string[] = [];
+    const current = { urls: [], sha1: [sha1Of(Buffer.from("WELCOME-SIGN-BYTES"))], captions: [] };
+    const r = await findRequestedPhoto(req, place, { own: [sign, ...others], current }, { ...noHash, log: (l) => lines.push(l) }, { deadline: deadline(), googleEnabled: false });
+    assert.notEqual(r.pick?.id, sign.id);
+    assert.equal(r.pick, undefined);
+    assert.equal(r.match, "nothing");
+    assert.equal(r.note, "Couldn't find a brick street / Pine Street photo, so I kept your current photo");
+    assert.ok(lines.some((l) => /skipped the current photo \(same file\)/.test(l)));
+    assert.equal(photoVariantLabel(req, r.match), "same photo (no brick street found)");
+  });
+  it("excluded by its address at another size (format=750w vs 1500w)", () => {
+    assert.equal(sameAsCurrent(sign, { urls: ["https://images.squarespace-cdn.com/content/v1/abc/sign.jpg?format=750w"] }), "same picture at another size");
+  });
+  it("excluded by its caption (a specific one, not just the town name)", () => {
+    assert.equal(sameAsCurrent(sign, { urls: [], captions: ["A large white sign with black lettering welcoming visitors to Pauls Valley"] }), "same caption");
+    assert.equal(sameAsCurrent(others[0]!, { urls: [], captions: ["Pauls Valley"] }), undefined);
+  });
+  it("excluded by a near-duplicate image hash", () => {
+    assert.equal(sameAsCurrent({ ...sign, hash: hex(0) }, { urls: [], hash: hex(1) }), "near-duplicate");
+  });
+  it("another look's copy of the same picture is not a 'new' photo either", async () => {
+    const copy: RequestCandidate = { ...sign, id: "look2/hero", from: "another look", caption: "Pauls Valley, Oklahoma", photo: { ...sign.photo, url: "look2/hero" } };
+    const judge2: RequestDeps["judge"] = async (_r, _c, items) => items.map(() => ({ shows: "subject" as const, rating: 8 }));
+    const r = await findRequestedPhoto(req, place, { own: [copy], current: { urls: [], sha1: [sha1Of(Buffer.from("WELCOME-SIGN-BYTES"))] } }, { ...deps({}, judge2), hash: () => undefined }, { deadline: deadline(), googleEnabled: false });
+    assert.equal(r.pick, undefined);
+  });
+});
+
+describe("round 9b: illustrated stand-in", () => {
+  it("fits places and things, not people or the owner's own specific things", () => {
+    assert.equal(illustrationFits(req), true);
+    assert.equal(illustrationFits({ subject: "patio at night", named: [] }), true);
+    assert.equal(illustrationFits({ subject: "blue truck", named: [] }), true);
+    assert.equal(illustrationFits({ subject: "our blue truck", named: [] }), false);
+    assert.equal(illustrationFits({ subject: "our team", named: [] }), false);
+    assert.equal(illustrationFits({ subject: "the owner", named: [] }), false);
+    assert.equal(illustrationFits({ subject: "our logo", named: [] }), false);
+  });
+  it("asks for a clearly-illustrated subject, never the named place", () => {
+    const p = illustrationPrompt(req, place);
+    assert.match(p, /ILLUSTRATION/);
+    assert.match(p, /brick street in a small Oklahoma town/);
+    assert.doesNotMatch(p, /Pine/);
+    assert.match(p, /No text/);
   });
 });

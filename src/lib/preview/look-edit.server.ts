@@ -21,6 +21,9 @@ import {
   mergePhotoRequest,
   photoRequestLabel,
   photoVariantLabel,
+  illustrationFits,
+  illustrationPrompt,
+  photoOutcomeNote,
   readAdjustments,
   readPhotoRequest,
   requestedStyle,
@@ -34,6 +37,7 @@ import {
   type LookEdit,
   type LookRef,
   type LookTune,
+  type PhotoOutcome,
 } from "./look-edit.ts";
 import type { StoredSite } from "./render.ts";
 import type { StoredImage } from "./types.ts";
@@ -244,20 +248,27 @@ async function findEditPhoto(site: StoredSite, subject: string, step: number): P
  * subject words — the site's photos and the photos the other looks show first, then Google most-specific-first —
  * judged by vision for whether it SHOWS the request, never the current photo. Returns the honest card line.
  */
-async function findRequestHero(site: StoredSite, req: NonNullable<LookEdit["photoRequest"]>, others: StoredSite[]): Promise<{ bytes: Buffer; type: string; image: StoredImage; note: string; label: string; match: string } | { note: string; label: string; match: "nothing" }> {
+async function findRequestHero(site: StoredSite, req: NonNullable<LookEdit["photoRequest"]>, others: StoredSite[]): Promise<{ bytes: Buffer; type: string; image: StoredImage; note: string; label: string; match: PhotoOutcome } | { note: string; label: string; match: "nothing" }> {
+  const t0 = Date.now();
   const { readImage } = await import("@/lib/pages.server");
-  const { findRequestedPhoto, judgeSubject, storedHeroFor } = await import("./photo-request.server.ts");
-  const { measurePhoto, siteHeroPhotos } = await import("./hero-pick.server.ts");
-  const { fetchPhoto, imageSize } = await import("./images.server.ts");
+  const { findRequestedPhoto, judgeSubject, storedHeroFor, sha1Of } = await import("./photo-request.server.ts");
+  const { measurePhoto, sitePhotoText } = await import("./hero-pick.server.ts");
+  const { fetchPhoto, goodPhotos, imageSize, imagesEnabled } = await import("./images.server.ts");
   const { googleImages, photoSearchEnabled, photoSearchMode } = await import("./google-photo.server.ts");
   const { placeOf } = await import("./web-photo.ts");
   const deadline = Date.now() + 45_000;
   const heroName = site.pages.find((p) => p.slug === "home")?.sections?.[0]?.image;
   const heroImg = heroName ? site.images?.[heroName] : undefined;
   const heroBytes = heroName ? await readImage(site.id, heroName) : undefined;
+  // The photo the hero shows now (and the stored copy it was made from): never offered as the "new" photo.
+  const origin = heroImg?.heroOf ? site.images?.[heroImg.heroOf] : undefined;
+  const originBytes = heroImg?.heroOf ? await readImage(site.id, heroImg.heroOf) : undefined;
+  const specific = (t?: string) => (t && t.trim().length >= 15 && t.trim() !== site.name && t.trim() !== site.facts?.name ? [t] : []);
   const current = {
-    urls: [heroImg?.temporary?.imageUrl, heroImg?.temporary?.sourcePage, heroImg?.credit?.sourceUrl].filter((u): u is string => Boolean(u)),
+    urls: [heroImg?.sourceUrl, heroImg?.temporary?.imageUrl, heroImg?.temporary?.sourcePage, heroImg?.credit?.sourceUrl, origin?.sourceUrl].filter((u): u is string => Boolean(u)),
     hash: heroBytes ? measurePhoto(heroBytes.bytes, heroBytes.type)?.hash : undefined,
+    sha1: [heroBytes, originBytes].flatMap((b) => (b ? [sha1Of(b.bytes)] : [])),
+    captions: [...specific(heroImg?.alt), ...specific(heroImg?.shows), ...specific(heroImg?.credit?.title)],
   };
   type Own = Parameters<typeof findRequestedPhoto>[2]["own"][number];
   const own: Own[] = [];
@@ -265,10 +276,19 @@ async function findRequestHero(site: StoredSite, req: NonNullable<LookEdit["phot
     const size = imageSize(b.bytes) ?? { width: 0, height: 0 };
     return { url, bytes: b.bytes, type: b.type, ...size };
   };
-  // The site's own photos (already fetched in round 1, so this is the cache).
+  // Round 9b: every usable photo the round-9 deep crawl found on the site (not just the hero-sized few), wide enough
+  // for a hero (≥800px, not portrait). Cached from round 1 on this server; re-read within a time box otherwise.
+  let scanNote = "";
   if (site.facts) {
-    const siteOwn = await Promise.race([siteHeroPhotos(site.facts).catch(() => []), new Promise<[]>((r) => setTimeout(() => r([]), 10_000))]);
-    for (const s of siteOwn) own.push({ id: s.candidate.id, from: "your site", caption: s.candidate.text, photo: asPhoto(s.candidate.id, s), hash: s.candidate.hash, level: 0, caption_match: "none" });
+    const facts = site.facts;
+    const tScan = Date.now();
+    const sitePhotos = await Promise.race([goodPhotos(facts, 40).catch(() => []), new Promise<[]>((r) => setTimeout(() => r([]), 15_000))]);
+    const wide = sitePhotos.filter((p) => p.width >= 800 && p.width / p.height >= 1);
+    scanNote = `deep crawl: ${sitePhotos.length} usable site photos, ${wide.length} wide enough for a hero, ${Date.now() - tScan}ms`;
+    for (const p of wide.slice(0, 30)) {
+      const caption = facts.imageText?.[p.url] || sitePhotoText(p.url, facts);
+      own.push({ id: p.url, from: "your site", caption, photo: p, hash: measurePhoto(p.bytes, p.type)?.hash, level: 0, caption_match: "none" });
+    }
   }
   // The photos the other looks already show.
   for (const o of others) {
@@ -276,10 +296,11 @@ async function findRequestHero(site: StoredSite, req: NonNullable<LookEdit["phot
     const img = name ? o.images?.[name] : undefined;
     const bytes = name ? await readImage(o.id, name) : undefined;
     if (!img || !bytes) continue;
-    const id = img.temporary?.imageUrl ?? img.credit?.sourceUrl ?? `${o.id}/${name}`;
-    const caption = [img.temporary?.title, img.alt, img.credit?.title].filter(Boolean).join(" · ") || "photo";
+    const id = img.sourceUrl ?? img.temporary?.imageUrl ?? img.credit?.sourceUrl ?? `${o.id}/${name}`;
+    const caption = [img.temporary?.title, img.alt, img.shows, img.credit?.title].filter(Boolean).join(" · ") || "photo";
     own.push({ id, from: "another look", caption, photo: asPhoto(id, bytes), hash: measurePhoto(bytes.bytes, bytes.type)?.hash, level: 0, caption_match: "none", ...(img.credit ? { credit: img.credit } : {}) });
   }
+  console.info(`[photo-search] requested photo “${req.subject}”: current hero ${heroName ?? "?"} (${current.urls.length} URL(s), ${current.sha1.length} file hash(es), ${current.hash ? "image hash" : "no image hash"}, ${current.captions.length} caption(s)) excluded first · ${scanNote || "no site facts"}`);
   const { aiAvailable, isMockMode } = await import("@/lib/ai-provider.server");
   const useVision = process.env.PREVIEW_PHOTO_VISION !== "0" && !isMockMode() && aiAvailable();
   const result = await findRequestedPhoto(req, site.facts ? placeOf(site.facts) : undefined, { own, current }, {
@@ -289,9 +310,47 @@ async function findRequestHero(site: StoredSite, req: NonNullable<LookEdit["phot
     judge: useVision ? judgeSubject : undefined,
     log: (l) => console.info(l),
   }, { deadline, googleEnabled: photoSearchEnabled() });
-  if (!result.pick) return { note: result.note, label: result.label, match: "nothing" };
-  const via = photoSearchMode()?.mode === "proxy" ? "photo-search proxy" : "Serper";
-  return { bytes: result.pick.photo.bytes, type: result.pick.photo.type, image: storedHeroFor(result.pick, via), note: result.note, label: result.label, match: result.match };
+  const tFind = Date.now() - t0;
+  // Last guard: the picked picture must really differ from the current one.
+  if (result.pick && current.sha1.includes(sha1Of(result.pick.photo.bytes))) {
+    console.info(`[photo] requested “${result.label}”: the pick is the current photo; dropped`);
+    result.pick = undefined;
+    result.match = "nothing";
+  }
+  if (result.pick) {
+    console.info(`[timing] photo request: ${tFind}ms (found a real photo)`);
+    const via = photoSearchMode()?.mode === "proxy" ? "photo-search proxy" : "Serper";
+    const image = storedHeroFor(result.pick, via);
+    if (result.pick.from === "your site") image.sourceUrl = result.pick.id;
+    return { bytes: result.pick.photo.bytes, type: result.pick.photo.type, image, note: result.note, label: result.label, match: result.match };
+  }
+  // No real photo shows it: an Imagine illustration of the request, clearly labeled, when one makes sense.
+  if (imagesEnabled() && illustrationFits(req) && process.env.PREVIEW_REQUEST_ILLUSTRATION !== "0" && Date.now() < deadline + 15_000) {
+    const { generateImage } = await import("@/lib/ai-provider.server");
+    const { heroBrief } = await import("./hero-brief.ts");
+    const prompt = illustrationPrompt(req, site.facts ? placeOf(site.facts) : undefined, site.facts ? heroBrief(site.facts).kind : undefined);
+    const tImg = Date.now();
+    const art = await generateImage({ prompt, aspect: "16:9", timeoutMs: 45_000, guard: false }).catch(() => undefined);
+    if (art && /^image\/(jpeg|png|webp)$/.test(art.type)) {
+      const note = photoOutcomeNote(req, "illustrated");
+      console.info(`[imagine] requested “${result.label}”: no real photo shows it → illustration by Grok Imagine in ${((Date.now() - tImg) / 1000).toFixed(1)}s (${Math.round(art.bytes.length / 1024)} KB) · card: ${note}`);
+      console.info(`[timing] photo request: ${Date.now() - t0}ms (search ${tFind}ms + illustration ${Date.now() - tImg}ms)`);
+      const size = imageSize(art.bytes);
+      const image: StoredImage = { name: "hero", type: art.type, source: "generated", imagine: true, alt: `Illustration of a ${req.subject}`, ...(size ?? {}) };
+      return { bytes: art.bytes, type: art.type, image, note, label: result.label, match: "illustrated" };
+    }
+    console.info(`[imagine] requested “${result.label}”: illustration failed; the current photo is kept`);
+  } else if (!illustrationFits(req)) console.info(`[photo] requested “${result.label}”: an illustration would not fit this request; the current photo is kept`);
+  console.info(`[timing] photo request: ${Date.now() - t0}ms (kept the current photo)`);
+  return { note: photoOutcomeNote(req, "nothing"), label: result.label, match: "nothing" };
+}
+
+/** The card's Photo line for a hero the owner asked to change. */
+function heroChangeLine(r: { image: StoredImage; match: PhotoOutcome; note: string }): string {
+  if (r.match === "illustrated") return `${r.note} · as you asked`;
+  if (r.image.temporary) return "Photo: from Google Images (preview only, replaced when your site is built) · as you asked";
+  if (r.image.source === "web") return `Photo: ${r.image.credit?.title ? `“${r.image.credit.title.slice(0, 50)}” ` : ""}(${r.image.credit?.provider ?? "web"}, free license) · as you asked`;
+  return `Photo: your site's own${r.image.alt ? ` (“${r.image.alt.slice(0, 50)}”)` : ""} · as you asked`;
 }
 
 /**
@@ -384,7 +443,7 @@ export async function buildEdits(stored: StoredSite, edit: LookEdit, feedback: s
         notes.push(`new photo: ${edit.photo}`);
       } else notes.push(`couldn't find a photo of “${edit.photo}”, kept the current one`);
     }
-    const photoLabel = requested && edit.photoRequest ? photoVariantLabel(edit.photoRequest, requested.match as "named" | "subject" | "none" | "nothing") : undefined;
+    const photoLabel = requested && edit.photoRequest ? photoVariantLabel(edit.photoRequest, requested.match) : undefined;
     const variant = variantLabel(edit.adjustments, Math.min(step, 2) as 0 | 1 | 2, photoLabel ?? (!intensity ? notes[0] : undefined));
     const changed = changedLine(edit.adjustments, scale, photoHero, notes);
     const tune: LookTune = { levels, base, scrimMin: Math.round(scrimMin * 1000) / 1000, variant, changed };
@@ -409,6 +468,8 @@ export async function buildEdits(stored: StoredSite, edit: LookEdit, feedback: s
         ? {
             ...stored.trace,
             request: { ...stored.trace.request, feedback },
+            // Round 9b: the Photo line follows a changed hero (an unchanged one keeps its line).
+            ...(requested && "bytes" in requested ? { heroChange: heroChangeLine(requested) } : {}),
             steps: [...stored.trace.steps, { step: `edit of “${base.name}” (${edit.how ?? "named"}; read by ${edit.from})${borrowed.length ? ` · borrowed ${borrowed.join(" + ")} from “${lenderName}” (${lender!.id})` : ""}`, ai: edit.from === "AI planner", ownerRequest: true }],
           }
         : stored.trace,

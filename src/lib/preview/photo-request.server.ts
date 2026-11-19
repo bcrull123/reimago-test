@@ -10,14 +10,18 @@
  *   5. the card says honestly what was found ("couldn't find Pine Street; used a brick street photo").
  * Dependencies are injectable so the unit tests run without network or AI.
  */
-import { captionMatch, photoOutcomeNote, photoRequestLabel, photoRequestQueries, type PhotoRequest } from "./look-edit.ts";
+import { createHash } from "node:crypto";
+import { captionMatch, photoOutcomeNote, photoRequestLabel, photoRequestQueries, type PhotoOutcome, type PhotoRequest } from "./look-edit.ts";
+import { photoKey } from "./site-photos.ts";
 import { rejectReason, type GoogleImage, type TemporaryPhoto } from "./google-photo.ts";
-import { hamming } from "./hero-pick.ts";
+import { hamming, mainSubject } from "./hero-pick.ts";
 import type { Photo } from "./images.server.ts";
 import type { StoredImage } from "./types.ts";
 import type { PhotoCredit } from "./web-photo.ts";
 
 export type Match = "named" | "subject" | "none";
+/** Round 9b: "weak" = the caption / alt text names the request but vision says the picture doesn't show it. */
+export type Strength = Match | "weak";
 export type SubjectVerdict = { shows: Match; rating: number; what?: string };
 
 /** A photo that could become the hero: from the site, another look, or Google. */
@@ -35,6 +39,29 @@ export type RequestCandidate = {
   verdict?: SubjectVerdict;
 };
 
+/**
+ * Round 9b — what the look shows now, so it is never offered as the "new" photo: its URLs (the site photo's own
+ * address, the Google image / page), the exact bytes (sha1), a perceptual hash when the format can be decoded
+ * (JPEG / PNG; a WebP hero has none, which is how Bob's welcome sign slipped through), and its specific caption.
+ */
+export type CurrentPhoto = { urls: string[]; hash?: string; sha1?: string[]; captions?: string[] };
+
+export const sha1Of = (bytes: Buffer) => createHash("sha1").update(bytes).digest("hex");
+const normCaption = (t: string) => t.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+
+/** Is this candidate the current hero (or a near-duplicate of it)? By URL, normalized URL, bytes, hash, caption. */
+export function sameAsCurrent(c: { id: string; hash?: string; caption?: string; photo?: { bytes: Buffer; url?: string }; google?: { img: GoogleImage } }, current: CurrentPhoto): string | undefined {
+  const urls = [c.id, c.photo?.url, c.google?.img.link, c.google?.img.imageUrl].filter((u): u is string => Boolean(u));
+  if (urls.some((u) => current.urls.includes(u))) return "same URL";
+  const keys = new Set(current.urls.map(photoKey));
+  if (urls.some((u) => keys.has(photoKey(u)))) return "same picture at another size";
+  if (c.photo && current.sha1?.includes(sha1Of(c.photo.bytes))) return "same file";
+  if (c.hash && current.hash && hamming(c.hash, current.hash) <= 10) return "near-duplicate";
+  const cap = normCaption(c.caption ?? "");
+  if (cap.length >= 15 && (current.captions ?? []).some((k) => normCaption(k) === cap)) return "same caption";
+  return undefined;
+}
+
 export type RequestDeps = {
   search: (q: string) => Promise<GoogleImage[]>;
   fetch: (url: string) => Promise<Photo | null | undefined>;
@@ -46,7 +73,7 @@ export type RequestDeps = {
 
 export type RequestResult = {
   pick?: RequestCandidate;
-  match: Match | "nothing";
+  match: Exclude<PhotoOutcome, "illustrated" | "none">;
   note: string;
   label: string;
   queries: string[];
@@ -60,26 +87,29 @@ const RANK: Record<Match, number> = { named: 2, subject: 1, none: 0 };
 export async function findRequestedPhoto(
   req: PhotoRequest,
   place: { city: string; state: string } | undefined,
-  pools: { own: RequestCandidate[]; current: { urls: string[]; hash?: string } },
+  pools: { own: RequestCandidate[]; current: CurrentPhoto },
   deps: RequestDeps,
   opts: { deadline: number; step?: number; googleEnabled: boolean },
 ): Promise<RequestResult> {
   const log = deps.log ?? (() => undefined);
   const label = photoRequestLabel(req);
   const queries = photoRequestQueries(req, place);
-  const isCurrent = (c: { id: string; hash?: string; google?: { img: GoogleImage } }) =>
-    pools.current.urls.includes(c.id) ||
-    Boolean(c.google && pools.current.urls.includes(c.google.img.link)) ||
-    Boolean(c.hash && pools.current.hash && hamming(c.hash, pools.current.hash) <= 10);
   const all: RequestCandidate[] = [];
+  const sha = new Map<RequestCandidate, string>();
+  // The current hero (and near-duplicates) are removed BEFORE ranking: never offered as the "new" photo.
   const add = (c: RequestCandidate) => {
-    if (isCurrent(c)) return log(`[photo-search] skipped the current photo (or a near-duplicate): “${c.caption.slice(0, 60)}”`);
-    if (all.some((o) => o.id === c.id || (o.hash && c.hash && hamming(o.hash, c.hash) <= 6))) return;
+    const why = sameAsCurrent(c, pools.current);
+    if (why) return log(`[photo-search] skipped the current photo (${why}): “${c.caption.slice(0, 60)}” (${c.from})`);
+    const h = sha1Of(c.photo.bytes);
+    if (all.some((o) => o.id === c.id || sha.get(o) === h || (o.hash && c.hash && hamming(o.hash, c.hash) <= 6))) return;
+    sha.set(c, h);
     all.push(c);
   };
   for (const c of pools.own) add({ ...c, caption_match: captionMatch(c.caption, req) });
   const ownMatches = all.filter((c) => c.caption_match !== "none").length;
-  log(`[photo-search] requested photo “${label}”: ${pools.own.length} of the site's own / already-shown photos checked, ${ownMatches} name it`);
+  const fromSite = pools.own.filter((c) => c.from === "your site").length;
+  log(`[photo-search] requested photo “${label}”: ${fromSite} of the site's own photos + ${pools.own.length - fromSite} already shown checked (${all.length} after removing the current photo and duplicates), ${ownMatches} name it by caption`);
+  if (!opts.googleEnabled) log(`[photo-search] Google Images not used for this request (not configured)`);
   // Google: specific first, then looser; stop once a few photos name the request (named ones end the search early).
   if (opts.googleEnabled) {
     for (const [level, q] of queries.entries()) {
@@ -112,32 +142,45 @@ export async function findRequestedPhoto(
   // Captions that name the request first; then Google results (they came from the subject searches, specific
   // first); the site's/other looks' photos that don't mention it last (vision may still see the subject in them).
   const prior = (c: RequestCandidate) => RANK[c.caption_match] * 10 + (c.from === "Google Images" ? 5 - Math.min(4, c.level) : 0);
-  const pool = [...all].sort((a, b) => prior(b) - prior(a)).slice(0, 10);
+  // Round 9b: up to 16 photos are looked at (the deep crawl finds many more than the old 7).
+  const pool = [...all].sort((a, b) => prior(b) - prior(a)).slice(0, 16);
   const verdicts = deps.judge ? await deps.judge(req, place?.city ?? "", pool, opts.deadline).catch(() => undefined) : undefined;
   pool.forEach((c, i) => {
     c.verdict = verdicts?.[i];
   });
-  const matchOf = (c: RequestCandidate): Match => (c.verdict ? c.verdict.shows : c.caption_match);
+  // What each photo shows: vision decides; a caption that names the request when vision says no is a WEAK match,
+  // used only after the real ones. Without vision, the caption decides.
+  // Weak needs the caption's MAIN subject to name it ("Brick street at dusk"), not a passing mention ("a water park
+  // with … a brick wall").
+  const mainNames = (c: RequestCandidate) => c.caption_match !== "none" && captionMatch(mainSubject(c.caption), req) !== "none";
+  const matchOf = (c: RequestCandidate): Strength => (c.verdict ? (c.verdict.shows !== "none" ? c.verdict.shows : mainNames(c) ? "weak" : "none") : c.caption_match);
   const ok = (c: RequestCandidate) => !c.verdict || c.verdict.rating >= REQUEST_MIN_RATING;
+  const STRENGTH: Record<Strength, number> = { named: 3, subject: 2, weak: 1, none: 0 };
+  // A photo that doesn't show the request is never used as the "new" photo (no "closest match" swaps).
   const order = pool
-    .filter(ok)
+    .filter((c) => ok(c) && matchOf(c) !== "none")
     .sort((a, b) => {
-      const m = RANK[matchOf(b)] - RANK[matchOf(a)];
+      const m = STRENGTH[matchOf(b)] - STRENGTH[matchOf(a)];
       if (m) return m;
       const own = (c: RequestCandidate) => (c.from === "Google Images" ? 0 : 1);
-      // A photo that shows the request: the owner's own (site / already shown) first, then the better one.
-      // Nothing shows it: the closest is what the subject searches found (most specific first), not a random site photo.
-      if (matchOf(a) !== "none") return own(b) - own(a) || (b.verdict?.rating ?? 0) - (a.verdict?.rating ?? 0) || a.level - b.level;
-      return prior(b) - prior(a) || (b.verdict?.rating ?? 0) - (a.verdict?.rating ?? 0);
+      // The owner's own (site / already shown) first, then the better one, then the more specific search.
+      return own(b) - own(a) || (b.verdict?.rating ?? 0) - (a.verdict?.rating ?? 0) || a.level - b.level;
     });
-  for (const c of pool) log(`[photo] candidate “${c.caption.slice(0, 60)}” (${c.from}${c.google ? `, q=${JSON.stringify(c.google.query)}` : ""}): ${c.verdict ? `vision: shows ${c.verdict.shows}, rating ${c.verdict.rating}${c.verdict.what ? `, “${c.verdict.what}”` : ""}` : `caption: ${c.caption_match}`}${ok(c) ? "" : ` · below the minimum ${REQUEST_MIN_RATING}`}`);
-  if (!order.length) return { match: "nothing", note: photoOutcomeNote(req, "nothing"), label, queries, tried: pool.length };
-  const best = matchOf(order[0]!);
+  for (const c of pool) {
+    const v = c.verdict;
+    const weak = matchOf(c) === "weak" ? ` · caption names it (${c.caption_match}) but vision says ${v?.shows} → weak match` : v && v.shows === "none" && c.caption_match !== "none" ? ` · caption mentions it only in passing and vision says none → not a match` : "";
+    log(`[photo] candidate “${c.caption.slice(0, 60)}” (${c.from}${c.google ? `, q=${JSON.stringify(c.google.query)}` : ""}): ${v ? `vision: shows ${v.shows}, rating ${v.rating}${v.what ? `, “${v.what}”` : ""}` : "no vision"} · caption: ${c.caption_match}${weak}${ok(c) ? "" : ` · below the minimum ${REQUEST_MIN_RATING}`}`);
+  }
+  if (!order.length) {
+    log(`[photo] requested “${label}” -> no photo shows it (${pool.length} looked at); the current photo is kept unless an illustration is made`);
+    return { match: "nothing", note: photoOutcomeNote(req, "nothing"), label, queries, tried: pool.length };
+  }
+  const best = matchOf(order[0]!) as Exclude<Strength, "none">;
   const top = order.filter((c) => matchOf(c) === best);
   const pick = top[(opts.step ?? 0) % top.length]!;
   const what = shortWhat(pick.verdict?.what ?? pick.caption);
   const note = photoOutcomeNote(req, best, best === "named" ? undefined : what);
-  log(`[photo] requested “${label}” -> ${best === "none" ? "no photo shows it; closest" : `shows ${best === "named" ? req.named[0] : req.subject}`}: “${pick.caption.slice(0, 70)}” (${pick.from}${pick.google ? `, q=${JSON.stringify(pick.google.query)}` : ""}) · card: ${note}`);
+  log(`[photo] requested “${label}” -> ${best === "weak" ? "weak match (caption only)" : `shows ${best === "named" ? req.named[0] : req.subject}`}: “${pick.caption.slice(0, 70)}” (${pick.from}${pick.google ? `, q=${JSON.stringify(pick.google.query)}` : ""}) · card: ${note}`);
   return { pick, match: best, note, label, queries, tried: pool.length };
 }
 
