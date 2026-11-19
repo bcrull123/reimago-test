@@ -197,6 +197,8 @@ export type StoredImage = {
   signature?: boolean;
   /** Made by Grok Imagine for the Custom Design (hero art, supporting art). */
   imagine?: boolean;
+  /** Round 9b: where a site photo came from (its address on the owner's site), so a photo change can skip it. */
+  sourceUrl?: string;
 };
 
 /** One image the build asked for: its prompt and what happened (no secrets; prompts never contain keys). */
@@ -228,6 +230,8 @@ export type PreviewTrace = {
     intent?: "keep" | "find";
   };
   steps: { step: string; ai: boolean; ownerRequest: boolean }[];
+  /** Round 9b: the card's Photo line after the owner changed the hero ("Art: brick street, illustrated by …"). */
+  heroChange?: string;
   images: ImageTrace[];
   /** Round 9: the site's own photos — usable ones found on the site, hero-sized ones, and how many this look uses. */
   sitePhotos?: { found: number; heroSized: number; used: number; heroOwn: boolean };

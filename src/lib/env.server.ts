@@ -12,3 +12,19 @@ export function env(key: string): string | undefined {
 export function isWorkspacePreview(): boolean {
   return !env("GROK_PROJECT_ID");
 }
+
+let keysLogged = false;
+/**
+ * Round 9b: one server log line per server instance saying which keys are present — true/false only, never a
+ * value — so a workspace preview can be told from the published app.
+ */
+export function logKeyPresenceOnce(): void {
+  if (keysLogged) return;
+  keysLogged = true;
+  const has = (k: string) => (env(k) ? "true" : "false");
+  console.info(
+    `[env] keys present (true/false only): XAI_API_KEY=${has("XAI_API_KEY")} SERPER_API_KEY=${has("SERPER_API_KEY")} ` +
+      `REPLY_WEBHOOK_URL=${has("REPLY_WEBHOOK_URL")} REPLY_WEBHOOK_KEY=${has("REPLY_WEBHOOK_KEY")} PHOTO_SEARCH_PROXY=${env("PHOTO_SEARCH_PROXY_URL") && env("PHOTO_SEARCH_PROXY_KEY") ? "true" : "false"} · ` +
+      `running as: ${isWorkspacePreview() ? "workspace preview" : "published app"}`,
+  );
+}

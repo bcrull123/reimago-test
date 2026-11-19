@@ -127,6 +127,7 @@ function aOrSome(subject: string): string {
 
 /** The small "Photos: …" line on a look card, read from the build trace. */
 export function photosLine(trace: PreviewTrace | undefined, ownPhotos: number): string {
+  if (trace?.heroChange) return trace.heroChange;
   const hero = trace?.images.find((i) => i.slot === "hero");
   const scene = trace?.request.scene;
   const own = ownPhotos ? `${ownPhotos} of your photos` : "no usable photos from your site";

@@ -222,7 +222,8 @@ export function withPlanSubject(facts: SiteFacts, plan: SitePlan): SiteFacts {
  */
 export async function prefetchForPlan(rawFacts: SiteFacts, plan: SitePlan, deadline: number, archetypes?: Promise<(Archetype | undefined)[] | undefined>) {
   const facts = withPlanSubject(rawFacts, plan);
-  if (!photoSearchEnabled() || requestedPhoto(facts).intent !== "none" || !plan.imageQueries?.length) return undefined;
+  // Round 9b: also without Google Images (no SERPER_API_KEY): the site's own photos are rated and assigned.
+  if (requestedPhoto(facts).intent !== "none") return undefined;
   const { prefetchPlannedPhotos } = await import("@/lib/preview/google-photo.server");
   return prefetchPlannedPhotos(facts, proactiveQueries(facts, plan), !isMockMode() && aiAvailable(), deadline, { archetypes, site: !wantsNewPhotos(facts), avoid: plan.avoidPhotos }).catch(() => undefined);
 }
@@ -688,11 +689,13 @@ export async function buildLook(
   // for THIS business type), prefetched by the plan step. Started first: its ratings order the site's photos too.
   const want0 = requestedPhoto(facts);
   const photoDeadline = stepStart + Math.max(10_000, Math.min(40_000, budget - 25_000));
-  const prePromise =
-    !(want0.subject && (want0.intent === "find" || want0.intent === "keep")) && photoSearchEnabled() && plan.imageQueries?.length
-      ? (await import("@/lib/preview/google-photo.server")).plannedPhotos(facts, proactiveQueries(facts, plan), useAi, photoDeadline, plan.avoidPhotos).catch(() => undefined)
-      : Promise.resolve(undefined);
+  // Round 9b: runs without Google too (SERPER_API_KEY unset): the site's own photos are still vision-rated and shared
+  // out between the looks.
+  const prePromise = !(want0.subject && (want0.intent === "find" || want0.intent === "keep"))
+    ? (await import("@/lib/preview/google-photo.server")).plannedPhotos(facts, proactiveQueries(facts, plan), useAi, photoDeadline, plan.avoidPhotos).catch(() => undefined)
+    : Promise.resolve(undefined);
   const pre0 = await prePromise;
+  const tPhotos = Date.now();
   // Round 9: the vision verdicts (appetizing dish, attractive scene… for this business type) order the site's own
   // photos for the hero AND the supporting sections; failed ones go last. Without ratings, the words decide.
   const rated = new Map((pre0?.site ?? []).map((c) => [c.id, c] as const));
@@ -704,6 +707,7 @@ export async function buildLook(
     .sort((a, b) => verdict(b.photo.url) - verdict(a.photo.url) || b.score - a.score || a.i - b.i);
   const photos = scored.slice(0, OWN_MAX).map((p) => p.photo);
   const images: Record<string, StoredImage> = await storePhotos(id, photos, facts);
+  console.info(`[timing] look ${index + 1} "${design.name}": site photos + vision gate ${tPhotos - stepStart}ms, ${photos.length} site photos stored by ${Date.now() - stepStart}ms`);
   // Suitable hero photos are photo-1..n (sorted above); each look leads with a different one when there are several.
   // Round 9: a hero needs a hero-sized photo that passed the vision gate (or, unrated, good words).
   const heroOk = (p: (typeof scored)[number]) => heroWorthy(p.photo) && !failedIds.has(p.photo.url) && (rated.has(p.photo.url) || p.score > 0);
@@ -853,9 +857,8 @@ export async function buildLook(
         const google = await findGooglePhotos(scene, facts, useAi, photoDeadline, want);
         for (const g of google.photos.slice(0, want - real.length)) real.push({ photo: g.photo, source: "web", alt: g.temp.title, credit: googleCredit(g.temp), temp: g.temp });
         entry.search = googleSearchNote(google);
-      } else if (!photoSearchEnabled()) {
-        entry.search = "Google Images: off on this server (no SERPER_API_KEY or photo-search proxy)";
       }
+      // Round 9b: Google Images being off is a server log line only ("[photo-search] Google Images disabled…"), not UI.
       if (real.length < want && webPhotosEnabled() && !imagineFirst) {
         const web = await findWebPhotos(scene, place, 8_000, want - real.length).catch(() => []);
         entry.search = `${entry.search ? `${entry.search} · ` : ""}web search ${webQueries(scene, place).map((x) => `“${x.q}”`).join(" / ")} (Openverse, Wikimedia Commons; CC0 / public domain / CC BY / CC BY-SA): ${web.length ? `${web.length} matching photo${web.length > 1 ? "s" : ""}` : "no matching photo"}`;
@@ -944,7 +947,7 @@ export async function buildLook(
       scene: pre.queries.join(" / "),
       prompt: "",
       status: "not generated (mock mode / images off)",
-      search: `Google Images (proactive, from the plan) ${pre.queries.map((q) => `“${q}”`).join(" / ")}: ${pre.seen} results, ${pre.photos.length} usable${pre.ranking ? ` · ${pre.ranking}` : ""}${pre.bar ? ` · quality gate (${pre.bar.brief}; ${pre.bar.rated ? "vision-rated" : "rules"}): ${pre.bar.passed.length} passed, ${pre.bar.failed.length} failed` : ""}${Object.keys(pre.rejected).length ? ` (skipped ${Object.entries(pre.rejected).map(([w, n]) => `${n} ${w}`).join(", ")})` : ""} · ${strong.length} strong site photo${strong.length === 1 ? "" : "s"}`,
+      search: `${photoSearchEnabled() ? "Google Images (proactive, from the plan)" : "Site photos (proactive)"} ${pre.queries.map((q) => `“${q}”`).join(" / ")}: ${pre.seen} results, ${pre.photos.length} usable${pre.ranking ? ` · ${pre.ranking}` : ""}${pre.bar ? ` · quality gate (${pre.bar.brief}; ${pre.bar.rated ? "vision-rated" : "rules"}): ${pre.bar.passed.length} passed, ${pre.bar.failed.length} failed` : ""}${Object.keys(pre.rejected).length ? ` (skipped ${Object.entries(pre.rejected).map(([w, n]) => `${n} ${w}`).join(", ")})` : ""} · ${strong.length} strong site photo${strong.length === 1 ? "" : "s"}`,
     };
     trace.images.push(entry);
     // The quality gate (hero-brief.ts / rateHeroes): a photo that failed it is never a fallback for this look.
@@ -1026,7 +1029,7 @@ export async function buildLook(
           const photo = await fetchPhoto(option.siteUrl);
           if (!photo || photo.width < 800) continue;
           await saveImage(id, "hero", photo.type, photo.bytes);
-          images.hero = { name: "hero", type: photo.type, source: "photo", alt: (facts.imageText?.[option.siteUrl] ?? "").slice(0, 120) || facts.name, width: photo.width, height: photo.height, credit: { title: option.what, author: "", license: "", licenseUrl: "", sourceUrl: option.siteUrl, provider: "your site" } };
+          images.hero = { name: "hero", type: photo.type, source: "photo", alt: (facts.imageText?.[option.siteUrl] ?? "").slice(0, 120) || facts.name, width: photo.width, height: photo.height, sourceUrl: option.siteUrl, credit: { title: option.what, author: "", license: "", licenseUrl: "", sourceUrl: option.siteUrl, provider: "your site" } };
           Object.assign(entry, { status: "your site's photo", source: "your site", scene: option.what, search: `${entry.search}${picked(option)}` } satisfies Partial<ImageTrace>);
           return true;
         }
@@ -1078,7 +1081,8 @@ export async function buildLook(
         }
       : undefined;
     if (imagineFirst) trace.images.push({ name: "hero", slot: "hero", scene: kind, prompt: "", status: "skipped", search: IMAGINE_NOTE });
-    else if (!heroWorthy(photos[0]) || freshPhotos || tryGoogle) {
+    // Round 9b: no passing site photo for this look (also without Google): the signature graphic / Imagine art.
+    else if (!ownHero || freshPhotos || tryGoogle) {
       // Round 9: no usable site photo for the hero → Grok Imagine first; Google Images only if Imagine fails.
       const imagineBeforeGoogle = imagesEnabled() && !freshPhotos && process.env.PREVIEW_GOOGLE_BEFORE_IMAGINE !== "1";
       if (imagineBeforeGoogle && tryGoogle) console.info(`[photo] look ${index + 1} "${design.name}": no hero-sized photo on your site → Grok Imagine art (Google Images only if Imagine fails)`);
