@@ -218,6 +218,10 @@ p{margin:0 0 1em}
 .s-hero-split.v-collage .frame>.media:not(.tile){aspect-ratio:1/1;border-radius:40px;border:10px solid #fff;transform:rotate(3deg);box-shadow:0 40px 70px -35px rgba(0,0,0,.55)}
 .s-hero-split.v-collage .frame>.media:not(.tile) img{filter:grayscale(1) contrast(1.12)}
 .s-hero-split.v-collage .frame>.media:not(.tile)::after{content:"";position:absolute;inset:0;background:var(--accent);mix-blend-mode:multiply;opacity:.6;pointer-events:none}
+/* Round 9: a smaller site photo (under 1400px) in the hero: tinted overlay, no zoom, framed at its size. */
+.x-small .bgimg img,.x-small .media img{filter:saturate(.88) contrast(1.06);transform:none!important;animation:none!important}
+.x-small .bgimg::after{content:"";position:absolute;inset:0;background:linear-gradient(135deg,color-mix(in srgb,var(--primary) 55%,transparent),color-mix(in srgb,var(--accent) 25%,transparent));mix-blend-mode:multiply;opacity:.55;pointer-events:none}
+.x-small .strip .media,.x-small .frame{max-width:min(100%,1100px);margin-inline:auto}
 /* Kept art (illustration / transparent PNG / SVG): shown whole on a color panel — no crop, frame, tilt or duotone. */
 .x-cutout .frame{margin:0;padding:clamp(1.2rem,3.5vw,2.8rem);border-radius:calc(var(--radius) * 2 + 8px);background:radial-gradient(60% 60% at 50% 55%,color-mix(in srgb,var(--accent) 34%,transparent) 0%,color-mix(in srgb,var(--accent) 10%,transparent) 62%,transparent 100%)}
 .x-cutout .frame::before{display:none}

@@ -136,13 +136,23 @@ export function photosLine(trace: PreviewTrace | undefined, ownPhotos: number): 
     const instead = other?.status === "generated" ? "the hero has an AI photo of this look's own idea" : ownPhotos ? "the hero uses your site's best photo" : "the hero has no photo";
     return `Couldn't find ${aOrSome(scene)} on your site to keep, and no web or AI ${bare(scene)} was swapped in · ${instead}`;
   }
-  if (!hero) return `Photos: ${own}${scene ? "" : " (the note didn't name a photo subject)"}`;
+  // Round 9: how many of the site's own photos were found, and how many this look uses.
+  const sp = trace?.sitePhotos;
+  const counts = sp ? ` · ${sp.found} photo${sp.found === 1 ? "" : "s"} found on your site, ${sp.used} used here` : "";
+  if (!hero) return sp?.heroOwn ? `Photo: your site's own${counts}` : `Photos: ${own}${scene ? "" : " (the note didn't name a photo subject)"}${counts}`;
   const what = scene ? `“${scene}”` : `“${hero.scene.slice(0, 60)}”`;
-  if (hero.status === "preview photo (Google Images)") return TEMP_PHOTO_LINE;
-  if (hero.status === "your site's photo") return `Photo: your site's own photo of ${what}${hero.credit?.title ? ` (“${hero.credit.title.slice(0, 50)}”)` : ""}`;
+  if (hero.status === "signature reimagined") return `Art: your ${hero.signature?.subject ?? "brand graphic"}, reimagined by Grok Imagine${counts}`;
+  if (hero.status === "signature original") return `Art: your ${hero.signature?.subject ?? "brand graphic"} from your site${counts}`;
+  if (hero.status === "preview photo (Google Images)") return `${TEMP_PHOTO_LINE}${sp ? ` · ${sp.found ? `${sp.found} photo${sp.found === 1 ? "" : "s"} found on your site, none left for this hero` : "no usable photos on your site"}${sp.used ? `, ${sp.used} used in sections` : ""}` : ""}`;
+  if (hero.status === "your site's photo") {
+    const raw = hero.credit?.title && !/^your homepage$/i.test(hero.credit.title) ? hero.credit.title : scene ? "" : hero.scene;
+    // File-name noise ("o o o", "n.jpg") is not a caption.
+    const title = /[a-z]{3}/i.test(raw.replace(/\b(?:jpe?g|png|webp)\b/gi, "")) && !/^your homepage$/i.test(raw) ? raw : "";
+    return `Photo: your site's own${title ? ` (“${title.slice(0, 50)}”)` : scene ? ` photo of ${what}` : ""}${counts}`;
+  }
   if (hero.status === "web photo" && hero.credit) return `Photo: ${creditLine(hero.credit)}`;
   if (hero.status === "skipped" && /Grok Imagine/.test(hero.search ?? "")) return "Art: Grok Imagine makes this design's art from your site's own assets (no Google Images)";
-  if (hero.status === "generated") return `AI photo of ${what}${scene ? " (no matching photo on your site or free photo sites)" : ""}`;
+  if (hero.status === "generated") return `AI photo of ${what}${scene ? " (no matching photo on your site or free photo sites)" : sp ? ` (Grok Imagine: ${sp.found ? "no site photo left for this hero" : "no photos on your site"}; Google Images is only a last resort)` : ""}${counts}`;
   if (hero.status === "failed") return `Photos: no photo of ${what} found and generating one failed, so the hero has ${scene ? "a plain background" : ownPhotos ? "your site's photo" : "a placeholder"}`;
   return `Photos: no photo of ${what} found; would generate one (mock mode / AI images off) · ${own}`;
 }
