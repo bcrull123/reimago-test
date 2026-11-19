@@ -54,8 +54,15 @@ export function photoSearchMode(): Mode | undefined {
   return undefined;
 }
 
+let disabledLogged = false;
 export function photoSearchEnabled(): boolean {
-  return Boolean(photoSearchMode());
+  const on = Boolean(photoSearchMode());
+  // Round 9b: one clear server log line (once per server instance); nothing in the UI.
+  if (!on && !disabledLogged) {
+    disabledLogged = true;
+    console.info("[photo-search] Google Images disabled: SERPER_API_KEY not set");
+  }
+  return on;
 }
 
 const queryCache = new Map<string, { at: number; images: Promise<GoogleImage[]> }>();
@@ -372,11 +379,15 @@ export async function prefetchPlannedPhotos(
   deadline: number,
   opts: { archetypes?: Promise<(Archetype | undefined)[] | undefined>; site?: boolean; avoid?: PhotoAvoid } = {},
 ): Promise<PlannedPhotos | undefined> {
-  if (!photoSearchEnabled() || !queries.length) return undefined;
+  // Round 9b: Google Images is optional here; without it the site's own photos are still rated and assigned.
+  const google = photoSearchEnabled() && queries.length > 0;
+  if (!google && opts.site === false) return undefined;
   const { measurePhoto, siteHeroPhotos } = await import("@/lib/preview/hero-pick.server");
   type SitePhoto = Awaited<ReturnType<typeof siteHeroPhotos>>[number];
+  type Found = Awaited<ReturnType<typeof findGooglePhotos>>;
+  const t0 = Date.now();
   const [found, sitePhotos] = await Promise.all([
-    findGooglePhotos(undefined, facts, useVision, deadline, 10, queries),
+    google ? findGooglePhotos(undefined, facts, useVision, deadline, 10, queries) : Promise.resolve({ photos: [], queries: [], seen: 0, rejected: {} } as unknown as Found),
     opts.site === false ? Promise.resolve([] as SitePhoto[]) : siteHeroPhotos(facts).catch(() => [] as SitePhoto[]),
   ]);
   const site = sitePhotos.map((p) => p.candidate);
@@ -426,7 +437,9 @@ export async function prefetchPlannedPhotos(
       if (r.subject && !it.c.visionSubject) it.c.visionSubject = r.subject;
     });
   };
+  const tFound = Date.now();
   await applyRatings(rateItems);
+  console.info(`[timing] photos: ${google ? "Google + " : ""}site photos ${tFound - t0}ms, vision gate ${Date.now() - tFound}ms (${rateItems.length} photos)`);
   // Too few good photos: free-license photos of the brief's best scene, rated the same way.
   let web: NonNullable<PlannedPhotos["web"]> = [];
   const goodCount = () => [...photos.map((p) => p.candidate!), ...site, ...web.map((w) => w.candidate)].map(heroScore).filter(passesBar).length;
@@ -486,7 +499,6 @@ export async function prefetchPlannedPhotos(
 
 /** The stored proactive ranking for this site + queries; searched now if the plan step's prefetch isn't there. */
 export async function plannedPhotos(facts: SiteFacts, queries: string[], useVision: boolean, deadline: number, avoid?: PhotoAvoid): Promise<PlannedPhotos | undefined> {
-  if (!photoSearchEnabled() || !queries.length) return undefined;
   try {
     const { readImage } = await import("@/lib/pages.server");
     const stored = await readImage(plannedKey(facts, queries, avoid), "photo-search");

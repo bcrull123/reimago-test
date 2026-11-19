@@ -45,7 +45,7 @@ export function scanSitePhotos(facts: SiteFacts, opts: { budgetMs?: number; max?
   const key = `${facts.sourceUrl}|${(facts.siteArt ?? []).length}|${facts.images.length}`;
   const hit = cache.get(key);
   if (hit && Date.now() - hit.at < 15 * 60_000) return hit.scan;
-  const scan = doScan(facts, opts.budgetMs ?? 15_000, opts.max ?? SITE_PHOTO_MAX);
+  const scan = doScan(facts, opts.budgetMs ?? 12_000, opts.max ?? SITE_PHOTO_MAX);
   cache.set(key, { at: Date.now(), scan });
   if (cache.size > 50) cache.delete(cache.keys().next().value!);
   return scan;
@@ -86,7 +86,19 @@ async function doScan(facts: SiteFacts, budgetMs: number, max: number): Promise<
       loaded[next.i] = { ...next.r, photo: got.photo, loaded: got.loaded, stats: m?.stats, hash: m?.hash, hero: size.hero, small: size.small };
     }
   };
-  await Promise.all(Array.from({ length: 6 }, worker));
+  // Round 9b: a hard cap — photos still downloading when the budget runs out are left out (never waited for).
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const capped = await Promise.race([
+    Promise.all(Array.from({ length: 6 }, worker)).then(() => false),
+    new Promise<boolean>((r) => {
+      timer = setTimeout(() => r(true), budgetMs + 500);
+    }),
+  ]);
+  clearTimeout(timer);
+  if (capped) {
+    skip("out of time");
+    queue.length = 0;
+  }
   const photos: SitePhoto[] = [];
   for (const p of loaded) {
     if (!p) continue;

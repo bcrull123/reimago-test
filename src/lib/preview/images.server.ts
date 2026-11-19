@@ -149,7 +149,7 @@ export async function storePhotos(siteId: string, photos: Photo[], facts: SiteFa
       const name = `photo-${i + 1}`;
       try {
         await saveImage(siteId, name, photo.type, photo.bytes);
-        out[name] = { name, type: photo.type, source: "photo", alt: (facts.imageText?.[photo.url] ?? "").slice(0, 120) || `${facts.name}`, width: photo.width, height: photo.height };
+        out[name] = { name, type: photo.type, source: "photo", alt: (facts.imageText?.[photo.url] ?? "").slice(0, 120) || `${facts.name}`, width: photo.width, height: photo.height, sourceUrl: photo.url };
       } catch {
         // Skip a photo that cannot be stored.
       }

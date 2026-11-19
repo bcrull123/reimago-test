@@ -28,7 +28,8 @@ const MAX_EXTRA = 10;
 /** Round 9: a second hop into photo pages (galleries, parks, events…) linked from the first pages. */
 const MAX_PHOTO_PAGES = 4;
 const PHOTO_PAGE = /gallery|galleries|photos?|pictures|portfolio|parks?|recreation|things-to-do|attractions|events?|festival|tour|rooms|venue|our-work|projects/i;
-const TOTAL_BUDGET_MS = 35_000;
+/** Round 9b: the whole read (homepage, linked pages, photo pages, stylesheets) is capped at 25 s, even on slow sites. */
+const TOTAL_BUDGET_MS = 25_000;
 const PAGE_TIMEOUT_MS = 12_000;
 
 const BINARY_EXT =
@@ -439,11 +440,13 @@ export async function scrapeSite(rawUrl: string, notes: string): Promise<SiteFac
   const deadline = Date.now() + TOTAL_BUDGET_MS;
   let home: Doc;
   try {
-    home = await fetchPage(start, 20_000);
+    home = await fetchPage(start, 15_000);
   } catch (error) {
     if (!REIMAGO_HOSTS.has(start.hostname)) throw error;
     return snapshotFacts(start, notes);
   }
+  const t0 = deadline - TOTAL_BUDGET_MS;
+  const tHome = Date.now() - t0;
   const base = new URL(home.url);
   const nav = navLinks(home.html, base);
   const extra = rankLinks(home.html, base, nav);
@@ -463,6 +466,8 @@ export async function scrapeSite(rawUrl: string, notes: string): Promise<SiteFac
     }
   };
   await Promise.all([worker(), worker(), worker(), worker()]);
+  const tPages = Date.now() - t0;
+  const firstWave = docs.length - 1;
   // Second hop: photo-rich pages (gallery, parks, events…) linked from the pages read so far.
   const seenPaths = new Set(docs.map((d) => pathKey(new URL(d.url))));
   for (const u of extra) seenPaths.add(pathKey(u));
@@ -475,8 +480,10 @@ export async function scrapeSite(rawUrl: string, notes: string): Promise<SiteFac
       photoPages.push(u);
     }
   }
-  queue.push(...photoPages.slice(0, MAX_PHOTO_PAGES));
+  // Only with time left (≥5 s): the photo pages are a bonus, never a reason to run long.
+  if (deadline - Date.now() >= 5000) queue.push(...photoPages.slice(0, MAX_PHOTO_PAGES));
   if (queue.length) await Promise.all([worker(), worker(), worker(), worker()]);
+  const tPhotoPages = Date.now() - t0;
 
   // Stylesheets (same site only, max 2) help find brand colors.
   const cssLinks = [...home.html.matchAll(/<link\b[^>]*>/gi)]
@@ -486,6 +493,9 @@ export async function scrapeSite(rawUrl: string, notes: string): Promise<SiteFac
     .filter((href) => href && sameSite(hostOf(href), base.hostname) && !/wp-includes|plugins|font|icon/i.test(href))
     .slice(0, 2);
   const css = await Promise.all(cssLinks.map((href) => fetchCss(href, deadline)));
+  console.info(
+    `[timing] read ${base.hostname}: homepage ${tHome}ms, ${firstWave} linked page${firstWave === 1 ? "" : "s"} by ${tPages}ms, ${docs.length - 1 - firstWave} photo page${docs.length - 1 - firstWave === 1 ? "" : "s"} by ${tPhotoPages}ms (${photoPages.length} found), stylesheets by ${Date.now() - t0}ms · cap ${TOTAL_BUDGET_MS / 1000}s`,
+  );
   const inlineStyles = docs.map((doc) =>
     [...doc.html.matchAll(/<style[^>]*>([\s\S]*?)<\/style>|style=["']([^"']*)["']/gi)].map((m) => m[1] ?? m[2] ?? "").join("\n"),
   );
