@@ -24,7 +24,10 @@ import {
 } from "@/lib/reimagine.server";
 import type { ScrapedPage, SiteFacts, SiteNavLink, Testimonial } from "@/lib/preview/types";
 
-const MAX_EXTRA = 8;
+const MAX_EXTRA = 10;
+/** Round 9: a second hop into photo pages (galleries, parks, events…) linked from the first pages. */
+const MAX_PHOTO_PAGES = 4;
+const PHOTO_PAGE = /gallery|galleries|photos?|pictures|portfolio|parks?|recreation|things-to-do|attractions|events?|festival|tour|rooms|venue|our-work|projects/i;
 const TOTAL_BUDGET_MS = 35_000;
 const PAGE_TIMEOUT_MS = 12_000;
 
@@ -41,7 +44,7 @@ const KEYWORDS: [RegExp, number][] = [
   [/pricing|prices|rates|packages/i, 3],
   [/review|testimonial/i, 3],
   [/team|staff|people|doctors|attorneys/i, 2],
-  [/gallery|portfolio|work|projects/i, 2],
+  [/gallery|portfolio|work|projects|photos|parks?|recreation|attractions|things-to-do|events/i, 4],
   [/faq|hours/i, 2],
 ];
 
@@ -460,6 +463,20 @@ export async function scrapeSite(rawUrl: string, notes: string): Promise<SiteFac
     }
   };
   await Promise.all([worker(), worker(), worker(), worker()]);
+  // Second hop: photo-rich pages (gallery, parks, events…) linked from the pages read so far.
+  const seenPaths = new Set(docs.map((d) => pathKey(new URL(d.url))));
+  for (const u of extra) seenPaths.add(pathKey(u));
+  const photoPages: URL[] = [];
+  for (const doc of docs.slice(1)) {
+    for (const u of rankLinks(doc.html, new URL(doc.url), [])) {
+      const key = pathKey(u);
+      if (seenPaths.has(key) || !PHOTO_PAGE.test(u.pathname)) continue;
+      seenPaths.add(key);
+      photoPages.push(u);
+    }
+  }
+  queue.push(...photoPages.slice(0, MAX_PHOTO_PAGES));
+  if (queue.length) await Promise.all([worker(), worker(), worker(), worker()]);
 
   // Stylesheets (same site only, max 2) help find brand colors.
   const cssLinks = [...home.html.matchAll(/<link\b[^>]*>/gi)]

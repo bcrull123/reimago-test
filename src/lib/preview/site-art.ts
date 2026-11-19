@@ -24,7 +24,7 @@ export type SiteArt = {
   svg?: string;
 };
 
-export const SITE_ART_MAX = 60;
+export const SITE_ART_MAX = 90;
 const SVG_MAX = 40_000;
 
 function decode(value: string): string {
@@ -66,7 +66,7 @@ export function fileWords(url: string): string {
     .split(/[-_.\s+]+/)
     .flatMap((w) => w.split(/(?<=[a-z])(?=[A-Z])/))
     // CDN hashes and ids ("p65h8jtiue3itp4ksz7aa4634a26hhg47mz85aa32o", "IMG_2041") are not words.
-    .filter((w) => w && !/\d/.test(w.slice(0, 1)) && !(w.length > 12 && /\d/.test(w)) && !/^(img|dsc|image|scaled|copy|final|v\d+)$/i.test(w))
+    .filter((w) => w && w.length > 1 && !/\d/.test(w.slice(0, 1)) && !(w.length > 12 && /\d/.test(w)) && !/^(img|dsc|image|scaled|copy|final|v\d+)$/i.test(w))
     .join(" ")
     .toLowerCase()
     .slice(0, 120);
@@ -82,6 +82,26 @@ function words(...parts: string[]): string {
     .replace(/\s+/g, " ")
     .trim()
     .slice(0, 200);
+}
+
+/**
+ * The largest file in a srcset ("a.jpg 400w, a-big.jpg 1600w" -> a-big.jpg; "a.jpg 1x, a@2x.jpg 2x" -> a@2x.jpg).
+ * Entries without a descriptor count as 1x. Empty when there is no srcset.
+ */
+export function largestSrcset(srcset: string): string {
+  let best = "";
+  let top = -1;
+  for (const part of srcset.split(/,\s+(?=\S)/)) {
+    const [u, d] = part.trim().split(/\s+/);
+    if (!u || u.startsWith("data:")) continue;
+    const m = d?.match(/^(\d+(?:\.\d+)?)([wx])$/i);
+    const v = m ? Number(m[1]) * (m[2]!.toLowerCase() === "x" ? 1000 : 1) : 1000;
+    if (v > top) {
+      top = v;
+      best = u;
+    }
+  }
+  return best;
 }
 
 /** Template / tracking images that are never the owner's art. */
@@ -100,6 +120,8 @@ export function artOfPage(html: string, page: string, home: boolean, css: { href
   const out: SiteArt[] = [];
   const add = (art: SiteArt) => {
     if (!art.url || art.url === page || JUNK.test(art.url) || /\/loader\.|spinner|ajax-loader/i.test(art.url)) return;
+    // url(#gradient) / url(#divider) style references are not pictures.
+    if (/#/.test(art.url) && art.url.split("#")[0] === page.split("#")[0]) return;
     out.push(art);
   };
   const body = html.replace(/<script[\s\S]*?<\/script>/gi, " ").replace(/<template[\s\S]*?<\/template>/gi, " ").replace(/<!--[\s\S]*?-->/g, " ");
@@ -118,7 +140,8 @@ export function artOfPage(html: string, page: string, home: boolean, css: { href
     const raw = tag[0];
     const srcset = attr(raw, "srcset") || attr(raw, "data-srcset");
     const setUrls = srcset.split(",").map((s) => s.trim().split(/\s+/)[0] ?? "").filter(Boolean);
-    let src = attr(raw, "data-src") || attr(raw, "data-lazy-src") || attr(raw, "data-original") || attr(raw, "src");
+    // The biggest file the page offers: the largest srcset entry, then lazy-load attributes, then src.
+    let src = largestSrcset(srcset) || attr(raw, "data-src") || attr(raw, "data-lazy-src") || attr(raw, "data-lazy") || attr(raw, "data-original") || attr(raw, "data-image") || attr(raw, "src");
     if (!src || src.startsWith("data:")) src = setUrls.at(-1) ?? "";
     const url = absolute(src, page);
     const logo = /logo/i.test(`${attr(raw, "class")} ${attr(raw, "id")} ${src}`);
@@ -137,10 +160,18 @@ export function artOfPage(html: string, page: string, home: boolean, css: { href
   for (const pic of body.matchAll(/<picture\b[\s\S]*?<\/picture>/gi)) {
     const alt = attr(pic[0].match(/<img\b[^>]*>/i)?.[0] ?? "", "alt");
     for (const source of pic[0].matchAll(/<source\b[^>]*>/gi)) {
-      const first = (attr(source[0], "srcset") || attr(source[0], "data-srcset")).split(",")[0]?.trim().split(/\s+/)[0] ?? "";
+      const first = largestSrcset(attr(source[0], "srcset") || attr(source[0], "data-srcset"));
       const url = absolute(first, page);
       add({ url, label: words(alt, fileWords(url)), kind: "picture", page, home });
     }
+  }
+
+  // Linked full-size images (galleries / lightboxes: <a href="photo-full.jpg"><img src="thumb.jpg"></a>).
+  for (const link of body.matchAll(/<a\b[^>]*\bhref\s*=\s*["']([^"']+\.(?:jpe?g|png|webp)(?:\?[^"']*)?)["'][^>]*>([\s\S]{0,600}?)<\/a>/gi)) {
+    const url = absolute(link[1]!, page);
+    const inner = link[2] ?? "";
+    const alt = attr(inner.match(/<img\b[^>]*>/i)?.[0] ?? "", "alt");
+    add({ url, label: words(alt, attr(link[0].match(/^<a\b[^>]*>/i)?.[0] ?? "", "title"), cleanInner(inner), fileWords(url)), kind: "img", page, home });
   }
 
   // Inline SVG drawings.
@@ -159,11 +190,11 @@ export function artOfPage(html: string, page: string, home: boolean, css: { href
   }
 
   // CSS backgrounds: style="background-image:url(…)", data-bg attributes, <style> blocks and the site's stylesheets.
-  for (const tag of body.matchAll(/<[a-z][a-z0-9-]*\b[^>]*\b(?:style|data-bg|data-background|data-background-image)\s*=[^>]*>/gi)) {
+  for (const tag of body.matchAll(/<[a-z][a-z0-9-]*\b[^>]*\b(?:style|data-bg|data-bg-src|data-background|data-background-image)\s*=[^>]*>/gi)) {
     const raw = tag[0];
     const style = attr(raw, "style");
     const urls = [...style.matchAll(/url\(\s*['"]?([^'")]+)['"]?\s*\)/gi)].map((m) => m[1]!);
-    for (const v of [attr(raw, "data-bg"), attr(raw, "data-background"), attr(raw, "data-background-image")]) if (v) urls.push(v.replace(/^url\(['"]?|['"]?\)$/g, ""));
+    for (const v of [attr(raw, "data-bg"), attr(raw, "data-background"), attr(raw, "data-background-image"), attr(raw, "data-bg-src")]) if (v) urls.push(v.replace(/^url\(['"]?|['"]?\)$/g, ""));
     for (const u of urls) {
       const url = absolute(u, page);
       add({ url, label: words(attr(raw, "class"), attr(raw, "id"), attr(raw, "aria-label"), attr(raw, "title"), fileWords(url)), kind: "css", page, home });
@@ -192,6 +223,11 @@ export function collectSiteArt(docs: { url: string; html: string }[], css: { hre
     else if (art.label && !prev.label.includes(art.label)) prev.label = `${prev.label} ${art.label}`.slice(0, 200);
   }
   return [...seen.values()].slice(0, SITE_ART_MAX);
+}
+
+/** Text inside a link (a caption), without tags. */
+function cleanInner(html: string): string {
+  return decode(html.replace(/<[^>]+>/g, " ")).replace(/\s+/g, " ").trim().slice(0, 80);
 }
 
 function hasWord(text: string, keyword: string): boolean {
