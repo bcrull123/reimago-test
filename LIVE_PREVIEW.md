@@ -386,6 +386,47 @@ Bob on aceee96: "It still doesn't have the what would you change box in the rend
 - **Phone:** under 420 px wide, the field and the Change button stack. The button is primary-colored, at least 6.5rem wide and 44 px tall, with `whitespace-nowrap`, so its label always shows (the e2e checks the label text and size at 390 px).
 - **Build stamp:** the site footer shows `Build <short commit> · <build time> UTC` (`data-build-stamp`). It comes from `BUILD_COMMIT`, `VERCEL_GIT_COMMIT_SHA` or `GITHUB_SHA`, else `git rev-parse --short HEAD`, read at build time (`vite.config.ts` `define: __BUILD_STAMP__`). With `npm run dev`, it is read when the server starts.
 
+### Round 9b: photo changes never "change" to the same photo; keys, timings, Google optional
+
+Bob's real run (paulsvalley, no SERPER key) typed "change the photo to one of the brick streets, maybe Pine Street"
+in Editorial's box and got "new photo: closest to brick street" with the SAME welcome-sign photo. Causes, in plain
+words, and the fixes:
+
+- **The current hero wasn't recognised.** It was a site photo stored without its address, its alt text was just the
+  town name, and it was a WebP (no image hash: only JPEG/PNG are hashed). So none of the old checks matched it.
+  Now (`sameAsCurrent`, photo-request.server.ts) the current hero is removed **before ranking** by: its exact URL,
+  its normalized URL (sizes / query stripped: `?format=750w` = `?format=1500w`), its exact bytes (sha1), its image
+  hash, or its specific caption. Site photos now store their `sourceUrl`. A last guard drops a pick whose bytes equal
+  the current hero. Unit test "Bob's exact case" reproduces it.
+- **"Closest match" swaps are gone.** A photo that doesn't show the request is never used as the "new" photo. With no
+  real match the card says "Couldn't find a brick street / Pine Street photo, so I kept your current photo"
+  (label "same photo (no brick street found)"), or:
+- **An Imagine illustration** of the request when one makes sense (places, scenes, things; not people, logos, signs,
+  menus or "our …" things): "Art: brick street, illustrated by Grok Imagine (not a real photo of Pine Street)",
+  label "art: brick street (illustrated)". The prompt asks for a clearly illustrated subject and never names the
+  street. Off with `PREVIEW_REQUEST_ILLUSTRATION=0`.
+- **Weak matches.** A caption whose main subject names the request while vision says "no" is logged as a weak match
+  and used only after real matches ("new photo: its caption says brick street …, but it may not show it clearly").
+  A passing mention ("a water park with … a brick wall") is not a match.
+- **The deep crawl is used for photo changes too**: all usable site photos ≥800px wide (up to 30), not the old 7;
+  up to 16 are shown to vision.
+- **Round 1 without Google**: a look with no passing site photo now gets the signature graphic / Imagine art even
+  when SERPER_API_KEY is unset (before, bob.me's failed blog cover was used on every look in that case).
+- **Google is optional for round 1 too.** Before, the round-9 site-photo vision gate and assignment only ran when
+  SERPER_API_KEY was set, so Bob's preview never used them. Now they run without Google. When the key is missing
+  the server logs once `[photo-search] Google Images disabled: SERPER_API_KEY not set`; nothing in the UI.
+- **Keys at a glance**: once per server instance, `[env] keys present (true/false only): XAI_API_KEY=… SERPER_API_KEY=…
+  REPLY_WEBHOOK_URL=… REPLY_WEBHOOK_KEY=… PHOTO_SEARCH_PROXY=… · running as: workspace preview | published app`.
+  Values are never printed.
+- **Time caps and timings**: the site read is hard-capped at 25 s (homepage 15 s max; photo pages only with ≥5 s
+  left); the site-photo scan is hard-capped at 12 s (downloads still running are dropped, not waited for). New
+  `[timing]` lines: `read <host>` (homepage, linked pages, photo pages, stylesheets), `photos` (site photos, vision
+  gate), `directions` (plan, looks, photos), `look N` (photos stored, built in), `photo request`, `refine`.
+  Bob's f6c6f14 run never finished: the crawl was budgeted at 35 s (homepage 20 s) with no leftover-time gate on
+  the photo pages, and the photo scan (15 s) waited for in-flight downloads. On a slow site those stacked with
+  the Custom Design request (up to 150 s) and could hit the host's 180 s limit. The caps above keep the read
+  well under that; the `[timing]` lines show which phase used the time.
+
 ### Round 9: the first round uses the site's own pictures (any business)
 
 Bob's Pauls Valley run showed Editorial and Dark Premium with Google Images photos even though the site has
