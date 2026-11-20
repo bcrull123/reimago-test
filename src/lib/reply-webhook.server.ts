@@ -28,6 +28,12 @@ export type ReplyPayload = {
   picture_error: string;
   /** The Custom Design look's Grok Imagine design mockup ("" for template looks). */
   design_mockup_url?: string;
+  /** Round 10: "reimagine" (the owner's site) or "new_site" (Build a New Site, no source site). */
+  mode?: "reimagine" | "new_site";
+  /** New site only: the business name, and the domain choice ("have" + the domain, or "get" = domain, email & hosting). */
+  business_name?: string;
+  domain_choice?: string;
+  domain?: string;
   submitted_at: string;
 };
 
@@ -43,6 +49,15 @@ export function submissionId(madeId: string, look: string): string {
 export function authorizationFor(key: string): string {
   const k = key.trim();
   return /^[A-Za-z][A-Za-z0-9!#$%&'*+.^_`|~-]*\s+\S/.test(k) ? k : `Bearer ${k}`;
+}
+
+/** Round 10: why the webhook is off, for one log line (presence only, never a value). */
+export function replyWebhookProblem(): string | undefined {
+  const url = env("REPLY_WEBHOOK_URL");
+  const key = env("REPLY_WEBHOOK_KEY");
+  if (!url || !key) return `not configured (REPLY_WEBHOOK_URL=${Boolean(url)} REPLY_WEBHOOK_KEY=${Boolean(key)})`;
+  if (!replyWebhookConfig()) return "REPLY_WEBHOOK_URL is not a valid https URL";
+  return undefined;
 }
 
 export function replyWebhookConfig(): { url: string; key: string } | undefined {

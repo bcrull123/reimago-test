@@ -24,16 +24,32 @@ export const notifyReplyWebhook = createServerFn({ method: "POST" })
       chosenLook: str(input?.chosenLook, 120),
       changeRequests: list(input?.changeRequests, 5, 400),
       pictureError: str(input?.pictureError, 400),
+      mode: input?.mode === "new_site" ? ("new_site" as const) : ("reimagine" as const),
+      businessName: str(input?.businessName, 120),
+      domainChoice: str(input?.domainChoice, 20),
+      domain: str(input?.domain, 200),
     };
   })
   .handler(async ({ data }): Promise<{ ok: boolean; skipped?: boolean; status?: number }> => {
-    const { replyWebhookConfig, sendReplyWebhook, submissionId } = await import("./reply-webhook.server");
-    if (!replyWebhookConfig()) return { ok: false, skipped: true };
+    (await import("./env.server")).logKeyPresenceOnce();
+    const { replyWebhookConfig, replyWebhookProblem, sendReplyWebhook, submissionId } = await import("./reply-webhook.server");
+    // Round 10: every way this can stop is one log line (status / reason only, never a value).
+    const problem = replyWebhookProblem();
+    if (problem || !replyWebhookConfig()) {
+      console.warn(`[reply-webhook] skipped look ${data.id} (${data.mode}): ${problem ?? "not configured"}`);
+      return { ok: false, skipped: true };
+    }
     const { rateLimited, requestIp } = await import("./reimagine.server");
-    if (rateLimited(`reply:${requestIp()}`, 20)) return { ok: false };
+    if (rateLimited(`reply:${requestIp()}`, 20)) {
+      console.warn(`[reply-webhook] skipped look ${data.id} (${data.mode}): rate limited`);
+      return { ok: false };
+    }
     const { readSite, readImage } = await import("./pages.server");
     const site = await readSite(data.id);
-    if (!site) return { ok: false };
+    if (!site) {
+      console.warn(`[reply-webhook] skipped look ${data.id} (${data.mode}): that look is not stored on this server`);
+      return { ok: false };
+    }
     const { publicBase } = await import("./publish.server");
     const picture = await readImage(data.id, "capture").catch(() => undefined);
     const result = await sendReplyWebhook({
@@ -49,7 +65,34 @@ export const notifyReplyWebhook = createServerFn({ method: "POST" })
       picture_error: picture ? "" : data.pictureError || "No picture was stored for this look.",
       // The Custom Design look: the Grok Imagine mockup it was built from (empty for template looks).
       design_mockup_url: site.custom?.mockup && !site.design?.custom?.failed ? `${publicBase()}/made/${data.id}/img/mockup` : "",
+      mode: data.mode,
+      ...(data.mode === "new_site" ? { business_name: data.businessName, domain_choice: data.domainChoice, domain: data.domain } : {}),
       submitted_at: new Date().toISOString(),
     });
+    if (!result.sent) console.warn(`[reply-webhook] look ${data.id} (${data.mode}): not delivered (${result.status ?? result.error ?? "no answer"}, ${result.attempts} attempt${result.attempts === 1 ? "" : "s"})`);
     return { ok: result.sent, status: result.status };
+  });
+
+/**
+ * Round 10: the browser posts the lead to Formcarry itself; this records how that went in the server log
+ * ("[submit] …", status code / outcome only — never the email, note or any value), so a missing submission can be
+ * traced on the published app.
+ */
+export const logSubmit = createServerFn({ method: "POST" })
+  .validator((input: Record<string, unknown>) => ({
+    id: /^[a-f0-9]{16}$/.test(str(input?.id, 40)) ? str(input?.id, 40) : "unknown",
+    mode: input?.mode === "new_site" ? "new_site" : "reimagine",
+    look: str(input?.look, 80).replace(/[^\w ·&'()-]/g, ""),
+    event: ["choose", "sent", "failed", "not-resent"].includes(str(input?.event, 20)) ? str(input?.event, 20) : "choose",
+    status: Number.isFinite(Number(input?.status)) ? Math.round(Number(input?.status)) : 0,
+    reason: str(input?.reason, 160).replace(/[^\w .,:;'()/-]/g, ""),
+  }))
+  .handler(async ({ data }): Promise<{ ok: true }> => {
+    (await import("./env.server")).logKeyPresenceOnce();
+    const what = `look ${data.id} “${data.look}” (mode=${data.mode})`;
+    if (data.event === "choose") console.info(`[submit] Choose this look: ${what} → posting to Formcarry`);
+    else if (data.event === "sent") console.info(`[submit] Formcarry ${what}: ${data.status || 200} sent`);
+    else if (data.event === "not-resent") console.info(`[submit] Choose this look: ${what} → already sent for this look; not resent`);
+    else console.warn(`[submit] Formcarry ${what}: FAILED ${data.status || "no status"}${data.reason ? ` (${data.reason})` : ""}`);
+    return { ok: true };
   });
