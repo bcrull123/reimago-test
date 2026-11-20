@@ -1,5 +1,20 @@
 @import "tailwindcss";
 
+/*
+ * --brand default matches BRAND.color in src/lib/brand.ts (the one value a clone edits).
+ * SiteShell sets --brand from that config. Dark / light / glow shades are derived here
+ * so they follow automatically. Do not hard-code the orange hex elsewhere.
+ */
+:root {
+  --brand: #f89800;
+  --brand-dark: color-mix(in srgb, var(--brand) 66%, #3a1600);
+  --brand-light: color-mix(in srgb, var(--brand) 38%, #ffffff);
+  --brand-hover: color-mix(in srgb, var(--brand) 54%, #ffffff);
+  --brand-wash: color-mix(in srgb, var(--brand) 12%, #ffffff);
+  --brand-glow: color-mix(in srgb, var(--brand) 45%, transparent);
+  --brand-shadow: color-mix(in srgb, var(--brand) 55%, #000000);
+}
+
 @theme {
   --font-sans: "Outfit", ui-sans-serif, system-ui, sans-serif;
   --font-display: "Instrument Serif", ui-serif, Georgia, serif;
@@ -12,7 +27,14 @@
   --color-faint: #6d8296;
   --color-primary: #0068e8;
   --color-primary-fg: #ffffff;
-  --color-accent: #f89800;
+  --color-accent: var(--brand);
+  --color-brand: var(--brand);
+  --color-brand-dark: var(--brand-dark);
+  --color-brand-light: var(--brand-light);
+  --color-brand-hover: var(--brand-hover);
+  --color-brand-wash: var(--brand-wash);
+  --color-brand-glow: var(--brand-glow);
+  --color-brand-shadow: var(--brand-shadow);
   --color-border: #d5e0ec;
   --color-ring: #0068e8;
   --color-danger: #c45c4a;

@@ -384,7 +384,7 @@ Bob on aceee96: "It still doesn't have the what would you change box in the rend
 - **Custom Design card:** the two thumbnails ("Design · Grok Imagine" and "Built page · Grok") and their captions are gone. The box takes their place, as on the other cards. `design_mockup_url` still goes to Formcarry and the webhook (`look.custom.mockupUrl`), and the `[imagine]` / `[design]` logs are unchanged.
 - **Full-size rendering:** the look being previewed gets the same box (`data-preview-edit`) between its "Choose this look" bar and the live page. It edits only that look, like the card's own box. The preview pages themselves (`/made/<id>`, "Open full site") ship no JavaScript, so they have no box.
 - **Phone:** under 420 px wide, the field and the Change button stack. The button is primary-colored, at least 6.5rem wide and 44 px tall, with `whitespace-nowrap`, so its label always shows (the e2e checks the label text and size at 390 px).
-- **Build stamp:** the site footer shows `Build <short commit> · <build time> UTC` (`data-build-stamp`). It comes from `BUILD_COMMIT`, `VERCEL_GIT_COMMIT_SHA` or `GITHUB_SHA`, else `git rev-parse --short HEAD`, else the first line of `RELEASE.txt` (currently `r10d`) when the host builds without `.git` or a commit env var, read at build time (`vite.config.ts` `define: __BUILD_STAMP__`). With `npm run dev`, it is read when the server starts.
+- **Build stamp:** the site footer shows `Build <short commit> · <build time> UTC` (`data-build-stamp`). It comes from `BUILD_COMMIT`, `VERCEL_GIT_COMMIT_SHA` or `GITHUB_SHA`, else `git rev-parse --short HEAD`, else the first line of `RELEASE.txt` (currently `r10e`) when the host builds without `.git` or a commit env var, read at build time (`vite.config.ts` `define: __BUILD_STAMP__`). With `npm run dev`, it is read when the server starts.
 
 ### Round 9b: photo changes never "change" to the same photo; keys, timings, Google optional
 
@@ -751,6 +751,25 @@ Build a New Site stays the **quick single page** (name, what it does, area, styl
 - Formcarry and the reply webhook get the extra fields only when they are filled (`extraLeadFields`: `services`, `hours`, `pages`, `phone`, `contact_email`, `address`, `social`, `photo_urls`, `goal`, `features`, and the rest). Photo files are attached as `photos` / `photos_N`. The stand-in webhook accepts these as optional strings.
 
 **Tests:** `src/lib/new-site.test.ts` (round 10d), `src/lib/preview/own-image.test.ts`. E2E: `scripts/more-details-e2e.mjs` (collapsed by default, extras + a photo, three looks, Formcarry fields). Screenshots: `/workspace/live-preview-shots/round10d-details/`. The published footer stamp falls back to `RELEASE.txt` (`r10d`) when the host builds without `.git`.
+
+
+### Round 10e: marketing bubble; white-label header and brand color
+
+The Reimago illustration that sat to the left of the landing form is gone. In its place is a rounded speech-bubble card (`MarketingBubble` in `src/components/marketing-bubble.tsx`) with a short headline and benefit checkmarks. Copy is generic (no product name or logo), so a white-label clone can leave the bubble alone. On a phone the bubble stacks **above** the form; the form is never squeezed beside it. Accents use the brand color.
+- Headline: **FREE to start**
+- Save cost — lower your website bill
+- Update your site automatically, any time you want
+- AI-designed in minutes
+- Domain, email & hosting available
+
+A clone edits **three keys** in `src/lib/brand.ts` (`BRAND`):
+- `name` — domain-name text in the top header (default `"reimago.ai"`, shown as styled text; the last `.…` takes the brand color).
+- `logoUrl` — optional small header logo (default `""`). When set, it appears beside the name at a fixed max height of about 36px (`object-fit: contain`). No large logo slot.
+- `color` — the single brand color (default `#f89800`, the current orange). `SiteShell` sets the `--brand` CSS variable from this. Dark, light, wash, hover, glow and shadow shades are derived in `src/styles.css`. That variable drives the bubble, the mode buttons (selected / unselected / ring), the progress ring (via `accent`), and accent links. Do not hard-code the orange hex elsewhere.
+
+The header/nav logo is this `name` + optional `logoUrl`. The footer illustration is unchanged. Form behavior is unchanged.
+
+**Tests:** `src/lib/brand.test.ts`. E2E/screenshots: `scripts/marketing-bubble-e2e.mjs`. Screenshots: `/workspace/live-preview-shots/round10e/`. Published footer stamp: `RELEASE.txt` (`r10e`) when the host builds without `.git`.
 
 ## Create a New Site: domain first
 

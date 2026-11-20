@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { Link } from "@tanstack/react-router";
 import { ArrowRight } from "lucide-react";
-import { SiteShell, Wordmark } from "@/components/site-shell";
+import { SiteShell } from "@/components/site-shell";
+import { MarketingBubble } from "@/components/marketing-bubble";
 import { ModeChoices, NewSiteForm, type LogoSource, type ModeChoice } from "@/components/new-site-form";
 import { bareHost, briefForFacts, emptyNewSite, extraLeadFields, newSiteProblem, type NewSiteBrief } from "@/lib/new-site";
 import { handOffToCursor } from "@/lib/reimagine.functions";
@@ -907,17 +908,9 @@ export function HomePage() {
         </div>
       ) : null}
       <main>
-        {/* Round 10: one column on phones (the form was squeezed to ~100px beside the 250px wordmark). */}
-        <section className="mx-auto grid w-full max-w-6xl grid-cols-1 items-start gap-5 px-4 py-6 md:grid-cols-[250px_minmax(0,1fr)] md:gap-8 sm:px-6">
-          <div className="mx-auto w-[250px] md:mx-0">
-            <Wordmark className="mx-auto size-[180px] md:size-[250px]" />
-            <h1 className="mt-3 text-center font-display leading-tight">
-              <span className="block text-4xl text-ink">Let AI:</span>
-              <span className="mt-1 block whitespace-nowrap font-display text-[1.75rem] italic text-primary">
-                Reimagine Your Website
-              </span>
-            </h1>
-          </div>
+        {/* Round 10e: marketing bubble left of the form on desktop; stacks above it on phones so the form is never squeezed. */}
+        <section className="mx-auto grid w-full max-w-6xl grid-cols-1 items-start gap-6 px-4 py-6 md:grid-cols-[minmax(16.5rem,19.5rem)_minmax(0,1fr)] md:gap-8 sm:px-6">
+          <MarketingBubble />
           <div className="min-w-0">
             <form onSubmit={onSubmit} className="rounded-2xl border-2 border-primary bg-bg p-4 shadow-[0_18px_40px_-24px_rgba(0,104,232,0.85)] sm:p-6">
               <div className="space-y-4">

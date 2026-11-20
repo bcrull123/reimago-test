@@ -1,5 +1,6 @@
-import type { ReactNode } from "react";
+import type { CSSProperties, ReactNode } from "react";
 import { Link } from "@tanstack/react-router";
+import { BRAND, brandNameParts } from "@/lib/brand";
 
 export function Wordmark({ className = "size-[250px]" }: { className?: string }) {
   return (
@@ -16,12 +17,19 @@ export function Wordmark({ className = "size-[250px]" }: { className?: string })
 const linkClass = "rounded-md px-3 py-2 text-sm text-white/80 hover:text-accent";
 
 export function SiteShell({ children }: { children: ReactNode }) {
+  const { head, mark } = brandNameParts();
   return (
-    <div className="min-h-screen bg-bg text-fg">
+    <div className="min-h-screen bg-bg text-fg" style={{ ["--brand" as string]: BRAND.color } as CSSProperties}>
       <header className="bg-ink text-white">
         <div className="mx-auto flex max-w-6xl items-center justify-between gap-3 px-4 py-3 sm:px-6">
-          <Link to="/" className="text-lg font-semibold tracking-tight text-white sm:text-xl">
-            reimago<span className="text-accent">.ai</span>
+          <Link to="/" className="inline-flex items-center gap-2 text-lg font-semibold tracking-tight text-white sm:text-xl" data-site-header-brand>
+            {BRAND.logoUrl ? (
+              <img src={BRAND.logoUrl} alt="" width={120} height={36} className="h-8 w-auto max-h-9 max-w-[9rem] object-contain object-left sm:h-9" />
+            ) : null}
+            <span>
+              {head}
+              {mark ? <span className="text-accent">{mark}</span> : null}
+            </span>
           </Link>
           <nav className="flex items-center gap-1 sm:gap-2">
             <Link to="/" hash="how-it-works" className={linkClass}>

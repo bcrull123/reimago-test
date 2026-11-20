@@ -347,8 +347,8 @@ function LogoField(props: {
 }
 
 /**
- * The two big choices at the top of the form (Bob's copy). Orange buttons, not checkboxes: the chosen one turns a
- * deeper orange with white text, a ring and a shadow; the other stays light orange with dark text.
+ * The two big choices at the top of the form (Bob's copy). Brand-colored buttons, not checkboxes: the chosen one turns a
+ * deeper shade with white text, a ring and a shadow; the other stays a light tint with dark text. Colors come from `--brand`.
  * A radio group for screen readers and keyboards (arrow keys move between the two).
  */
 export type ModeChoice = "reimagine" | "newsite";
@@ -383,8 +383,8 @@ export function ModeChoices({ value, onChange }: { value: ModeChoice | null; onC
             }}
             className={`flex min-h-24 flex-col items-start justify-center rounded-xl px-5 py-4 text-left transition duration-150 ease-out focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-primary/50 active:scale-[0.98] ${
               selected
-                ? "bg-[#a65400] text-white shadow-[0_10px_24px_-10px_rgba(150,70,0,0.9)] ring-4 ring-[#f89800]/45"
-                : "bg-[#fdd9a0] text-ink hover:bg-[#fcc978]"
+                ? "bg-brand-dark text-white shadow-[0_10px_24px_-10px_var(--brand-shadow)] ring-4 ring-brand/45"
+                : "bg-brand-light text-ink hover:bg-brand-hover"
             }`}
           >
             <span className={`font-display text-xl font-semibold leading-tight sm:text-2xl ${selected ? "text-white" : "text-ink"}`}>{choice.title}</span>
