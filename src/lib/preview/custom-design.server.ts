@@ -33,6 +33,7 @@ import { BODY_FONTS, HEADING_FONTS, readablePalette, safeFont } from "./design.t
 import { heroBrief } from "./hero-brief.ts";
 import { realServices } from "./image-prompts.ts";
 import { latestRequest } from "./owner-request.ts";
+import { signatureSubject } from "./signature-hero.server.ts";
 import type { StoredSite } from "./render.ts";
 import type { DesignDirection, SiteFacts, SitePalette } from "./types.ts";
 
@@ -95,6 +96,13 @@ export async function prepareCustomPhotos(site: StoredSite): Promise<boolean> {
   const first = site.pages[0]?.sections?.[0];
   const from = first?.type.startsWith("hero") && first.image ? images[first.image] : undefined;
   if (!from || from.name === "logo") return sig;
+  // Round 10 (Bob): a one-photo site's only photo is already the Editorial hero; with Grok Imagine on, the Custom
+  // Design gets its own hero art instead of repeating it (the photo can still appear further down the page).
+  const ownPassing = Object.values(images).filter((i) => /^photo-\d+$/.test(i.name) && i.source === "photo" && i.gate !== "failed").length;
+  if (from.source === "photo" && ownPassing <= 1 && imagineDesignEnabled()) {
+    console.info(`[design] one usable photo on the site (already another look's hero): the Custom Design hero is Grok Imagine art, not a repeat`);
+    return sig;
+  }
   const { readImage, saveImage } = await import("@/lib/pages.server");
   const img = await readImage(site.id, from.name).catch(() => undefined);
   if (!img) return sig;
@@ -341,7 +349,7 @@ function readAssets(raw: unknown): Asset[] {
     .map(({ want, ...a }) => ({ ...a, name: /^art-[12]$/.test(want) ? want : a.name }));
 }
 
-type PlannedArt = { name: string; prompt: string; aspect: "1:1" | "4:3" | "16:9" | "3:4"; alt: string };
+type PlannedArt = { name: string; prompt: string; aspect: "1:1" | "4:3" | "16:9" | "3:4"; alt: string; reimagines?: string };
 
 /**
  * Imagine art that fills the gaps the site's own assets leave (Bob: Imagine, not Google, for the Custom Design):
@@ -359,6 +367,18 @@ function planArt(site: StoredSite, ctx: CustomContext, brief: CustomBrief): Plan
   const out: PlannedArt[] = [];
   if (!ownHero && !sig) {
     out.push({ name: "hero", aspect: "16:9", alt: `${brief.concept}: ${brief.metaphor}`.slice(0, 120), prompt: `The hero artwork of the homepage design (the main picture area of the attached mockup), for ${ctx.name} (${ctx.kind}): ${brief.metaphor}. ${brief.illustration ?? ""}${request} ${style}` });
+  } else if (!ownHero && sig && !(hero?.imagine && hero.reimagined)) {
+    // Round 10 (Bob): the signature graphic is the site's only strong asset, so the Custom Design gets its OWN
+    // reimagined version as the hero (like the template looks), not the flat original file. The original stays the
+    // fallback when Imagine fails.
+    const subject = signatureSubject(sig.alt, "signature graphic");
+    out.push({
+      name: "hero",
+      aspect: "16:9",
+      alt: `${ctx.name}'s ${subject}, reimagined`.slice(0, 120),
+      reimagines: subject,
+      prompt: `REIMAGINE THE SIGNATURE: the attached signature graphic (${sig.alt}) of ${ctx.name} (${ctx.kind}) as the dramatic hero artwork of a ${brief.mood} website for ${ctx.name}, a ${subject} reimagined: same identity, shapes and colors as the original, more cinematic and dimensional, set in a scene from its story (motion, light, depth), with calm space for a headline.${request} ${style}`,
+    });
   }
   const themes = sig
     ? [`the world around the signature graphic (${sig.alt}): motion, trails, scenery and small elements from its story, without the graphic itself`, `a pattern / texture built from the signature graphic's shapes and colors`]
@@ -432,6 +452,12 @@ function photoLineFor(site: StoredSite, html: string): string | undefined {
   const own = Object.values(imgs).filter((i) => i.source === "photo" && !i.signature && i.name !== "logo" && uses(i.name)).length;
   if (imgs.hero?.kept && uses("hero")) return undefined; // "kept your rocket" from the template step stays
   const parts: string[] = [];
+  if (imgs.hero?.reimagined && imgs.hero.imagine && uses("hero")) {
+    const more = Object.values(imgs).filter((i) => i.imagine && i.name !== "hero" && uses(i.name)).length;
+    parts.push(`Art: your ${imgs.hero.reimagined}, reimagined by Grok Imagine${more ? `, with ${more} more piece${more === 1 ? "" : "s"} of art for this design` : ""}`);
+    if (own) parts.push(`Photo${own === 1 ? "" : "s"}: your site's own (${own})`);
+    return parts.join(" · ");
+  }
   if (imgs["brand-art"] && uses("brand-art")) parts.push(`Art: your site's own ${imgs["brand-art"].alt.slice(0, 40)}${art ? `, with ${art} piece${art === 1 ? "" : "s"} of art created by Grok Imagine for this design` : ""}`);
   else if (art && !(imgs.hero && !imgs.hero.imagine && uses("hero"))) parts.push("Art: created by Grok Imagine for this design");
   if (imgs.hero?.temporary && uses("hero")) parts.push("Photo: from Google Images (Grok Imagine was unavailable; preview only)");
@@ -469,7 +495,8 @@ export async function designCustom(site: StoredSite, deadline: number, mockup?: 
   })();
   const mockupUri = mockup ? `data:${mockup.mockup.type};base64,${mockup.bytes.toString("base64")}` : undefined;
   const artJob = makeArt(site, planned, [mockupUri, sigRef].filter((x): x is string => Boolean(x)), deadline);
-  if (planned.length) ctx = { ...ctx, images: [...ctx.images.filter((i) => !planned.some((p) => p.name === i.name)), ...planned.map((p) => ({ name: p.name, alt: p.alt, kind: "imagine art" as const }))] };
+  const sigHero = planned.find((p) => p.name === "hero" && p.reimagines);
+  if (planned.length) ctx = { ...ctx, images: [...ctx.images.filter((i) => !planned.some((p) => p.name === i.name) && !(sigHero && i.kind === "the business's signature graphic")), ...planned.map((p) => ({ name: p.name, alt: p.alt, kind: "imagine art" as const }))] };
   const artReady = planned.length > 0;
   // The mockup's real colors (server-side pixel sampling) go into the prompt and the fidelity check.
   let colors: MockupColors | undefined;
@@ -515,6 +542,21 @@ export async function designCustom(site: StoredSite, deadline: number, mockup?: 
   if (!first) return { reason: "Grok did not return a page in time" };
   // Planned art that failed: its tags are dropped; a failed hero artwork -> Google Images, the last resort.
   const missing = planned.map((p) => p.name).filter((n) => !madeArt.includes(n));
+  if (sigHero && madeArt.includes("hero") && site.images?.hero) {
+    site.images = { ...site.images, hero: { ...site.images.hero, reimagined: sigHero.reimagines } };
+    console.info(`[imagine] custom design hero: your ${sigHero.reimagines}, reimagined by Grok Imagine (the original stays the fallback)`);
+  }
+  // A failed reimagining falls back to the original signature graphic (the real file), never Google Images.
+  if (sigHero && missing.includes("hero") && site.images?.["brand-art"]) {
+    const { readImage, saveImage } = await import("@/lib/pages.server");
+    const img = await readImage(site.id, "brand-art").catch(() => undefined);
+    if (img) {
+      await saveImage(site.id, "hero", img.type, img.bytes);
+      site.images = { ...site.images, hero: { ...site.images["brand-art"], name: "hero" } };
+      missing.splice(missing.indexOf("hero"), 1);
+      console.info(`[imagine] custom design hero: reimagining your ${sigHero.reimagines} failed; the original file is the hero`);
+    }
+  }
   if (missing.includes("hero") && (await googleHero(site, deadline))) missing.splice(missing.indexOf("hero"), 1);
   if (missing.length) {
     first = dropMissing(first, missing);

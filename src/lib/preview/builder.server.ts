@@ -1001,9 +1001,14 @@ export async function buildLook(
         if (option) first = option;
       }
     }
-    const taken = (o: (typeof pool)[number]) => !design.custom && siteOwner.has(urlOf(o)) && siteOwner.get(urlOf(o)) !== index;
+    // Round 10: the Custom Design never repeats a photo another look already uses as its hero (a one-photo site's
+    // Editorial photo): with Grok Imagine on it gets its own art instead; with Imagine off it may share.
+    const taken = (o: (typeof pool)[number]) => (!design.custom || imagineFirst) && siteOwner.has(urlOf(o)) && siteOwner.get(urlOf(o)) !== index;
     const passing = pool.filter((o) => !failed.has(urlOf(o)) && !taken(o));
-    const order: Option[] = [...(first ? [first] : []), ...passing.slice(rank), ...passing.slice(0, rank)].filter((o) => !imagineFirst || "own" in o || "siteUrl" in o);
+    const firstUrl = first ? ("siteUrl" in first ? first.siteUrl : "own" in first ? urlOf(first) : "") : "";
+    const firstTaken = Boolean(design.custom && imagineFirst && firstUrl && siteOwner.has(firstUrl) && siteOwner.get(firstUrl) !== index);
+    if (firstTaken) console.info(`[photo] look ${index + 1} "${design.name}": your site's photo is already another look's hero, so Grok Imagine makes this design's own art`);
+    const order: Option[] = [...(first && !firstTaken ? [first] : []), ...passing.slice(rank), ...passing.slice(0, rank)].filter((o) => !imagineFirst || "own" in o || "siteUrl" in o);
     const picked = (option: Option) => (option === first && mine ? ` · picked for this look: ${mine.reason}` : first ? " · (assigned photo unavailable; next in the pool)" : "");
     const sitePassed = (pre.site ?? []).filter((c) => !failed.has(c.id)).length;
     const whyNoSite = () =>

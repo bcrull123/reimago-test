@@ -195,6 +195,8 @@ export type StoredImage = {
   shows?: string;
   /** The site's signature brand graphic (mascot / illustration, a transparent cutout), e.g. bob.me's rocket. */
   signature?: boolean;
+  /** Round 10: Imagine art that reimagines the site's signature graphic (its subject, e.g. "rocket"). */
+  reimagined?: string;
   /** Made by Grok Imagine for the Custom Design (hero art, supporting art). */
   imagine?: boolean;
   /** Round 9b: where a site photo came from (its address on the owner's site), so a photo change can skip it. */
