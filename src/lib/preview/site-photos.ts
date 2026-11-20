@@ -82,12 +82,12 @@ export function sitePhotoRefs(facts: Pick<SiteFacts, "images" | "imageText" | "s
       skip("logo");
       continue;
     }
-    if (!/^https:\/\//.test(a.url)) continue;
+    if (!/^https?:\/\//.test(a.url)) continue;
     raw.push({ url: a.url, label: a.label, home: a.home, page: a.page, from: a.kind, declared: a.width && a.height ? Math.min(a.width, a.height) : undefined, i });
   }
   for (const url of facts.images ?? []) {
     i += 1;
-    if (!/^https:\/\//.test(url)) continue;
+    if (!/^https?:\/\//.test(url)) continue;
     raw.push({ url, label: facts.imageText?.[url] ?? "", home: true, page: facts.sourceUrl, from: "img", i });
   }
   const seen = new Map<string, SitePhotoRef & { declared?: number; i: number }>();

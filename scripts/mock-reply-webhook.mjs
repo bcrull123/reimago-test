@@ -13,7 +13,7 @@ const expectAuth = process.env.EXPECT_AUTH ?? "";
 const log = process.env.MOCK_WEBHOOK_LOG ?? "/tmp/mock-reply-webhook.jsonl";
 let failFirst = Number(process.env.MOCK_WEBHOOK_FAIL_FIRST ?? 0);
 /** Optional fields: design_mockup_url (Custom Design), mode (round 10), and new-site details (mode=new_site). */
-const OPTIONAL = ["design_mockup_url", "mode", "business_name", "domain_choice", "domain"];
+const OPTIONAL = ["design_mockup_url", "mode", "business_name", "domain_choice", "domain", "industry", "customers", "services", "pages", "goal", "features", "brand_color", "phone", "contact_email", "address", "hours", "social", "existing_site", "emulate_url_1", "emulate_url_2", "emulate_url_3", "emulate_note", "copy_text", "anything_else", "files_link", "video_link", "photo_urls"];
 const FIELDS = ["submission_id", "email", "website", "note", "preview_url", "preview_pages", "chosen_look", "change_requests", "picture_url", "picture_error", "submitted_at"];
 
 createServer((req, res) => {

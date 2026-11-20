@@ -34,8 +34,32 @@ export type ReplyPayload = {
   business_name?: string;
   domain_choice?: string;
   domain?: string;
+  /** Round 10d: optional extra details from "Add more details" (only the ones the owner filled). */
+  industry?: string;
+  customers?: string;
+  services?: string;
+  pages?: string;
+  goal?: string;
+  features?: string;
+  brand_color?: string;
+  phone?: string;
+  contact_email?: string;
+  address?: string;
+  hours?: string;
+  social?: string;
+  existing_site?: string;
+  emulate_url_1?: string;
+  emulate_url_2?: string;
+  emulate_url_3?: string;
+  emulate_note?: string;
+  copy_text?: string;
+  anything_else?: string;
+  files_link?: string;
+  video_link?: string;
+  photo_urls?: string;
   submitted_at: string;
 };
+
 
 export type ReplyResult = { sent: boolean; skipped?: boolean; status?: number; attempts: number; error?: string };
 

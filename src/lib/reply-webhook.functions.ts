@@ -1,4 +1,5 @@
 import { createServerFn } from "@tanstack/react-start";
+import { EXTRA_LEAD_KEYS } from "@/lib/new-site";
 
 /**
  * "Choose this look" → Email Bot's instant-reply webhook (see reply-webhook.server.ts). Called by the browser
@@ -7,6 +8,17 @@ import { createServerFn } from "@tanstack/react-start";
  */
 const str = (value: unknown, max: number) => (typeof value === "string" ? value.trim().slice(0, max) : "");
 const list = (value: unknown, count: number, max: number) => (Array.isArray(value) ? value.map((v) => str(v, max)).filter(Boolean).slice(0, count) : []);
+const clampDetails = (value: unknown): Record<string, string> => {
+  if (!value || typeof value !== "object") return {};
+  const raw = value as Record<string, unknown>;
+  const out: Record<string, string> = {};
+  for (const key of EXTRA_LEAD_KEYS) {
+    const v = str(raw[key], 2000);
+    if (v) out[key] = v;
+  }
+  return out;
+};
+
 
 export const notifyReplyWebhook = createServerFn({ method: "POST" })
   .validator((input: Record<string, unknown>) => {
@@ -28,7 +40,9 @@ export const notifyReplyWebhook = createServerFn({ method: "POST" })
       businessName: str(input?.businessName, 120),
       domainChoice: str(input?.domainChoice, 20),
       domain: str(input?.domain, 200),
+      details: clampDetails(input?.details),
     };
+
   })
   .handler(async ({ data }): Promise<{ ok: boolean; skipped?: boolean; status?: number }> => {
     (await import("./env.server")).logKeyPresenceOnce();
@@ -66,7 +80,7 @@ export const notifyReplyWebhook = createServerFn({ method: "POST" })
       // The Custom Design look: the Grok Imagine mockup it was built from (empty for template looks).
       design_mockup_url: site.custom?.mockup && !site.design?.custom?.failed ? `${publicBase()}/made/${data.id}/img/mockup` : "",
       mode: data.mode,
-      ...(data.mode === "new_site" ? { business_name: data.businessName, domain_choice: data.domainChoice, domain: data.domain } : {}),
+      ...(data.mode === "new_site" ? { business_name: data.businessName, domain_choice: data.domainChoice, domain: data.domain, ...data.details } : {}),
       submitted_at: new Date().toISOString(),
     });
     if (!result.sent) console.warn(`[reply-webhook] look ${data.id} (${data.mode}): not delivered (${result.status ?? result.error ?? "no answer"}, ${result.attempts} attempt${result.attempts === 1 ? "" : "s"})`);

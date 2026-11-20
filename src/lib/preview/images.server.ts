@@ -51,6 +51,14 @@ const photoCache = new Map<string, { at: number; photo: Photo | null }>();
 export async function fetchPhoto(url: string): Promise<Photo | null> {
   const cached = photoCache.get(url);
   if (cached && Date.now() - cached.at < 15 * 60_000) return cached.photo;
+  const own = await ownStoredImage(url);
+  if (own) {
+    const type = sniffImageType(own.bytes);
+    const size = imageSize(own.bytes);
+    const photo = size && /^image\/(jpeg|png|webp)$/.test(type) ? { url, bytes: own.bytes, type, ...size } : null;
+    photoCache.set(url, { at: Date.now(), photo });
+    return photo;
+  }
   let photo: Photo | null = null;
   try {
     const { assertPublic, readCapped } = await import("@/lib/reimagine.server");
@@ -89,20 +97,19 @@ export type LogoFile = { bytes: Buffer; type: string; url: string };
  * asks for PNG/JPEG first — WebP/AVIF can't be read by the pure-JS analyser. SVG is returned as text bytes.
  * Returns null when the logo can't be loaded (then the business name is shown instead).
  */
-/** Round 10: an image this app stored itself (an uploaded logo), read from the store instead of over the network. */
+/** An image this app stored itself (uploaded logo/photos, AI logos), read from the store instead of the network. */
 async function ownStoredImage(url: string): Promise<{ bytes: Buffer; type: string } | undefined> {
-  const m = url.match(/^https?:\/\/([^/]+)\/made\/([a-f0-9]{16})\/img\/(upload-logo)$/);
-  if (!m) return undefined;
-  const { publicBase } = await import("@/lib/publish.server");
-  let ours = false;
+  const { parseOwnStoredImage } = await import("./own-image");
+  const parsed = parseOwnStoredImage(url);
+  if (!parsed) return undefined;
   try {
-    ours = new URL(publicBase()).host === m[1];
+    const { publicBase } = await import("@/lib/publish.server");
+    if (new URL(publicBase()).host !== parsed.host) return undefined;
   } catch {
-    ours = false;
+    // No request context (tests): the store is local to this process.
   }
-  if (!ours) return undefined;
   const { readImage } = await import("@/lib/pages.server");
-  return (await readImage(m[2]!, m[3]!).catch(() => undefined)) ?? undefined;
+  return (await readImage(parsed.id, parsed.name).catch(() => undefined)) ?? undefined;
 }
 
 export async function fetchLogoFile(url: string): Promise<LogoFile | null> {

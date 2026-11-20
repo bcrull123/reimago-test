@@ -384,7 +384,7 @@ Bob on aceee96: "It still doesn't have the what would you change box in the rend
 - **Custom Design card:** the two thumbnails ("Design · Grok Imagine" and "Built page · Grok") and their captions are gone. The box takes their place, as on the other cards. `design_mockup_url` still goes to Formcarry and the webhook (`look.custom.mockupUrl`), and the `[imagine]` / `[design]` logs are unchanged.
 - **Full-size rendering:** the look being previewed gets the same box (`data-preview-edit`) between its "Choose this look" bar and the live page. It edits only that look, like the card's own box. The preview pages themselves (`/made/<id>`, "Open full site") ship no JavaScript, so they have no box.
 - **Phone:** under 420 px wide, the field and the Change button stack. The button is primary-colored, at least 6.5rem wide and 44 px tall, with `whitespace-nowrap`, so its label always shows (the e2e checks the label text and size at 390 px).
-- **Build stamp:** the site footer shows `Build <short commit> · <build time> UTC` (`data-build-stamp`). It comes from `BUILD_COMMIT`, `VERCEL_GIT_COMMIT_SHA` or `GITHUB_SHA`, else `git rev-parse --short HEAD`, read at build time (`vite.config.ts` `define: __BUILD_STAMP__`). With `npm run dev`, it is read when the server starts.
+- **Build stamp:** the site footer shows `Build <short commit> · <build time> UTC` (`data-build-stamp`). It comes from `BUILD_COMMIT`, `VERCEL_GIT_COMMIT_SHA` or `GITHUB_SHA`, else `git rev-parse --short HEAD`, else the first line of `RELEASE.txt` (currently `r10d`) when the host builds without `.git` or a commit env var, read at build time (`vite.config.ts` `define: __BUILD_STAMP__`). With `npm run dev`, it is read when the server starts.
 
 ### Round 9b: photo changes never "change" to the same photo; keys, timings, Google optional
 
@@ -742,6 +742,16 @@ Beside the optional logo upload is a **Have AI make one** link (`LogoField` in `
 
 **Tests:** `src/lib/preview/ai-logo.test.ts`. E2E: `scripts/ai-logo-e2e.mjs` (hint, ring, three tiles including a wordmark, pick, three looks, Formcarry `logo_source=ai`). Screenshots: `/workspace/live-preview-shots/round10b-logo/`.
 
+
+### Round 10d: Add more details (optional expander)
+
+Build a New Site stays the **quick single page** (name, what it does, area, style, logo, domain). An **Add more details** link (`MoreDetails` in `src/components/more-details.tsx`) is collapsed by default. Opening it brings back the useful optional fields from the old step-by-step wizard, for anyone with more to enter. Nothing is required, and nothing is tied to one kind of business.
+- Fields: services/offerings (one per line), pages you want (chips), phone, business email, address, hours, social links (one per line), photo uploads (PNG/JPG/WebP, up to 12, stored by `previewUploadPhotos`), main goal and features (chips), industry, who you serve, brand color, current website, up to three sites you like plus a note, words you already use, anything else, and optional file/video links.
+- Whatever they enter is mapped by `briefForFacts` / `factsFromBrief` into the same `SiteFacts` the looks already use: services and copy, the contact block (phone, email, address, hours), footer social links, planned pages, and their uploaded photos in `facts.images` (preferred over Imagine art, same as a scraped site's own photos). Uploaded and AI logos are recognized as this app's stored images (`own-image.ts`) and read from the store, not over the network.
+- Formcarry and the reply webhook get the extra fields only when they are filled (`extraLeadFields`: `services`, `hours`, `pages`, `phone`, `contact_email`, `address`, `social`, `photo_urls`, `goal`, `features`, and the rest). Photo files are attached as `photos` / `photos_N`. The stand-in webhook accepts these as optional strings.
+
+**Tests:** `src/lib/new-site.test.ts` (round 10d), `src/lib/preview/own-image.test.ts`. E2E: `scripts/more-details-e2e.mjs` (collapsed by default, extras + a photo, three looks, Formcarry fields). Screenshots: `/workspace/live-preview-shots/round10d-details/`. The published footer stamp falls back to `RELEASE.txt` (`r10d`) when the host builds without `.git`.
+
 ## Create a New Site: domain first
 
 (Round 10: the home page no longer shows this wizard; "Build a New Site" replaced it. Kept for reference.)
@@ -820,12 +830,12 @@ The old domain step (step 12) is gone. Wizard answers are kept in memory only (s
 - `src/lib/preview/design.ts`: curated fonts, archetype presets, palette contrast fixes, `normalizeDirection`.
 - `src/lib/preview/sections.ts`: section types, validation (`normalizeSections`), mock composer, HTML templates.
 - `src/lib/preview/theme.ts`: the design-system CSS. `legacy-theme.ts` keeps old (v2) previews rendering.
-- `src/lib/preview/images.server.ts`: real-photo selection/storage and generated images.
+- `src/lib/preview/images.server.ts`: real-photo selection/storage and generated images. `own-image.ts` recognizes `/made/<id>/img/<name>` URLs this app stored (logos and owner photos) so they are read from the store.
 - `src/lib/preview/look-variety.ts`: makes the three looks different (hero treatment, header, buttons, footer, section recipe), plus the distinctness check.
 - `src/lib/preview/image-prompts.ts`: image prompts (the owner's scene first) and the card's photo line. `web-photo.ts` handles place, scene words, search words, matching, licenses, ranking and hero suitability of scraped photos (pure). `web-photo.server.ts` runs the Openverse and Commons search and the download. `google-photo.ts` (pure: queries, filters, scoring, the temporary-photo metadata) and `google-photo.server.ts` (Serper or proxy search, cache, download, vision pick) handle Google Images; `photo-search-endpoint.server.ts` + `src/routes/api.photo-search.ts` are the master's endpoint for clones. `site-art.ts` collects and matches all of a site's imagery and sanitizes inline SVG (pure). `keep-art.server.ts` finds the owner's own picture to keep (words, then AI vision) and checks whether it is a cutout.
 - `src/lib/preview/critique.server.ts`: screenshot + critique-and-revise.
 - `src/lib/preview/builder.server.ts`: plan, directions, `buildLook`, `finishSite`.
-- `src/lib/preview.functions.ts`: server functions `previewRead`, `previewFromBrief`, `previewDirections`, `previewLook`, `previewFinish`, `previewUploadLogo`, `previewMakeLogos`.
+- `src/lib/preview.functions.ts`: server functions `previewRead`, `previewFromBrief`, `previewDirections`, `previewLook`, `previewFinish`, `previewUploadLogo`, `previewUploadPhotos`, `previewMakeLogos`.
 - `src/lib/preview/photo-queries.ts`: the planner's proactive Google Images queries (clean + no-AI defaults). `hero-brief.ts` (pure: business type -> what a good hero is, off-topic words, search scenes, the generic low-quality list). `hero-pick.ts` (pure: quality bar, pixel stats, perceptual hash, sign/subject words, hero score, mood fit, the three-look assignment) and `hero-pick.server.ts` (decoding photos, the site's photos as candidates).
 - `src/lib/preview/look-edit.ts` (pure: which look, which tweaks, OKLCH palette tuning with AA, CSS, labels) and `look-edit.server.ts` (Grok edit planner, photo luma, building the edited looks).
 - `src/lib/preview/custom-design.ts` (pure: brief fallback, prompts, HTML/CSS sanitizer, `validateCustom` checks, palette vars) and `custom-design.server.ts` (`creativeBrief`, `designCustom` draft → checks → one repair → fallback, `editCustom`). `render.ts` `customDocument` serves the custom homepage.

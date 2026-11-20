@@ -1,6 +1,7 @@
 /** Re-validate facts/plans that round-trip through the browser between steps. */
 import type { SiteFacts, SitePlan } from "@/lib/preview/types";
 import { cleanFeedback } from "@/lib/preview/owner-request";
+import { isOwnStoredImageUrl } from "@/lib/preview/own-image";
 
 const str = (value: unknown, max: number) => (typeof value === "string" ? value.trim().slice(0, max) : "");
 const strs = (value: unknown, count: number, max: number) =>
@@ -8,6 +9,11 @@ const strs = (value: unknown, count: number, max: number) =>
 const https = (value: unknown) => {
   const v = str(value, 600);
   return /^https:\/\/[^\s"'<>]+$/.test(v) ? v : "";
+};
+/** https URLs, plus this app's own stored images (which may be http on localhost). */
+const storedOrHttps = (value: unknown) => {
+  const v = str(value, 600);
+  return isOwnStoredImageUrl(v) || /^https:\/\/[^\s"'<>]+$/.test(v) ? v : "";
 };
 
 const ART_KINDS = new Set(["img", "picture", "svg", "css", "og", "logo"]);
@@ -49,7 +55,7 @@ export function clampFacts(input: unknown): SiteFacts {
     name,
     tagline: str(f.tagline, 160),
     description: str(f.description, 500),
-    logo: https(f.logo),
+    logo: storedOrHttps(f.logo),
     colors: strs(f.colors, 4, 7).filter((c) => /^#[0-9a-fA-F]{6}$/.test(c)),
     phone: str(f.phone, 40),
     email: str(f.email, 200),
@@ -61,10 +67,10 @@ export function clampFacts(input: unknown): SiteFacts {
       .map((t) => ({ quote: str((t as Record<string, unknown>)?.quote, 500), author: str((t as Record<string, unknown>)?.author, 80) }))
       .filter((t) => t.quote)
       .slice(0, 4),
-    images: (Array.isArray(f.images) ? f.images : []).map(https).filter(Boolean).slice(0, 12),
+    images: (Array.isArray(f.images) ? f.images : []).map(storedOrHttps).filter(Boolean).slice(0, 12),
     imageText: Object.fromEntries(
       Object.entries(f.imageText && typeof f.imageText === "object" ? (f.imageText as Record<string, unknown>) : {})
-        .map(([u, t]) => [https(u), str(t, 160)] as const)
+        .map(([u, t]) => [storedOrHttps(u), str(t, 160)] as const)
         .filter(([u, t]) => u && t)
         .slice(0, 12),
     ),

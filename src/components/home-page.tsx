@@ -3,12 +3,12 @@ import { Link } from "@tanstack/react-router";
 import { ArrowRight } from "lucide-react";
 import { SiteShell, Wordmark } from "@/components/site-shell";
 import { ModeChoices, NewSiteForm, type LogoSource, type ModeChoice } from "@/components/new-site-form";
-import { bareHost, briefForFacts, emptyNewSite, newSiteProblem, type NewSiteBrief } from "@/lib/new-site";
+import { bareHost, briefForFacts, emptyNewSite, extraLeadFields, newSiteProblem, type NewSiteBrief } from "@/lib/new-site";
 import { handOffToCursor } from "@/lib/reimagine.functions";
 import { checkSiteReachable, recordRenderTime, renderAverage } from "@/lib/preview.functions";
 import { ProgressRing, RotatingStatus } from "@/components/progress-ring";
 import { statusLines } from "@/lib/status-copy";
-import { cursorStatus, previewCustom, previewDirections, previewImagine, previewFinish, previewFromBrief, previewLook, previewRead, previewRefine, previewRetryAi, previewUploadLogo, savePreviewPicture } from "@/lib/preview.functions";
+import { cursorStatus, previewCustom, previewDirections, previewImagine, previewFinish, previewFromBrief, previewLook, previewRead, previewRefine, previewRetryAi, previewUploadLogo, previewUploadPhotos, savePreviewPicture } from "@/lib/preview.functions";
 import { capturePreviewPicture, pictureFileName } from "@/lib/preview-picture";
 import { logSubmit, notifyReplyWebhook } from "@/lib/reply-webhook.functions";
 import { LivePreview } from "@/components/live-preview";
@@ -84,7 +84,7 @@ const CHOOSE_PROMPT = "Your looks are ready below. Choose the one you like and w
  */
 type PendingLead =
   | { kind: "reimagine"; email: string; website: string; note: string; gotcha: string }
-  | { kind: "new_site"; email: string; gotcha: string; brief: NewSiteBrief; logo: File | null; logoUrl: string; logoSource: LogoSource };
+  | { kind: "new_site"; email: string; gotcha: string; brief: NewSiteBrief; logo: File | null; logoUrl: string; logoSource: LogoSource; photos: File[]; photoUrls: string[] };
 
 /** The screenshot sent with the form as `picture` (plus `picture_url` when stored, or `picture_error`). */
 type PictureFields = { file?: File; url?: string; error?: string };
@@ -185,6 +185,8 @@ async function submitNewSite(
   logo: File | null,
   logoUrl: string,
   logoSource: LogoSource,
+  photos: File[],
+  photoUrls: string[],
   chosen?: { previewUrl: string; previewPages: string[]; chosenLook: string; changeRequests?: string[]; picture?: PictureFields },
 ): Promise<void> {
   const data = new FormData();
@@ -203,6 +205,11 @@ async function submitNewSite(
   if (logoUrl) data.append("logo_url", logoUrl);
   if (logo && logo.size < 10_000_000) data.append("logo", logo, logo.name);
   if (logoSource && (logoUrl || logo)) data.append("logo_source", logoSource);
+  const extras = extraLeadFields(brief, photoUrls);
+  for (const [key, value] of Object.entries(extras)) data.append(key, value);
+  photos.slice(0, 12).forEach((file, i) => {
+    if (file.size < 10_000_000) data.append(i === 0 ? "photos" : `photos_${i + 1}`, file, file.name);
+  });
   data.append("preview_url", chosen?.previewUrl ?? "");
   if (chosen) {
     data.append("preview_pages", chosen.previewPages.join("\n"));
@@ -220,6 +227,9 @@ export function HomePage() {
   const [newLogo, setNewLogo] = useState<File | null>(null);
   const [newLogoUrl, setNewLogoUrl] = useState("");
   const [logoSource, setLogoSource] = useState<LogoSource>("");
+  const [newPhotos, setNewPhotos] = useState<File[]>([]);
+  const [photoUrls, setPhotoUrls] = useState<string[]>([]);
+
   const [siteFocused, setSiteFocused] = useState(false);
   const [email, setEmail] = useState("");
   const [notes, setNotes] = useState("");
@@ -455,7 +465,14 @@ export function HomePage() {
           website: domain,
           note: form.kind === "reimagine" ? form.note : form.brief.style,
           mode: form.kind === "new_site" ? "new_site" : "reimagine",
-          ...(form.kind === "new_site" ? { businessName: form.brief.business_name, domainChoice: form.brief.domain_choice, domain: form.brief.domain_choice === "have" ? bareHost(form.brief.domain) : "" } : {}),
+          ...(form.kind === "new_site"
+            ? {
+                businessName: form.brief.business_name,
+                domainChoice: form.brief.domain_choice,
+                domain: form.brief.domain_choice === "have" ? bareHost(form.brief.domain) : "",
+                details: extraLeadFields(form.brief, form.photoUrls),
+              }
+            : {}),
           previewUrl,
           previewPages,
           chosenLook: chosenLookName,
@@ -467,7 +484,7 @@ export function HomePage() {
         if (form.kind === "reimagine") {
           await submitFormcarry({ email: form.email, website: form.website, note: form.note, gotcha: form.gotcha, previewUrl, previewPages, chosenLook: chosenLookName, changeRequests: feedback, picture, designMockupUrl: look.custom?.mockupUrl });
         } else {
-          await submitNewSite(form.email, form.gotcha, form.brief, form.logo, form.logoUrl, form.logoSource, { previewUrl, previewPages, chosenLook: chosenLookName, changeRequests: feedback, picture });
+          await submitNewSite(form.email, form.gotcha, form.brief, form.logo, form.logoUrl, form.logoSource, form.photos, form.photoUrls, { previewUrl, previewPages, chosenLook: chosenLookName, changeRequests: feedback, picture });
         }
         pending.sent = true;
         void logSubmit({ data: { id: look.id, mode: leadMode, look: lookName, event: "sent", status: 200 } }).catch(() => undefined);
@@ -604,15 +621,35 @@ export function HomePage() {
         const up = await previewUploadLogo({ data: { image: dataUrl }, signal }).catch(() => undefined);
         if (up?.ok) logoUrl = up.url;
       }
+      let photosStored = photoUrls;
+      const pendingPhotos = newPhotos.filter((f) => /^image\/(png|jpeg|webp)$/.test(f.type) && f.size <= 2_500_000).slice(0, 12);
+      if (pendingPhotos.length) {
+        const images = await Promise.all(
+          pendingPhotos.map(
+            (file) =>
+              new Promise<string>((resolve, reject) => {
+                const reader = new FileReader();
+                reader.onload = () => resolve(String(reader.result ?? ""));
+                reader.onerror = () => reject(new Error("A photo could not be read."));
+                reader.readAsDataURL(file);
+              }),
+          ),
+        );
+        const up = await previewUploadPhotos({ data: { images }, signal }).catch(() => undefined);
+        if (up?.ok) {
+          photosStored = up.urls;
+          setPhotoUrls(up.urls);
+        }
+      }
       if (signal.aborted) return;
-      const start = await previewFromBrief({ data: { brief: briefForFacts(brief, logoUrl) }, signal });
+      const start = await previewFromBrief({ data: { brief: briefForFacts(brief, logoUrl, photosStored) }, signal });
       if (!start.ok) throw new Error(start.error);
       const made = await makeLooks(start.facts, 0, signal);
       ok = true;
       setFacts(start.facts);
       setVariation(0);
       // Looks were built: hold the brief until the visitor chooses one (sent with its picture).
-      lead.current = { form: { kind: "new_site", email: email.trim(), gotcha, brief, logo, logoUrl, logoSource }, sent: false, sentIds: [] };
+      lead.current = { form: { kind: "new_site", email: email.trim(), gotcha, brief, logo, logoUrl, logoSource, photos: newPhotos, photoUrls: photosStored }, sent: false, sentIds: [] };
       setMailed(CHOOSE_PROMPT);
       scrollOnResult.current = true;
       showLooks(made.looks, made.note);
@@ -910,6 +947,8 @@ export function HomePage() {
                       setLogoUrl={setNewLogoUrl}
                       logoSource={logoSource}
                       setLogoSource={setLogoSource}
+                      photos={newPhotos}
+                      setPhotos={setNewPhotos}
                       email={email}
                       setEmail={setEmail}
                       agreed={agreed}

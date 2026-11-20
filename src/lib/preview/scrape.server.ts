@@ -8,6 +8,7 @@
  */
 import { requestSignal, stopOrTimeout } from "@/lib/abort.server";
 import { collectSiteArt } from "@/lib/preview/site-art";
+import { isOwnStoredImageUrl } from "@/lib/preview/own-image";
 import {
   REIMAGO_HOSTS,
   REIMAGO_SNAPSHOT,
@@ -698,6 +699,10 @@ export function factsFromBrief(brief: Record<string, unknown>): SiteFacts {
     list("features").length && `Features: ${list("features").join(", ")}`,
     s("emulate_note") && `Inspiration note: ${s("emulate_note")}`,
     s("copy_text", 2000) && `Copy provided by the owner: ${s("copy_text", 2000)}`,
+    s("hours", 300) && `Hours: ${s("hours", 300)}`,
+    s("phone", 40) && `Phone: ${s("phone", 40)}`,
+    list("social").length && `Social: ${list("social").join(", ")}`,
+    (list("photo_urls").length || list("images").length) && "The owner uploaded photos of their business — prefer these over generated art.",
     s("anything_else") && `Anything else: ${s("anything_else")}`,
   ]
     .filter(Boolean)
@@ -709,8 +714,8 @@ export function factsFromBrief(brief: Record<string, unknown>): SiteFacts {
     name,
     tagline: s("what", 120),
     description: [s("what"), s("customers")].filter(Boolean).map(sentence).join(" ").slice(0, 400),
-    // Round 10: a logo the owner uploaded on "Build a New Site" (stored with the previews; nothing else is fetched).
-    logo: /^https?:\/\/[^/\s]+\/made\/[a-f0-9]{16}\/img\/upload-logo$/.test(s("logo_url", 300)) ? s("logo_url", 300) : "",
+    // A logo the owner uploaded or had AI make (stored with the previews; nothing else is fetched).
+    logo: isOwnStoredImageUrl(s("logo_url", 300)) ? s("logo_url", 300) : "",
     colors: /^#[0-9a-fA-F]{6}$/.test(color) ? [color.toLowerCase()] : [],
     phone: s("phone", 40) ? formatPhone(s("phone", 40)) : "",
     email: goodEmail(email) || EMAIL.test(email) ? email : "",
@@ -719,10 +724,19 @@ export function factsFromBrief(brief: Record<string, unknown>): SiteFacts {
     services,
     about: [s("what"), s("customers"), s("location") && `Based in ${s("location")}.`].filter(Boolean).map(sentence).join(" ").slice(0, 1400),
     testimonials: [],
-    images: [],
+    images: (list("photo_urls").length ? list("photo_urls") : list("images")).filter((u) => /^https?:\/\//.test(u)).slice(0, 12),
+    imageText: Object.fromEntries(
+      (list("photo_urls").length ? list("photo_urls") : list("images"))
+        .filter((u) => /^https?:\/\//.test(u))
+        .slice(0, 12)
+        .map((u) => [u, "Photo you uploaded"]),
+    ),
     nav: [],
     pages: pages.map((p) => ({ url: "", title: p, headings: [], text: "" })),
-    social: [],
+    social: (list("social").length ? list("social") : s("social", 1000).split(/\n|,/))
+      .map((u) => u.trim())
+      .filter((u) => /^https?:\/\//.test(u))
+      .slice(0, 8),
     industry: /^other$/i.test(s("industry", 60)) ? "" : s("industry", 60),
     notes: [s("style") && `Style: ${s("style")}`, s("anything_else")].filter(Boolean).join(". ").slice(0, 800),
     brief: brief_text.slice(0, 4000),

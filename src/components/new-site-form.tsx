@@ -12,6 +12,7 @@ import { useRef, useState } from "react";
 import { Link } from "@tanstack/react-router";
 import { ArrowRight } from "lucide-react";
 import type { NewSiteBrief } from "@/lib/new-site";
+import { MoreDetails } from "@/components/more-details";
 import { logoFileStem, logoProblem, logoWord, LOGO_STATUS, type LogoBrief, type LogoOption } from "@/lib/preview/ai-logo";
 import { previewMakeLogos } from "@/lib/preview.functions";
 import { ProgressRing, RotatingStatus } from "@/components/progress-ring";
@@ -31,6 +32,8 @@ export function NewSiteForm(props: {
   setLogoUrl: (url: string) => void;
   logoSource: LogoSource;
   setLogoSource: (source: LogoSource) => void;
+  photos: File[];
+  setPhotos: (files: File[]) => void;
   email: string;
   setEmail: (value: string) => void;
   agreed: boolean;
@@ -40,6 +43,7 @@ export function NewSiteForm(props: {
 }) {
   const { brief, setBrief } = props;
   const [logoBusy, setLogoBusy] = useState(false);
+  const [moreOpen, setMoreOpen] = useState(false);
   const set = (key: keyof NewSiteBrief) => (event: { target: { value: string } }) => setBrief({ ...brief, [key]: event.target.value });
   return (
     <div className="space-y-4" data-new-site-form>
@@ -103,6 +107,7 @@ export function NewSiteForm(props: {
         </label>
         {brief.domain_choice === "get" ? <p className="ml-6 text-xs text-muted">We'll note it and help you pick one after you choose a look. Nothing is bought now.</p> : null}
       </fieldset>
+      <MoreDetails brief={brief} setBrief={setBrief} photos={props.photos} setPhotos={props.setPhotos} open={moreOpen} setOpen={setMoreOpen} disabled={props.working} />
       <label className="block" htmlFor="ns-email">
         <span className="text-sm font-medium text-fg">Email</span>
         <input id="ns-email" name="email" value={props.email} onChange={(event) => props.setEmail(event.target.value)} type="email" autoComplete="email" placeholder="you@company.com" className={`${fieldClass} sm:max-w-sm`} />

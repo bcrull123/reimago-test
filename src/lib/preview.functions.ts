@@ -538,7 +538,57 @@ export const previewUploadLogo = createServerFn({ method: "POST" })
   });
 
 /**
- * Round 10b — "Have AI make one": a few logo options from the Build a New Site answers, made by Grok Imagine
+ * Round 10d — optional photos the owner adds under "Add more details" (PNG / JPEG / WebP, ≤2.5 MB each, up to 12).
+ * Stored with the previews so the looks can use them like a scraped site's own photos (preferred over Imagine art).
+ */
+export const previewUploadPhotos = createServerFn({ method: "POST" })
+  .validator((input: { images?: unknown }) => {
+    const raw = Array.isArray(input?.images) ? input.images : [];
+    const images: { type: string; b64: string }[] = [];
+    for (const item of raw.slice(0, 12)) {
+      const s = typeof item === "string" ? item : "";
+      const m = s.match(/^data:(image\/(?:png|jpeg|webp));base64,([A-Za-z0-9+/]+=*)$/);
+      if (!m || m[2]!.length > 3_500_000) throw new Error("Each photo must be a PNG, JPG or WebP under 2.5 MB.");
+      images.push({ type: m[1]!, b64: m[2]! });
+    }
+    if (!images.length) throw new Error("Add at least one photo.");
+    return { images };
+  })
+  .handler(async ({ data }): Promise<PreviewStepResult<{ urls: string[] }>> => {
+    (await import("./abort.server")).watchStop("photo upload");
+    (await import("./env.server")).logKeyPresenceOnce();
+    try {
+      if (await limited("photos", 20)) return { ok: false, error: "Too many uploads from this network in the last hour." };
+      const { newPageId, saveImage } = await import("./pages.server");
+      const { imageSize } = await import("./preview/images.server");
+      const { publicBase } = await import("./publish.server");
+      const id = newPageId();
+      const urls: string[] = [];
+      for (let i = 0; i < data.images.length; i++) {
+        const item = data.images[i]!;
+        const bytes = Buffer.from(item.b64, "base64");
+        const size = imageSize(bytes);
+        if (!size || size.width < 16 || size.height < 16 || size.width > 8000 || size.height > 8000) {
+          console.info(`[new-site] photo ${i + 1} skipped: not a readable image`);
+          continue;
+        }
+        const name = `upload-photo-${i + 1}`;
+        await saveImage(id, name, item.type, bytes);
+        urls.push(`${publicBase()}/made/${id}/img/${name}`);
+        console.info(`[new-site] photo ${i + 1} uploaded: ${item.type} ${size.width}x${size.height} (${Math.round(bytes.length / 1024)} KB)`);
+      }
+      if (!urls.length) return { ok: false, error: "Those files could not be read as photos. Try PNG or JPG." };
+      console.info(`[new-site] photos stored: ${urls.length}/${data.images.length}`);
+      return { ok: true, urls };
+    } catch (error) {
+      if (error instanceof Error && error.name === "StoppedError") throw error;
+      return { ok: false, error: error instanceof Error ? error.message : "The photos could not be stored." };
+    }
+  });
+
+/**
+ * Round 10b — "Have AI make one":
+ a few logo options from the Build a New Site answers, made by Grok Imagine
  * (or lettered stand-in marks when PREVIEW_MOCK=1). The visitor picks one; it is then used like an uploaded logo.
  */
 export const previewMakeLogos = createServerFn({ method: "POST" })
