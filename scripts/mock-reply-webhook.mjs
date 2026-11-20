@@ -12,6 +12,8 @@ const port = Number(process.env.MOCK_WEBHOOK_PORT ?? 9998);
 const expectAuth = process.env.EXPECT_AUTH ?? "";
 const log = process.env.MOCK_WEBHOOK_LOG ?? "/tmp/mock-reply-webhook.jsonl";
 let failFirst = Number(process.env.MOCK_WEBHOOK_FAIL_FIRST ?? 0);
+/** Optional fields: design_mockup_url (Custom Design), mode (round 10), and new-site details (mode=new_site). */
+const OPTIONAL = ["design_mockup_url", "mode", "business_name", "domain_choice", "domain"];
 const FIELDS = ["submission_id", "email", "website", "note", "preview_url", "preview_pages", "chosen_look", "change_requests", "picture_url", "picture_error", "submitted_at"];
 
 createServer((req, res) => {
@@ -31,7 +33,8 @@ createServer((req, res) => {
     }
     if (json) {
       for (const f of FIELDS) if (typeof json[f] !== "string") problems.push(`${f} missing or not a string`);
-      const extra = Object.keys(json).filter((k) => !FIELDS.includes(k));
+      const extra = Object.keys(json).filter((k) => !FIELDS.includes(k) && !OPTIONAL.includes(k));
+      for (const f of OPTIONAL) if (f in json && typeof json[f] !== "string") problems.push(`${f} is not a string`);
       if (extra.length) problems.push(`unexpected fields: ${extra.join(",")}`);
       if (json.submitted_at && Number.isNaN(Date.parse(json.submitted_at))) problems.push("submitted_at is not a date");
     }

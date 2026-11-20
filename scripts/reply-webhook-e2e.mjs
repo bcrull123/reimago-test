@@ -20,8 +20,11 @@ mkdirSync(outDir, { recursive: true });
 const browser = await chromium.launch({ executablePath: process.env.CHROME_PATH || undefined });
 const page = await browser.newPage({ viewport: { width: 1400, height: 1100 } });
 const formcarry = [];
+const formModes = [];
 await page.context().route("**/formcarry.com/**", async (route) => {
-  formcarry.push(route.request().postData()?.length ?? 0);
+  const body = route.request().postDataBuffer()?.toString("latin1") ?? "";
+  formcarry.push(body.length);
+  formModes.push(body.match(/name="mode"\r\n\r\n([^\r]*)/)?.[1] ?? "");
   // First submission fails (the visitor is told to press Choose again); the second succeeds.
   const ok = formcarry.length > 1;
   await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(ok ? { code: 200 } : { code: 500, message: "Simulated Formcarry failure" }) });
@@ -42,6 +45,8 @@ const choose = async () => {
 };
 await choose();
 await page.getByText(/Press Choose this look again to resend/).waitFor({ timeout: 300_000 });
+// Round 10: a failed submission never shows "Sent".
+const sentShown = await page.getByText(/^Sent!/).count();
 await page.screenshot({ path: join(outDir, "01-formcarry-failed-first.png") });
 await choose();
 await page.getByText(/check your email|inbox|on its way/i).first().waitFor({ timeout: 300_000 });
@@ -55,6 +60,8 @@ const summary = {
   target,
   lookId,
   formcarryCalls: formcarry.length,
+  formcarryModes: formModes,
+  failureShowedSent: sentShown > 0,
   webhookPosts: posts.map((p) => ({ status: p.status, authOk: p.authOk, problems: p.problems, idempotencyKey: p.idempotencyKey, submission_id: p.payload?.submission_id })),
   sameSubmissionId: ids.length === 1,
   payload: posts.at(-1)?.payload,

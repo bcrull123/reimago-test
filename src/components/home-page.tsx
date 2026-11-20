@@ -171,7 +171,8 @@ async function postFormcarry(data: FormData): Promise<number> {
   });
   const json = (await response.json().catch(() => null)) as { code?: number; message?: string } | null;
   if (json?.code !== 200) {
-    throw new SubmitError(json?.message || `The form could not be sent (status ${response.status}). Try again.`, response.status);
+    // Formcarry answers HTTP 200 with its own code in the body: report that code (else the HTTP status).
+    throw new SubmitError(json?.message || `The form could not be sent (status ${response.status}). Try again.`, typeof json?.code === "number" && json.code !== 200 ? json.code : response.status);
   }
   return response.status;
 }
