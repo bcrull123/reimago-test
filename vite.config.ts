@@ -1,5 +1,5 @@
 import { execSync } from "node:child_process";
-import { readdirSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Plugin } from "vite";
 import { defineConfig } from "vite";
@@ -153,6 +153,15 @@ function buildStamp(): string {
   if (!sha) {
     try {
       sha = execSync("git rev-parse --short=7 HEAD", { stdio: ["ignore", "pipe", "ignore"] }).toString().trim();
+    } catch {
+      sha = "";
+    }
+  }
+  if (!sha) {
+    // Some hosts (e.g. Grok Build publish) build without .git or commit env vars: fall back to RELEASE.txt,
+    // a hand-bumped label committed with each round.
+    try {
+      sha = readFileSync(new URL("./RELEASE.txt", import.meta.url), "utf8").trim().split("\n")[0] || "unknown";
     } catch {
       sha = "unknown";
     }
