@@ -740,6 +740,18 @@ function titleCase(s: string): string {
   return s.replace(/\b([a-z])([a-z]*)/g, (_, a: string, b: string) => a.toUpperCase() + b);
 }
 
+/**
+ * "Make it yummy" / "more appetizing" / "delicious food": the owner wants a more appetizing food photo,
+ * even when they didn't say "change the photo to…". Used on a card's change box and in style notes.
+ */
+const APPETIZING = /\b(?:yummy|delicious|appetizing|tasty|mouth[- ]?watering)\b/i;
+
+export function moodPhotoRequest(raw: string): PhotoRequest | undefined {
+  const text = raw.replace(/[’']/g, "'").trim();
+  if (!APPETIZING.test(text)) return undefined;
+  return { subject: "appetizing food", named: [] };
+}
+
 /** The owner's own photo request, read from their words (no AI). Undefined when they didn't ask for a new photo. */
 export function readPhotoRequest(raw: string): PhotoRequest | undefined {
   const sentences = raw.replace(/[’']/g, "'").split(/(?<=[.!?;\n])\s+/);
@@ -762,7 +774,7 @@ export function readPhotoRequest(raw: string): PhotoRequest | undefined {
       return { subject: subject.slice(0, 80), named };
     }
   }
-  return undefined;
+  return moodPhotoRequest(raw);
 }
 
 const GENERIC_PHOTO = new Set(["photo", "photos", "picture", "pictures", "image", "images", "scene", "view", "shot", "the", "and", "with", "of", "a", "an", "in", "at", "on", "our", "one"]);

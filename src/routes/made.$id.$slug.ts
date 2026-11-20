@@ -6,9 +6,10 @@ export const Route = createFileRoute("/made/$id/$slug")({
       GET: async ({ params }) => {
         const { readSite } = await import("@/lib/pages.server");
         const { renderSitePage, PREVIEW_CSP } = await import("@/lib/preview/render");
+        const { requestPathPrefix } = await import("@/lib/publish.server");
         const site = await readSite(params.id);
         const slug = String(params.slug ?? "").toLowerCase();
-        const html = site && /^[a-z0-9-]{1,40}$/.test(slug) ? renderSitePage(site, slug) : undefined;
+        const html = site && /^[a-z0-9-]{1,40}$/.test(slug) ? renderSitePage(site, slug, { pathPrefix: requestPathPrefix() }) : undefined;
         if (!html) return new Response("That page is not on this server.", { status: 404 });
         return new Response(html, {
           headers: {

@@ -384,7 +384,7 @@ Bob on aceee96: "It still doesn't have the what would you change box in the rend
 - **Custom Design card:** the two thumbnails ("Design · Grok Imagine" and "Built page · Grok") and their captions are gone. The box takes their place, as on the other cards. `design_mockup_url` still goes to Formcarry and the webhook (`look.custom.mockupUrl`), and the `[imagine]` / `[design]` logs are unchanged.
 - **Full-size rendering:** the look being previewed gets the same box (`data-preview-edit`) between its "Choose this look" bar and the live page. It edits only that look, like the card's own box. The preview pages themselves (`/made/<id>`, "Open full site") ship no JavaScript, so they have no box.
 - **Phone:** under 420 px wide, the field and the Change button stack. The button is primary-colored, at least 6.5rem wide and 44 px tall, with `whitespace-nowrap`, so its label always shows (the e2e checks the label text and size at 390 px).
-- **Build stamp:** the site footer shows `Build <short commit> · <build time> UTC` (`data-build-stamp`). It comes from `BUILD_COMMIT`, `VERCEL_GIT_COMMIT_SHA` or `GITHUB_SHA`, else `git rev-parse --short HEAD`, else the first line of `RELEASE.txt` (currently `r10e`) when the host builds without `.git` or a commit env var, read at build time (`vite.config.ts` `define: __BUILD_STAMP__`). With `npm run dev`, it is read when the server starts.
+- **Build stamp:** the site footer shows `Build <short commit> · <build time> UTC` (`data-build-stamp`). It comes from `BUILD_COMMIT`, `VERCEL_GIT_COMMIT_SHA` or `GITHUB_SHA`, else `git rev-parse --short HEAD`, else the first line of `RELEASE.txt` (currently `r10f`) when the host builds without `.git` or a commit env var, read at build time (`vite.config.ts` `define: __BUILD_STAMP__`). With `npm run dev`, it is read when the server starts.
 
 ### Round 9b: photo changes never "change" to the same photo; keys, timings, Google optional
 
@@ -770,6 +770,17 @@ A clone edits **three keys** in `src/lib/brand.ts` (`BRAND`):
 The header/nav logo is this `name` + optional `logoUrl`. The footer illustration is unchanged. Form behavior is unchanged.
 
 **Tests:** `src/lib/brand.test.ts`. E2E/screenshots: `scripts/marketing-bubble-e2e.mjs`. Screenshots: `/workspace/live-preview-shots/round10e/`. Published footer stamp: `RELEASE.txt` (`r10e`) when the host builds without `.git`.
+
+
+### Round 10f: card thumbnails never show a broken-image icon
+
+On the published app, cafe501.com and webhero.com came back with three look cards whose titles, descriptions and palettes were fine, but the homepage thumbnail was a blank grey box with a broken-image icon (same symptom as the earlier webhero run). The card thumbnail is a live, scaled-down iframe of the look's homepage. It was loading the **absolute** URL built with `publicBase()`, which trusted the request `Referer`. A Referer from another site (or an `http:` URL on an https app) made the iframe point at the wrong host or get blocked as mixed content, so the grey placeholder showed through. Images inside a page that *did* load could also break (document-relative `id/img/name` hrefs fail if `/made/<id>` is redirected to a trailing slash).
+- Card thumbs and the live preview now load a **same-origin** `/made/<id>` path (`displayLookPath` in `src/lib/preview-display-url.ts`), including the path-based preview prefix when needed. `publicBase()` still builds share/email links but **ignores a foreign Referer** and will not downgrade https to http (`src/lib/public-base.ts`).
+- Preview page and image links are root-relative (`/made/<id>/…` or `/<prefix>/made/<id>/…`), so they work with or without a trailing slash.
+- If the iframe cannot be read, the page is missing, or every image on it failed, the card walks stored fallbacks (hero, Imagine mockup/art, then the owner's photos) and finally a palette placeholder with the look name — never a broken-image icon. Each failure logs a `[thumb] look <id> “Name”: <reason>` line (reason and src only, no secrets) via `logThumb`.
+- A card change like **“Make it yummy”** (the card's “What would you change?” box, or the form's style notes) is read as a request for an **appetizing food** hero, even when the owner didn't say “change the photo”. The edited card keeps a visible thumbnail; the hero is replaced with a food photo (search, then Imagine, then a mock stand-in when `PREVIEW_MOCK=1`).
+
+**Tests:** `src/lib/public-base.test.ts`, `src/lib/preview-display-url.test.ts`, `readPhotoRequest("Make it yummy")` in `src/lib/preview/photo-request.test.ts`, style-notes path in `src/lib/preview/owner-request.test.ts`. E2E: `scripts/blank-thumb-e2e.mjs` (cafe501.com / webhero.com, then “Make it yummy” on the first card). Screenshots: `/workspace/live-preview-shots/round10f/`. Published footer stamp: `RELEASE.txt` (`r10f`) when the host builds without `.git`.
 
 ## Create a New Site: domain first
 

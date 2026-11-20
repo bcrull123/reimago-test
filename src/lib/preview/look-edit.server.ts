@@ -240,7 +240,13 @@ async function findEditPhoto(site: StoredSite, subject: string, step: number): P
   if (!webPhotosEnabled()) return undefined;
   const web = await findWebPhotos(subject, placeOf(site.facts), 8_000, 3).catch(() => []);
   const w = web[step % Math.max(1, web.length)];
-  return w ? { bytes: w.photo.bytes, type: w.photo.type, image: { name: "hero", type: w.photo.type, source: "web", alt: w.credit.title, width: w.photo.width, height: w.photo.height, credit: w.credit } } : undefined;
+  if (w) return { bytes: w.photo.bytes, type: w.photo.type, image: { name: "hero", type: w.photo.type, source: "web", alt: w.credit.title, width: w.photo.width, height: w.photo.height, credit: w.credit } };
+  const { isMockMode } = await import("@/lib/ai-provider.server");
+  if (!isMockMode()) return undefined;
+  const { standInSubjectPng } = await import("./subject-standin.ts");
+  const bytes = standInSubjectPng(subject);
+  console.info(`[photo] mock stand-in for “${subject}” (${Math.round(bytes.length / 1024)} KB)`);
+  return { bytes, type: "image/png", image: { name: "hero", type: "image/png", source: "generated", alt: subject, width: 1280, height: 720 } };
 }
 
 /**
@@ -324,6 +330,20 @@ async function findRequestHero(site: StoredSite, req: NonNullable<LookEdit["phot
     if (result.pick.from === "your site") image.sourceUrl = result.pick.id;
     return { bytes: result.pick.photo.bytes, type: result.pick.photo.type, image, note: result.note, label: result.label, match: result.match };
   }
+  // Free-license photos (Openverse / Commons) when Google / the site didn't turn one up — works in mock mode too.
+  const { findWebPhotos, webPhotosEnabled } = await import("./web-photo.server.ts");
+  if (webPhotosEnabled()) {
+    const place = site.facts ? placeOf(site.facts) : undefined;
+    const web = await findWebPhotos(req.subject, place, Math.max(3_000, deadline - Date.now()), 4).catch(() => []);
+    const w = web.find((p) => !current.sha1.includes(sha1Of(p.photo.bytes)));
+    if (w) {
+      const note = `new photo: ${photoRequestLabel(req)}`;
+      console.info(`[photo] requested “${result.label}”: free-license photo “${(w.credit.title ?? "").slice(0, 60)}” (${w.credit.provider})`);
+      console.info(`[timing] photo request: ${Date.now() - t0}ms (web photo)`);
+      const image: StoredImage = { name: "hero", type: w.photo.type, source: "web", alt: w.credit.title, width: w.photo.width, height: w.photo.height, credit: w.credit };
+      return { bytes: w.photo.bytes, type: w.photo.type, image, note, label: result.label, match: "subject" };
+    }
+  }
   // No real photo shows it: an Imagine illustration of the request, clearly labeled, when one makes sense.
   if (imagesEnabled() && illustrationFits(req) && process.env.PREVIEW_REQUEST_ILLUSTRATION !== "0" && Date.now() < deadline + 15_000) {
     const { generateImage } = await import("@/lib/ai-provider.server");
@@ -341,6 +361,16 @@ async function findRequestHero(site: StoredSite, req: NonNullable<LookEdit["phot
     }
     console.info(`[imagine] requested “${result.label}”: illustration failed; the current photo is kept`);
   } else if (!illustrationFits(req)) console.info(`[photo] requested “${result.label}”: an illustration would not fit this request; the current photo is kept`);
+  if (isMockMode()) {
+    const { standInSubjectPng } = await import("./subject-standin.ts");
+    const bytes = standInSubjectPng(req.subject);
+    const size = imageSize(bytes);
+    const note = `new photo: ${photoRequestLabel(req)}`;
+    console.info(`[photo] mock stand-in for “${req.subject}” (${Math.round(bytes.length / 1024)} KB) · card: ${note}`);
+    console.info(`[timing] photo request: ${Date.now() - t0}ms (mock stand-in)`);
+    const image: StoredImage = { name: "hero", type: "image/png", source: "generated", alt: req.subject, ...(size ?? { width: 1280, height: 720 }) };
+    return { bytes, type: "image/png", image, note, label: result.label, match: "subject" };
+  }
   console.info(`[timing] photo request: ${Date.now() - t0}ms (kept the current photo)`);
   return { note: photoOutcomeNote(req, "nothing"), label: result.label, match: "nothing" };
 }
@@ -350,6 +380,7 @@ function heroChangeLine(r: { image: StoredImage; match: PhotoOutcome; note: stri
   if (r.match === "illustrated") return `${r.note} · as you asked`;
   if (r.image.temporary) return "Photo: from Google Images (preview only, replaced when your site is built) · as you asked";
   if (r.image.source === "web") return `Photo: ${r.image.credit?.title ? `“${r.image.credit.title.slice(0, 50)}” ` : ""}(${r.image.credit?.provider ?? "web"}, free license) · as you asked`;
+  if (r.image.source === "generated") return `${r.note} · as you asked`;
   return `Photo: your site's own${r.image.alt ? ` (“${r.image.alt.slice(0, 50)}”)` : ""} · as you asked`;
 }
 

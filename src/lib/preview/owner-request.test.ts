@@ -1,6 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { cleanFeedback, cleanRequest, latestRequest, ownerRequestRule, requestHints } from "./owner-request.ts";
+import { cleanFeedback, cleanRequest, latestRequest, ownerRequestRule, requestHints, requestedScene, sceneToFind } from "./owner-request.ts";
 import { mockDirections } from "./design.ts";
 import { composeMockPage } from "./sections.ts";
 import type { SiteFacts, SitePlan } from "./types.ts";
@@ -67,6 +67,12 @@ describe("owner request", () => {
     assert.deepEqual(hints.sections, ["gallery"]);
     assert.ok(hints.applied.length >= 3);
     assert.equal(requestHints({ notes: "less dark, lighter and airy" }).scheme, "light");
+  });
+
+  it("treats “Make it yummy” in style notes as a find-a-food-photo request", () => {
+    assert.equal(requestedScene({ notes: "Make it yummy" }), "appetizing food");
+    assert.equal(sceneToFind({ notes: "Make it yummy" }), "appetizing food");
+    assert.equal(requestedScene({ notes: "", feedback: ["make it more appetizing"] }), "appetizing food");
   });
 });
 

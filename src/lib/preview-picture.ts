@@ -8,6 +8,7 @@
  * Google Fonts are CORS-enabled and embedded by the library.
  */
 import { domToPng } from "modern-screenshot";
+import { displayLookPath } from "@/lib/preview-display-url";
 
 export const PICTURE_WIDTH = 1280;
 /** Above-the-fold viewport used for layout (100vh sections), and the cap for the full-page picture. */
@@ -32,14 +33,8 @@ function withTimeout<T>(promise: Promise<T>, ms: number, what: string): Promise<
 }
 
 /** The look's URL on this origin (the iframe must be same-origin to be read). */
-export function sameOriginLookUrl(lookUrl: string, lookId: string): string {
-  try {
-    const url = new URL(lookUrl, window.location.href);
-    if (url.origin === window.location.origin) return url.pathname;
-  } catch {
-    // fall through
-  }
-  return `/made/${lookId}`;
+export function sameOriginLookUrl(_lookUrl: string, lookId: string): string {
+  return displayLookPath(lookId, window.location);
 }
 
 function loadFrame(src: string): Promise<HTMLIFrameElement> {

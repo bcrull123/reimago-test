@@ -8,6 +8,7 @@
  * light/dark, sections) so the behaviour can be tested without AI.
  */
 import type { Archetype, SiteFacts } from "./types.ts";
+import { moodPhotoRequest } from "./look-edit.ts";
 
 export const MAX_FEEDBACK_ROUNDS = 5;
 export const NOTE_MAX = 800;
@@ -303,6 +304,8 @@ function readPhoto(facts: RequestFacts): { subject: string; intent: PhotoIntent 
         }
       }
     }
+    const mood = moodPhotoRequest(text);
+    if (mood) return { subject: mood.subject, intent: "find" };
   }
   return undefined;
 }

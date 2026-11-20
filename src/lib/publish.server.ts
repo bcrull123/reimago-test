@@ -1,22 +1,20 @@
 import { getRequestHeader, getRequestUrl } from "@tanstack/react-start/server";
-import { previewPathPrefix } from "@/lib/preview-path-prefix";
+import { publicBaseFrom, requestPathPrefixFrom, type PublicRequest } from "@/lib/public-base";
 import { savePage } from "@/lib/pages.server";
+
+function thisRequest(): PublicRequest {
+  const url = getRequestUrl({ xForwardedHost: true, xForwardedProto: true });
+  return { protocol: url.protocol, hostname: url.hostname, host: url.host, pathname: url.pathname };
+}
 
 /** Public origin (plus any preview path prefix) for links handed back to the browser. */
 export function publicBase(): string {
-  try {
-    const referer = getRequestHeader("referer");
-    if (referer) {
-      const ref = new URL(referer);
-      const prefix = previewPathPrefix(ref.hostname, ref.pathname) ?? "";
-      return `${ref.protocol}//${ref.host}${prefix}`;
-    }
-  } catch {
-    // Fall through to the request URL.
-  }
-  const url = getRequestUrl({ xForwardedHost: true, xForwardedProto: true });
-  const prefix = previewPathPrefix(url.hostname, url.pathname) ?? "";
-  return `${url.protocol}//${url.host}${prefix}`;
+  return publicBaseFrom(thisRequest(), getRequestHeader("referer"));
+}
+
+/** Path prefix the current request should use in /made links (same-host Referer, else the request URL). */
+export function requestPathPrefix(): string {
+  return requestPathPrefixFrom(thisRequest(), getRequestHeader("referer"));
 }
 
 export async function hostPage(html: string): Promise<string> {

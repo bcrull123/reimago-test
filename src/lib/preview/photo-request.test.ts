@@ -33,6 +33,13 @@ describe("round 8c: reading a new-photo request", () => {
     assert.equal(readPhotoRequest("change the picture to the patio at night")?.subject, "patio at night");
     assert.equal(readPhotoRequest("swap the hero image for the courthouse")?.subject, "courthouse");
   });
+  it("treats “Make it yummy” (and close wording) as a request for appetizing food", () => {
+    for (const t of ["Make it yummy", "make it more appetizing", "look delicious", "more tasty", "mouth-watering food"]) {
+      assert.deepEqual(readPhotoRequest(t), { subject: "appetizing food", named: [] }, t);
+      assert.equal(wantsNewPhoto(t), true, t);
+    }
+    assert.equal(mergePhotoRequest("Make it yummy", undefined)?.subject, "appetizing food");
+  });
   it("is not fooled by lighting or contrast tweaks", () => {
     for (const t of ["make the image daylight and raise text contrast", "a photo with more contrast", "make the photo daylight, more contrast", "Use Bold Photo and make the image in daylight."]) {
       assert.equal(readPhotoRequest(t), undefined, t);

@@ -1,12 +1,27 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { ArrowDown, Check, CheckCircle2, Eye, MessageSquareText, RefreshCw, Wand2 } from "lucide-react";
 import type { LookInfo } from "@/lib/preview/types";
+import { displayImagePath, displayLookPath } from "@/lib/preview-display-url";
+import { logThumb } from "@/lib/thumb-log.functions";
 
 
-/** A live, scaled-down homepage thumbnail (sandboxed, not interactive). */
+/**
+ * A live, scaled-down homepage thumbnail. The iframe always loads a same-origin /made/<id>
+ * path (never the server-built absolute look URL, which can be the wrong host or http:).
+ * If that page or its images fail, we walk stored photos / Imagine art, then a palette
+ * placeholder — a card must never sit on a broken-image icon.
+ */
 function Thumb({ look, mini = false }: { look: LookInfo; mini?: boolean }) {
   const box = useRef<HTMLDivElement>(null);
+  const frame = useRef<HTMLIFrameElement>(null);
   const [scale, setScale] = useState(0.27);
+  const [mode, setMode] = useState<"frame" | "img" | "placeholder">("frame");
+  const [thumbIndex, setThumbIndex] = useState(0);
+  const thumbs = look.thumbs ?? [];
+  const here = typeof window !== "undefined" ? window.location : { hostname: "localhost", pathname: "/" };
+  const pageSrc = look.rev ? `${displayLookPath(look.id, here)}?v=${look.rev}` : displayLookPath(look.id, here);
+  const imgSrc = thumbs[thumbIndex] ? displayImagePath(look.id, thumbs[thumbIndex]!, here) : "";
+
   useEffect(() => {
     const el = box.current;
     if (!el || typeof ResizeObserver === "undefined") return;
@@ -14,19 +29,97 @@ function Thumb({ look, mini = false }: { look: LookInfo; mini?: boolean }) {
     observer.observe(el);
     return () => observer.disconnect();
   }, []);
+
+  useEffect(() => {
+    setMode("frame");
+    setThumbIndex(0);
+  }, [look.id, look.rev]);
+
+  function report(reason: string, src = "") {
+    console.info(`[thumb] look ${look.id} “${look.name}”: ${reason}${src ? ` · ${src}` : ""}`);
+    void logThumb({ data: { id: look.id, look: look.name, reason, src } });
+  }
+
+  function showFallback(reason: string, src = "") {
+    report(reason, src);
+    if (thumbs.length) {
+      setThumbIndex(0);
+      setMode("img");
+    } else setMode("placeholder");
+  }
+
+  function onFrameLoad() {
+    const doc = frame.current?.contentDocument;
+    if (!doc) {
+      // Cross-origin or blocked: the same-origin path should be readable; if it isn't, fall back.
+      showFallback("preview page could not be read");
+      return;
+    }
+    const text = doc.body?.innerText ?? "";
+    if (/not on this server/i.test(text) || !doc.querySelector("main, .custom-look, .preview-ribbon")) {
+      showFallback("preview page missing or not found", pageSrc);
+      return;
+    }
+    const imgs = Array.from(doc.images);
+    for (const img of imgs) img.loading = "eager";
+    void Promise.all(imgs.map((img) => (img.decode ? img.decode() : Promise.resolve()).catch(() => undefined))).then(() => {
+      if (frame.current?.contentDocument !== doc) return;
+      const broken = imgs.filter((img) => !img.naturalWidth);
+      if (imgs.length && broken.length === imgs.length) {
+        showFallback("all images on the preview page failed", broken[0]?.getAttribute("src") ?? "");
+        return;
+      }
+      if (broken.length) report("a preview image failed; others loaded", broken.map((img) => img.getAttribute("src") ?? "").filter(Boolean).join(", ").slice(0, 160));
+    });
+  }
+
+  function onFrameError() {
+    showFallback("preview page did not load (blocked, mixed content, or missing)", pageSrc);
+  }
+
+  function onImgError() {
+    const failed = thumbs[thumbIndex] ?? "";
+    report("fallback image failed", failed);
+    if (thumbIndex + 1 < thumbs.length) setThumbIndex((i) => i + 1);
+    else setMode("placeholder");
+  }
+
   return (
-    <div ref={box} className={`relative overflow-hidden bg-[#e9e9ec] ${mini ? "aspect-[16/9] rounded-md border border-border" : "aspect-[16/11] rounded-t-2xl"}`}>
-      <iframe
-        key={look.rev ?? 0}
-        src={look.rev ? `${look.url}?v=${look.rev}` : look.url}
-        title={`${look.name} homepage`}
-        sandbox=""
-        loading="lazy"
-        tabIndex={-1}
-        aria-hidden
-        className="pointer-events-none absolute left-0 top-0 h-[880px] w-[1280px] origin-top-left border-0 bg-white"
-        style={{ transform: `scale(${scale})` }}
-      />
+    <div
+      ref={box}
+      data-look-thumb={look.id}
+      data-thumb-mode={mode}
+      className={`relative overflow-hidden bg-[#e9e9ec] ${mini ? "aspect-[16/9] rounded-md border border-border" : "aspect-[16/11] rounded-t-2xl"}`}
+    >
+      {mode === "frame" ? (
+        <iframe
+          ref={frame}
+          key={look.rev ?? 0}
+          src={pageSrc}
+          title={`${look.name} homepage`}
+          sandbox="allow-same-origin"
+          referrerPolicy="no-referrer"
+          loading="lazy"
+          tabIndex={-1}
+          aria-hidden
+          onLoad={onFrameLoad}
+          onError={onFrameError}
+          className="pointer-events-none absolute left-0 top-0 h-[880px] w-[1280px] origin-top-left border-0 bg-white"
+          style={{ transform: `scale(${scale})` }}
+        />
+      ) : null}
+      {mode === "img" && imgSrc ? (
+        <img src={imgSrc} alt="" data-thumb-fallback={thumbs[thumbIndex]} onError={onImgError} className="absolute inset-0 h-full w-full object-cover" />
+      ) : null}
+      {mode === "placeholder" ? (
+        <div
+          data-thumb-placeholder
+          className="absolute inset-0 flex items-center justify-center px-4 text-center text-sm font-medium"
+          style={{ background: look.palette.surface || look.palette.background, color: look.palette.text }}
+        >
+          {look.name}
+        </div>
+      ) : null}
     </div>
   );
 }

@@ -9,9 +9,10 @@ export const Route = createFileRoute("/made/$id")({
       GET: async ({ params }) => {
         const { readSite, readPage } = await import("@/lib/pages.server");
         const { renderSitePage, PREVIEW_CSP } = await import("@/lib/preview/render");
+        const { requestPathPrefix } = await import("@/lib/publish.server");
         const site = await readSite(params.id);
         if (site) {
-          const html = renderSitePage(site, "home");
+          const html = renderSitePage(site, "home", { pathPrefix: requestPathPrefix() });
           if (html) {
             return new Response(html, {
               headers: {

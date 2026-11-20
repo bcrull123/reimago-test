@@ -2,6 +2,7 @@ import { createServerFn } from "@tanstack/react-start";
 import { clampFacts, clampPlanInput } from "@/lib/preview/clamp";
 import type { ReimagineOk } from "@/lib/reimagine-types";
 import type { DesignDirection, LookInfo, PreviewStepResult, SiteFacts, SitePlan } from "@/lib/preview/types";
+import { thumbFallbackNames } from "@/lib/preview-display-url";
 
 /*
  * The live preview runs as short browser-orchestrated steps instead of one long
@@ -14,6 +15,13 @@ import type { DesignDirection, LookInfo, PreviewStepResult, SiteFacts, SitePlan 
  * Facts, plan and design are stored with each look server-side, so the finish
  * step only needs the look id and never trusts browser-edited data.
  */
+
+
+function thumbsOf(site: { images?: Record<string, unknown>; customMockup?: unknown }): string[] {
+  const names = Object.keys(site.images ?? {});
+  if (site.customMockup) names.push("mockup");
+  return thumbFallbackNames(names);
+}
 
 const variationOf = (value: unknown) => (typeof value === "number" ? Math.max(0, Math.min(20, Math.floor(value))) : 0);
 
@@ -170,6 +178,7 @@ export const previewLook = createServerFn({ method: "POST" })
         fonts: direction.fonts,
         images: { generated, photos },
         mock: site.mock,
+        thumbs: thumbsOf(site),
         aiError: ai || site.mock ? undefined : aiError ?? "AI is not configured on this server",
         aiWarning,
       };
@@ -378,6 +387,7 @@ export const previewRefine = createServerFn({ method: "POST" })
           fonts: design.fonts,
           images: { generated: images.filter((img) => img.source === "generated").length, photos },
           mock: site.mock,
+          thumbs: thumbsOf(site),
           request: data.text,
           photos: (site.custom && !design.custom?.failed ? site.custom.photoLine : undefined) ?? photosLine(site.trace, photos),
           layout: site.custom && !design.custom?.failed ? customLayoutLine(site.custom.brief) : layoutLine(design, site.trace?.layout?.hero),

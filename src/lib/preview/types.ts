@@ -255,6 +255,8 @@ export type LookInfo = {
   fonts: { heading: string; body: string };
   images: { generated: number; photos: number };
   mock: boolean;
+  /** Stored image names the card can show if the live homepage thumbnail fails (hero, photos, Imagine art). */
+  thumbs?: string[];
   /** The owner's latest request this look was built from (note or newest feedback), for the card. */
   request?: string;
   /** Mock mode: what was read from the request and applied (colors, backgrounds, tone, sections). */

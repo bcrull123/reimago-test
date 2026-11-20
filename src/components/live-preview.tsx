@@ -1,6 +1,7 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { Check, ExternalLink, Monitor, Smartphone } from "lucide-react";
 import type { PreviewInfo } from "@/lib/preview/types";
+import { displayLookPath } from "@/lib/preview-display-url";
 
 /**
  * The live, clickable preview site in a sandboxed iframe.
@@ -9,6 +10,13 @@ import type { PreviewInfo } from "@/lib/preview/types";
  * Formcarry in a new tab (allow-forms + allow-popups).
  */
 /** The "Choose this look" bar shown above a look's preview; it sticks to the top while the visitor scrolls the page. */
+
+function liveSrc(preview: PreviewInfo, slug = "home"): string {
+  const here = typeof window !== "undefined" ? window.location : { hostname: "localhost", pathname: "/" };
+  const path = displayLookPath(preview.id, here) + (slug && slug !== "home" ? `/${slug}` : "");
+  return preview.rev ? `${path}?v=${preview.rev}` : path;
+}
+
 export type PreviewChoice = {
   lookName: string;
   onChoose: () => void;
@@ -21,9 +29,9 @@ export type PreviewChoice = {
 
 export function LivePreview({ preview, host, choice }: { preview: PreviewInfo; host: string; choice?: PreviewChoice }) {
   const [device, setDevice] = useState<"desktop" | "mobile">("desktop");
-  const [src, setSrc] = useState(preview.url);
+  const [src, setSrc] = useState(() => liveSrc(preview));
 
-  useEffect(() => setSrc(preview.url), [preview.url]);
+  useEffect(() => setSrc(liveSrc(preview)), [preview.id, preview.rev]);
 
   return (
     <div>
@@ -91,7 +99,7 @@ export function LivePreview({ preview, host, choice }: { preview: PreviewInfo; h
           </button>
         </div>
         <a
-          href={preview.url}
+          href={liveSrc(preview)}
           target="_blank"
           rel="noopener noreferrer"
           className="inline-flex h-8 items-center gap-1.5 rounded-md bg-primary px-3 text-xs font-medium text-primary-fg"
@@ -105,7 +113,7 @@ export function LivePreview({ preview, host, choice }: { preview: PreviewInfo; h
           <button
             key={page.slug}
             type="button"
-            onClick={() => setSrc(`${page.url}${page.url === src ? `?r=${Date.now()}` : ""}`)}
+            onClick={() => { const next = liveSrc(preview, page.slug); setSrc(next === src.split("&r=")[0].split("?r=")[0] ? `${next}${next.includes("?") ? "&" : "?"}r=${Date.now()}` : next); }}
             className="text-primary underline-offset-4 hover:underline"
           >
             {page.title}

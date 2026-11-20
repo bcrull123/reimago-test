@@ -84,18 +84,19 @@ describe("renderSitePage", () => {
     ],
   };
 
-  it("uses relative links that work from /made/<id> and /made/<id>/<slug>", () => {
-    assert.equal(pageHref(site.id, "home", "services"), `${site.id}/services`);
-    assert.equal(pageHref(site.id, "home", "home"), site.id);
-    assert.equal(pageHref(site.id, "services", "contact"), "contact");
-    assert.equal(pageHref(site.id, "services", "home"), `../${site.id}`);
+  it("uses root-relative /made links that work with or without a trailing slash", () => {
+    assert.equal(pageHref(site.id, "home", "services"), `/made/${site.id}/services`);
+    assert.equal(pageHref(site.id, "home", "home"), `/made/${site.id}`);
+    assert.equal(pageHref(site.id, "services", "contact"), `/made/${site.id}/contact`);
+    assert.equal(pageHref(site.id, "services", "home"), `/made/${site.id}`);
+    assert.equal(pageHref(site.id, "home", "services", "/hds-port"), `/hds-port/made/${site.id}/services`);
     const home = renderSitePage(site, "home")!;
-    assert.match(home, new RegExp(`href="${site.id}/services"`));
+    assert.match(home, new RegExp(`href="/made/${site.id}/services"`));
     const services = renderSitePage(site, "services")!;
-    assert.match(services, new RegExp(`href="\\.\\./${site.id}"`));
-    // Resolve like a browser would.
-    assert.equal(new URL(`${site.id}/services`, `https://x.test/made/${site.id}`).pathname, `/made/${site.id}/services`);
-    assert.equal(new URL(`../${site.id}`, `https://x.test/made/${site.id}/services`).pathname, `/made/${site.id}`);
+    assert.match(services, new RegExp(`href="/made/${site.id}"`));
+    const href = pageHref(site.id, "home", "services");
+    assert.equal(new URL(href, `https://x.test/made/${site.id}`).pathname, `/made/${site.id}/services`);
+    assert.equal(new URL(href, `https://x.test/made/${site.id}/`).pathname, `/made/${site.id}/services`);
   });
 
   it("adds a Formcarry contact form with honeypot and mode only on the contact page", () => {

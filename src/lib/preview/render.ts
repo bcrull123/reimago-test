@@ -72,23 +72,26 @@ export type RenderOptions = {
   imageUrl?: (name: string) => string | undefined;
   /** Hide the preview ribbon (screenshots). */
   ribbon?: boolean;
+  /** Path-based preview prefix (e.g. /hds-…) so root-relative /made links keep working. */
+  pathPrefix?: string;
 };
 
-/** Relative link from the page being viewed to another page of the same preview. */
-export function pageHref(id: string, from: string, to: string): string {
-  if (from === "home") return to === "home" ? id : `${id}/${to}`;
-  return to === "home" ? `../${id}` : to;
+/** Root-relative link to a page of this preview (safe with or without a trailing slash on /made/<id>). */
+export function pageHref(id: string, _from: string, to: string, prefix = ""): string {
+  const root = `${prefix}/made/${id}`;
+  return to === "home" ? root : `${root}/${to}`;
 }
 
-/** Relative URL of a stored image, from the page being viewed. */
-export function imageHref(id: string, from: string, name: string): string {
-  return from === "home" ? `${id}/img/${name}` : `img/${name}`;
+/** Root-relative URL of a stored image (always /made/<id>/img/<name>, plus any preview prefix). */
+export function imageHref(id: string, _from: string, name: string, prefix = ""): string {
+  return `${prefix}/made/${id}/img/${name}`;
 }
 
 function rewriteTokens(html: string, id: string, from: string, options?: RenderOptions): string {
+  const prefix = options?.pathPrefix ?? "";
   return html
-    .replace(/@page:([a-z0-9-]+)/g, (_, slug: string) => pageHref(id, from, slug))
-    .replace(/@img:([a-z0-9-]+)/g, (_, name: string) => options?.imageUrl?.(name) ?? imageHref(id, from, name));
+    .replace(/@page:([a-z0-9-]+)/g, (_, slug: string) => pageHref(id, from, slug, prefix))
+    .replace(/@img:([a-z0-9-]+)/g, (_, name: string) => options?.imageUrl?.(name) ?? imageHref(id, from, name, prefix));
 }
 
 function telHref(phone: string): string {
@@ -139,14 +142,14 @@ export function renderSitePage(site: StoredSite, slug: string, options?: RenderO
   const page = site.pages.find((p) => p.slug === slug);
   if (!page) return undefined;
   const v3 = site.version === 3;
-  const link = (to: string) => pageHref(site.id, slug, to);
+  const link = (to: string) => pageHref(site.id, slug, to, options?.pathPrefix ?? "");
   const nav = site.pages
     .map((p) => `<a href="${link(p.slug)}"${p.slug === slug ? ' aria-current="page"' : ""}>${escapeHtml(p.navLabel || p.title)}</a>`)
     .join("");
   const ctaSlug = site.pages.some((p) => p.slug === site.cta.slug) ? site.cta.slug : site.pages.at(-1)!.slug;
   const firstIsPhoto = v3 && !page.pending && page.sections?.[0]?.type === "hero-photo";
   // The logo: our stored, trimmed copy when we have one, styled for the surface it sits on.
-  const stored = (name: string | undefined) => (name && site.images?.[name] ? options?.imageUrl?.(name) ?? imageHref(site.id, slug, name) : undefined);
+  const stored = (name: string | undefined) => (name && site.images?.[name] ? options?.imageUrl?.(name) ?? imageHref(site.id, slug, name, options?.pathPrefix ?? "") : undefined);
   const logoOn = (surface: string) => {
     const t = logoTreatment(site.logoMeta, surface);
     if (t.kind === "wordmark") return `<span class="wordmark">${escapeHtml(site.name)}</span>`;
