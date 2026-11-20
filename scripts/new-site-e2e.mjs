@@ -89,6 +89,20 @@ await page.locator('[role="status"]').waitFor({ state: "detached", timeout: 300_
 check("Three looks built with no source site", (await page.locator("[data-look]").count()) >= 3, `${Math.round((Date.now() - t0) / 1000)}s`);
 await page.locator("[data-look]").first().scrollIntoViewIfNeeded();
 await page.screenshot({ path: join(outDir, "06-looks.png") });
+// Card box (a refine on one look) and Preview work with no source site.
+const second = page.locator("[data-look]").nth(1);
+const beforeId = await second.getAttribute("data-look");
+await second.locator("input, textarea").first().fill(process.env.EDIT ?? "make it lighter");
+await second.getByRole("button", { name: /^Change$/ }).click();
+await page.waitForTimeout(1500);
+await page.locator("[data-progress-ring]").waitFor({ state: "detached", timeout: 200_000 }).catch(() => undefined);
+const afterId = await page.locator("[data-look]").nth(1).getAttribute("data-look");
+check("Card box edit works on a new site", afterId && afterId !== beforeId, `${beforeId} → ${afterId}`);
+await page.locator("[data-look]").nth(1).scrollIntoViewIfNeeded();
+await page.screenshot({ path: join(outDir, "06b-card-edited.png") });
+await page.locator("[data-look]").nth(2).getByRole("button", { name: "Preview", exact: true }).click();
+await page.waitForTimeout(1500);
+check("Preview opens for a new-site look", (await page.locator("iframe").count()) > 0);
 const card = page.locator("[data-look]").first();
 await card.getByRole("button", { name: /^(Chosen|Choose this look)$/ }).first().click();
 await page.getByText(/check your email/i).first().waitFor({ timeout: 300_000 });
