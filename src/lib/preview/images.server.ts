@@ -7,6 +7,7 @@
  * into preview storage with the site record, so pages never hotlink expiring
  * provider URLs or slow third-party hosts. Never generate logos or text.
  */
+import { photoCaption } from "@/lib/preview/site-photos";
 import { generateImage, imageProvider, sniffImageType } from "@/lib/ai-provider.server";
 import { saveImage } from "@/lib/pages.server";
 import type { SiteFacts, StoredImage } from "@/lib/preview/types";
@@ -88,7 +89,25 @@ export type LogoFile = { bytes: Buffer; type: string; url: string };
  * asks for PNG/JPEG first — WebP/AVIF can't be read by the pure-JS analyser. SVG is returned as text bytes.
  * Returns null when the logo can't be loaded (then the business name is shown instead).
  */
+/** Round 10: an image this app stored itself (an uploaded logo), read from the store instead of over the network. */
+async function ownStoredImage(url: string): Promise<{ bytes: Buffer; type: string } | undefined> {
+  const m = url.match(/^https?:\/\/([^/]+)\/made\/([a-f0-9]{16})\/img\/(upload-logo)$/);
+  if (!m) return undefined;
+  const { publicBase } = await import("@/lib/publish.server");
+  let ours = false;
+  try {
+    ours = new URL(publicBase()).host === m[1];
+  } catch {
+    ours = false;
+  }
+  if (!ours) return undefined;
+  const { readImage } = await import("@/lib/pages.server");
+  return (await readImage(m[2]!, m[3]!).catch(() => undefined)) ?? undefined;
+}
+
 export async function fetchLogoFile(url: string): Promise<LogoFile | null> {
+  const own = await ownStoredImage(url);
+  if (own && /^image\/(png|jpeg)$/.test(own.type)) return { bytes: own.bytes, type: own.type, url };
   try {
     const { assertPublic, readCapped } = await import("@/lib/reimagine.server");
     let current = new URL(url);
@@ -149,7 +168,7 @@ export async function storePhotos(siteId: string, photos: Photo[], facts: SiteFa
       const name = `photo-${i + 1}`;
       try {
         await saveImage(siteId, name, photo.type, photo.bytes);
-        out[name] = { name, type: photo.type, source: "photo", alt: (facts.imageText?.[photo.url] ?? "").slice(0, 120) || `${facts.name}`, width: photo.width, height: photo.height, sourceUrl: photo.url };
+        out[name] = { name, type: photo.type, source: "photo", alt: photoCaption(facts.imageText?.[photo.url], undefined).slice(0, 120) || `${facts.name}`, width: photo.width, height: photo.height, sourceUrl: photo.url };
       } catch {
         // Skip a photo that cannot be stored.
       }

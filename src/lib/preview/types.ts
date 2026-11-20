@@ -232,6 +232,8 @@ export type PreviewTrace = {
   steps: { step: string; ai: boolean; ownerRequest: boolean }[];
   /** Round 9b: the card's Photo line after the owner changed the hero ("Art: brick street, illustrated by …"). */
   heroChange?: string;
+  /** Round 10: built for "Build a New Site" (no source site to take photos from). */
+  newSite?: boolean;
   images: ImageTrace[];
   /** Round 9: the site's own photos — usable ones found on the site, hero-sized ones, and how many this look uses. */
   sitePhotos?: { found: number; heroSized: number; used: number; heroOwn: boolean };

@@ -145,3 +145,35 @@ export function sizeClass(width: number, height: number): { usable: boolean; her
 export function isAlphaPng(bytes: Buffer, type: string): boolean {
   return type === "image/png" && bytes.length > 26 && (bytes[25] === 4 || bytes[25] === 6);
 }
+
+/**
+ * Round 10: an alt / caption that is really a file name ("background fx dji still004 dji still", "IMG_2041",
+ * "DSC01234 edited", "hero-bg-2x.jpg") is not a caption: the card shows a vision-written description instead.
+ */
+const CAMERA = /^(?:dji|dsc[nf]?|img|imag|pxl|mvimg|gopro|dcim|screenshot|screen|shot|untitled|copy|final|edited?|fx|bg|hd|4k|uhd|hdr|raw|scaled|still|frame|clip|export|resized?|thumb(?:nail)?|v\d+|\d+x\d+|\d+px|e\d{6,}|wp|uploads?)$/;
+export function isFilenameLike(text: string): boolean {
+  const t = text.trim().toLowerCase();
+  if (!t) return false;
+  if (/\.(?:jpe?g|png|webp|gif|heic|avif|tiff?)\b/.test(t)) return true;
+  if (!/\s/.test(t) && /[_-]/.test(t) && /\d/.test(t)) return true;
+  const tokens = t.split(/[\s_.+-]+/).filter(Boolean);
+  if (!tokens.length) return false;
+  let score = 0;
+  const seen = new Set<string>();
+  for (const tok of tokens) {
+    if (CAMERA.test(tok)) score++;
+    else if (/^[a-z]+\d{2,}[a-z]*$|^\d{2,}[a-z]+$/.test(tok)) score++;
+    else if (/^\d{3,}$/.test(tok)) score++;
+    if (seen.has(tok) && tok.length > 1) score++;
+    seen.add(tok);
+  }
+  return score >= 2 || (tokens.length <= 2 && score >= 1);
+}
+
+/** The words to show for a site photo: its caption, unless that is a file name; then the vision description. */
+export function photoCaption(alt: string | undefined, vision: string | undefined): string {
+  const a = (alt ?? "").trim();
+  if (a && !isFilenameLike(a)) return a;
+  const v = (vision ?? "").trim();
+  return v ? v.charAt(0).toUpperCase() + v.slice(1) : "";
+}

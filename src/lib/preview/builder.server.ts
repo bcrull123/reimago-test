@@ -29,6 +29,7 @@ import type { Photo } from "@/lib/preview/images.server";
 import { imagePrompt, isCivic, sceneFor } from "@/lib/preview/image-prompts";
 import type { Archetype, ImageTrace, PreviewTrace, PreviousRound } from "@/lib/preview/types";
 import { fromOklch, oklch, toOklab } from "@/lib/preview/look-edit";
+import { isFilenameLike, photoCaption } from "@/lib/preview/site-photos";
 
 /** The owner's note + feedback rounds as a high-priority block at the end of a system prompt. */
 function requestBlock(facts: SiteFacts): string {
@@ -907,11 +908,14 @@ export async function buildLook(
     // Proactive pick (no note needed): strong, relevant site photos first, then the ranked Google Images results,
     // then the site's weaker photos. Each look takes a different one (photoRank). "Asked for new photos" puts
     // Google first.
+    // Round 10: a caption that is really a file name ("background fx dji still004 dji still") is replaced by what
+    // Grok vision saw in the photo; with neither, the card just says "your site's own".
+    const visionSaw = new Map((pre.site ?? []).flatMap((c) => (c.visionSubject ? [[c.id, c.visionSubject] as const] : [])));
     const describe = (url: string) => {
-      const cue = facts.imageText?.[url]?.trim();
+      const cue = photoCaption(facts.imageText?.[url], visionSaw.get(url));
       if (cue) return cue.length > 60 ? `${cue.slice(0, 60).replace(/\s+\S*$/, "")}…` : cue;
       const file = decodeURIComponent(url.split(/[?#]/)[0]!.split("/").pop() ?? "").replace(/\.[a-z0-9]+$/i, "").replace(/[-_+]+/g, " ").trim();
-      return file && /[a-z]{3}/i.test(file) && !/^(img|dsc|image|photo)?\s*\d+$/i.test(file) ? file.slice(0, 60) : "your homepage";
+      return file && /[a-z]{3}/i.test(file) && !isFilenameLike(file) && !/^(img|dsc|image|photo)?\s*\d+$/i.test(file) ? file.slice(0, 60) : "your homepage";
     };
     const strong = scored.slice(0, OWN_MAX).flatMap((p, i) => (p.score >= 2 && heroWorthy(p.photo) && images[`photo-${i + 1}`] ? [{ own: `photo-${i + 1}`, score: p.score, what: describe(p.photo.url) }] : []));
     const weak = suitable.filter((n) => !strong.some((x) => x.own === n)).map((own) => ({ own, score: 0, what: describe(scored[Number(own.slice(6)) - 1]?.photo.url ?? "") }));
@@ -1029,7 +1033,7 @@ export async function buildLook(
           const photo = await fetchPhoto(option.siteUrl);
           if (!photo || photo.width < 800) continue;
           await saveImage(id, "hero", photo.type, photo.bytes);
-          images.hero = { name: "hero", type: photo.type, source: "photo", alt: (facts.imageText?.[option.siteUrl] ?? "").slice(0, 120) || facts.name, width: photo.width, height: photo.height, sourceUrl: option.siteUrl, credit: { title: option.what, author: "", license: "", licenseUrl: "", sourceUrl: option.siteUrl, provider: "your site" } };
+          images.hero = { name: "hero", type: photo.type, source: "photo", alt: photoCaption(facts.imageText?.[option.siteUrl], visionSaw.get(option.siteUrl)).slice(0, 120) || facts.name, width: photo.width, height: photo.height, sourceUrl: option.siteUrl, credit: { title: option.what, author: "", license: "", licenseUrl: "", sourceUrl: option.siteUrl, provider: "your site" } };
           Object.assign(entry, { status: "your site's photo", source: "your site", scene: option.what, search: `${entry.search}${picked(option)}` } satisfies Partial<ImageTrace>);
           return true;
         }
@@ -1122,6 +1126,8 @@ export async function buildLook(
     for (const s of sections) for (const n of [s.image, ...(s.items ?? []).map((it) => it.image)]) if (n && images[n]?.source === "photo") used.add(n === "hero" ? (images.hero?.credit?.sourceUrl ?? "hero") : n);
     const { scanSitePhotos } = await import("@/lib/preview/site-photos.server");
     const scan = await scanSitePhotos(facts).catch(() => undefined);
+    // Round 10: "Build a New Site" has no source site, so the card says the art is new rather than "0 photos found".
+    if (facts.mode === "create" && !facts.sourceUrl) trace.newSite = true;
     trace.sitePhotos = { found: scan?.photos.length ?? photos.length, heroSized: scan?.photos.filter((p) => p.hero).length ?? 0, used: used.size, heroOwn: Boolean(sections[0]?.image && images[sections[0].image]?.source === "photo") };
     console.info(`[photo] look ${index + 1} "${design.name}": site photos ${trace.sitePhotos.found} found (${trace.sitePhotos.heroSized} hero-sized), ${used.size} used in this look${trace.sitePhotos.heroOwn ? `, hero = your site's “${(images[sections[0]!.image!]?.alt ?? "").slice(0, 60)}”${sections[0]?.fit === "small" ? " (small: tinted / framed treatment)" : ""}` : ""}`);
   }

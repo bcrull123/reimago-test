@@ -9,6 +9,7 @@ import { TEMP_PHOTO_LINE } from "./google-photo.ts";
 import { imageWishes, requestedPhoto, sceneToFind } from "./owner-request.ts";
 import { creditLine, placeOf } from "./web-photo.ts";
 import type { DesignDirection, PreviewTrace, SiteFacts } from "./types.ts";
+import { isFilenameLike } from "./site-photos.ts";
 
 const TRADES: [RegExp, string][] = [
   [/plumb|drain|sewer|water heater/i, "plumbing company"],
@@ -137,6 +138,11 @@ export function photosLine(trace: PreviewTrace | undefined, ownPhotos: number): 
     const instead = other?.status === "generated" ? "the hero has an AI photo of this look's own idea" : ownPhotos ? "the hero uses your site's best photo" : "the hero has no photo";
     return `Couldn't find ${aOrSome(scene)} on your site to keep, and no web or AI ${bare(scene)} was swapped in · ${instead}`;
   }
+  // Round 10: a new site has no photos of its own yet; its art is made for it.
+  if (trace?.newSite && !scene) {
+    if (!hero || hero.status === "generated" || (hero.status === "skipped" && /Grok Imagine/.test(hero.search ?? ""))) return "Art: made by Grok Imagine for your new site (no photos needed from you)";
+    if (hero.status === "preview photo (Google Images)") return `${TEMP_PHOTO_LINE} · Grok Imagine couldn't make art this time`;
+  }
   // Round 9: how many of the site's own photos were found, and how many this look uses.
   const sp = trace?.sitePhotos;
   const counts = sp ? ` · ${sp.found} photo${sp.found === 1 ? "" : "s"} found on your site, ${sp.used} used here` : "";
@@ -148,7 +154,8 @@ export function photosLine(trace: PreviewTrace | undefined, ownPhotos: number): 
   if (hero.status === "your site's photo") {
     const raw = hero.credit?.title && !/^your homepage$/i.test(hero.credit.title) ? hero.credit.title : scene ? "" : hero.scene;
     // File-name noise ("o o o", "n.jpg") is not a caption.
-    const title = /[a-z]{3}/i.test(raw.replace(/\b(?:jpe?g|png|webp)\b/gi, "")) && !/^your homepage$/i.test(raw) ? raw : "";
+    // Round 10: a file name ("background fx dji still004 dji still") is never shown as the caption.
+    const title = /[a-z]{3}/i.test(raw.replace(/\b(?:jpe?g|png|webp)\b/gi, "")) && !/^your homepage$/i.test(raw) && !isFilenameLike(raw) ? raw : "";
     return `Photo: your site's own${title ? ` (“${title.slice(0, 50)}”)` : scene ? ` photo of ${what}` : ""}${counts}`;
   }
   if (hero.status === "web photo" && hero.credit) return `Photo: ${creditLine(hero.credit)}`;

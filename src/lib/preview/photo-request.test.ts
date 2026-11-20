@@ -242,3 +242,21 @@ describe("round 9b: illustrated stand-in", () => {
     assert.match(p, /No text/);
   });
 });
+
+describe("round 10: file-name captions", async () => {
+  const { isFilenameLike, photoCaption } = await import("./site-photos.ts");
+  it("spots file names posing as alt text", () => {
+    for (const t of ["background fx dji still004 dji still", "IMG_2041", "DSC01234 edited", "hero-bg-2x.jpg", "PXL 20230514 181022", "dji 0042"]) assert.equal(isFilenameLike(t), true, t);
+    for (const t of ["Pauls Valley welcome sign", "Grilled salmon with rice", "Our team at the 2019 open house", "Downtown at night", "Rocket"]) assert.equal(isFilenameLike(t), false, t);
+  });
+  it("uses the vision description instead", () => {
+    assert.equal(photoCaption("background fx dji still004 dji still", "aerial view of downtown"), "Aerial view of downtown");
+    assert.equal(photoCaption("Fresh tacos on a plate", "tacos"), "Fresh tacos on a plate");
+    assert.equal(photoCaption("IMG_2041", undefined), "");
+  });
+  it("never shows a file name on the card", async () => {
+    const { photosLine } = await import("./image-prompts.ts");
+    const line = photosLine({ request: {}, images: [{ slot: "hero", name: "hero", status: "your site's photo", scene: "x", credit: { title: "background fx dji still004 dji still" } }] } as never, 3);
+    assert.doesNotMatch(line, /dji|still004/);
+  });
+});
