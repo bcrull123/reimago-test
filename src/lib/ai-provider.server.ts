@@ -19,6 +19,7 @@
  * Vision (design critique of a screenshot):
  *   CRITIQUE_MODEL = optional model for the critique call (default: AI_MODEL / provider default)
  */
+import { stopOrTimeout } from "@/lib/abort.server";
 import { env } from "@/lib/env.server";
 import { AiError, parseJsonObject, redact } from "@/lib/ai-json";
 
@@ -137,7 +138,7 @@ export async function chatText(options: ChatOptions): Promise<string> {
         method: "POST",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
         body: JSON.stringify(body),
-        signal: AbortSignal.timeout(timeoutMs),
+        signal: stopOrTimeout(timeoutMs),
       });
     } catch (error) {
       const name = error instanceof Error ? error.name : "";
@@ -262,7 +263,7 @@ export async function generateImage(options: {
       method: "POST",
       headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
       body: JSON.stringify(body),
-      signal: AbortSignal.timeout(options.timeoutMs ?? 45_000),
+      signal: stopOrTimeout(options.timeoutMs ?? 45_000),
     });
     if (!response.ok) {
       console.error(`[image:${provider}]${editing ? " edit" : ""}`, response.status, (await response.text().catch(() => "")).slice(0, 300));

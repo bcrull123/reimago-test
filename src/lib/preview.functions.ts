@@ -31,6 +31,7 @@ export const previewRead = createServerFn({ method: "POST" })
     return { url, notes };
   })
   .handler(async ({ data }): Promise<PreviewStepResult<{ facts: SiteFacts }>> => {
+    (await import("./abort.server")).watchStop("read");
     (await import("./env.server")).logKeyPresenceOnce();
     const { rateLimited, requestIp } = await import("./reimagine.server");
     if (rateLimited(requestIp())) {
@@ -55,6 +56,7 @@ export const previewFromBrief = createServerFn({ method: "POST" })
     return { brief: input.brief };
   })
   .handler(async ({ data }): Promise<PreviewStepResult<{ facts: SiteFacts }>> => {
+    (await import("./abort.server")).watchStop("new-site brief");
     (await import("./env.server")).logKeyPresenceOnce();
     const { rateLimited, requestIp } = await import("./reimagine.server");
     if (rateLimited(requestIp())) {
@@ -83,6 +85,7 @@ export const previewDirections = createServerFn({ method: "POST" })
     current: (Array.isArray(input?.current) ? input.current : []).filter((x): x is string => typeof x === "string" && /^[a-f0-9]{16}$/.test(x)).slice(0, 3),
   }))
   .handler(async ({ data }): Promise<PreviewStepResult<{ plan: SitePlan; directions: DesignDirection[]; note?: string }>> => {
+    (await import("./abort.server")).watchStop("directions");
     (await import("./env.server")).logKeyPresenceOnce();
     if (await limited("dir", 20)) return { ok: false, error: "Too many previews from this network in the last hour. Try again shortly." };
     try {
@@ -139,6 +142,7 @@ export const previewLook = createServerFn({ method: "POST" })
     variation: variationOf(input?.variation),
   }))
   .handler(async ({ data }): Promise<PreviewStepResult<{ look: LookInfo; note?: string }>> => {
+    (await import("./abort.server")).watchStop("look");
     (await import("./env.server")).logKeyPresenceOnce();
     if (await limited("look", 45)) return { ok: false, error: "Too many previews from this network in the last hour. Try again shortly." };
     try {
@@ -203,6 +207,7 @@ export const previewImagine = createServerFn({ method: "POST" })
     return { id };
   })
   .handler(async ({ data }): Promise<PreviewStepResult<{ mockupUrl?: string; note?: string }>> => {
+    (await import("./abort.server")).watchStop("imagine mockup");
     (await import("./env.server")).logKeyPresenceOnce();
     if (await limited("imagine", 30)) return { ok: false, error: "Too many previews from this network in the last hour. Try again shortly." };
     try {
@@ -236,6 +241,7 @@ export const previewCustom = createServerFn({ method: "POST" })
     return { id };
   })
   .handler(async ({ data }): Promise<PreviewStepResult<{ custom: NonNullable<LookInfo["custom"]>; name: string; layout?: string }>> => {
+    (await import("./abort.server")).watchStop("custom design");
     (await import("./env.server")).logKeyPresenceOnce();
     if (await limited("custom", 30)) return { ok: false, error: "Too many previews from this network in the last hour. Try again shortly." };
     try {
@@ -319,6 +325,7 @@ export const previewRefine = createServerFn({ method: "POST" })
     return { text, ids, focused, feedback, card };
   })
   .handler(async ({ data }): Promise<PreviewStepResult<{ mode: "new" } | { mode: "none"; note: string } | { mode: "edit"; looks: LookInfo[]; target: string; targetId: string; how: string; note?: string }>> => {
+    (await import("./abort.server")).watchStop("card edit / refine");
     (await import("./env.server")).logKeyPresenceOnce();
     const tRefine = Date.now();
     if (await limited("refine", 40)) return { ok: false, error: "Too many changes from this network in the last hour. Try again shortly." };
@@ -511,6 +518,7 @@ export const previewUploadLogo = createServerFn({ method: "POST" })
     return { type: m[1]!, b64: m[2]! };
   })
   .handler(async ({ data }): Promise<PreviewStepResult<{ url: string }>> => {
+    (await import("./abort.server")).watchStop("logo upload");
     (await import("./env.server")).logKeyPresenceOnce();
     try {
       if (await limited("logo", 20)) return { ok: false, error: "Too many uploads from this network in the last hour." };
@@ -527,4 +535,79 @@ export const previewUploadLogo = createServerFn({ method: "POST" })
     } catch (error) {
       return { ok: false, error: error instanceof Error ? error.message : "The logo could not be stored." };
     }
+  });
+
+/** Round 10: the progress ring's yardstick — the rolling average render time for this kind (ms). */
+export const renderAverage = createServerFn({ method: "POST" })
+  .validator((input: { kind?: string }) => ({ kind: (["round1", "edit", "newsite"].includes(String(input?.kind)) ? input.kind : "round1") as "round1" | "edit" | "newsite" }))
+  .handler(async ({ data }): Promise<{ ms: number; samples: number }> => {
+    const { recentRenderTimes, rollingAverage } = await import("./render-times.server");
+    const samples = await recentRenderTimes(data.kind);
+    return { ms: rollingAverage(samples, data.kind), samples: samples.length };
+  });
+
+/** Round 10: a finished render's wall time (5 s – 10 min; stopped / failed renders are not recorded). */
+export const recordRenderTime = createServerFn({ method: "POST" })
+  .validator((input: { kind?: string; ms?: number }) => {
+    const kind = (["round1", "edit", "newsite"].includes(String(input?.kind)) ? input.kind : "round1") as "round1" | "edit" | "newsite";
+    const ms = Number(input?.ms);
+    if (!Number.isFinite(ms) || ms < 5000 || ms > 600_000) throw new Error("Bad render time.");
+    return { kind, ms: Math.round(ms) };
+  })
+  .handler(async ({ data }): Promise<{ ok: boolean }> => {
+    try {
+      if (await limited("render-time", 120)) return { ok: false };
+      const { addRenderTime } = await import("./render-times.server");
+      await addRenderTime(data.kind, data.ms);
+      console.info(`[timing] render ${data.kind} finished in ${Math.round(data.ms / 1000)}s (recorded for the progress ring)`);
+      return { ok: true };
+    } catch {
+      return { ok: false };
+    }
+  });
+
+/**
+ * Round 10: before Reimagine starts, a quick check (≈3 s) that the domain exists (DNS) and answers (HEAD, else GET).
+ * A name that doesn't resolve gets a friendly error; a site that resolves but is slow or blocks HEAD still goes ahead.
+ */
+export const checkSiteReachable = createServerFn({ method: "POST" })
+  .validator((input: { url?: string }) => ({ url: typeof input?.url === "string" ? input.url.trim().slice(0, 500) : "" }))
+  .handler(async ({ data }): Promise<{ ok: true; host: string; note?: string } | { ok: false; error: string }> => {
+    let host = "";
+    try {
+      host = new URL(/^https?:\/\//i.test(data.url) ? data.url : `https://${data.url}`).hostname.toLowerCase();
+    } catch {
+      return { ok: false, error: "That doesn't look like a web address. Try something like yourbusiness.com." };
+    }
+    if (!/^[a-z0-9.-]+\.[a-z]{2,}$/.test(host)) return { ok: false, error: `“${host || data.url}” doesn't look like a web address. Try something like yourbusiness.com.` };
+    const t0 = Date.now();
+    const { lookup } = await import("node:dns/promises");
+    let address = "";
+    const dns = await Promise.race([
+      lookup(host).then((a) => ((address = a.address), "ok" as const)).catch((e: NodeJS.ErrnoException) => (e?.code === "ENOTFOUND" || e?.code === "ENODATA" ? ("missing" as const) : ("error" as const))),
+      new Promise<"slow">((r) => setTimeout(() => r("slow"), 2500)),
+    ]);
+    if (dns === "missing") {
+      console.info(`[domain-check] ${host}: no DNS record (${Date.now() - t0}ms) → friendly error`);
+      return { ok: false, error: `We couldn't find ${host}. Check the spelling, or try it with or without “www”.` };
+    }
+    let status = 0;
+    if (dns === "ok") {
+      for (const method of ["HEAD", "GET"] as const) {
+        try {
+          const res = await fetch(`https://${host}/`, { method, redirect: "follow", signal: AbortSignal.timeout(Math.max(500, 3000 - (Date.now() - t0))) });
+          status = res.status;
+          if (method === "GET") await res.body?.cancel().catch(() => undefined);
+          if (status < 400 || status === 403 || status === 401) break;
+        } catch {
+          status = 0;
+        }
+        if (Date.now() - t0 > 3000) break;
+      }
+    }
+    // Behind a fake-IP DNS proxy (198.18.0.0/15: every name "resolves"), only an answer proves the site exists.
+    const fakeIp = /^198\.1[89]\./.test(address);
+    console.info(`[domain-check] ${host}: DNS ${dns}${fakeIp ? " (proxy address, unverified)" : ""}, HTTP ${status || "no answer"} in ${Date.now() - t0}ms`);
+    if (fakeIp && !status) return { ok: false, error: `We couldn't find ${host}. Check the spelling, or try it with or without “www”.` };
+    return { ok: true, host, note: dns === "ok" && !status ? "slow" : undefined };
   });

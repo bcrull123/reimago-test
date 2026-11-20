@@ -37,13 +37,14 @@ function Thumb({ look, mini = false }: { look: LookInfo; mini?: boolean }) {
  */
 export function CardEditBox({ look, disabled, working, onSubmit, where = "card" }: { look: LookInfo; disabled: boolean; working: boolean; onSubmit: (text: string) => void; where?: "card" | "preview" }) {
   const [text, setText] = useState("");
+  useEffect(() => setText(""), [look.id]);
   const inputId = `${where}-edit-${look.id}`;
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const wish = text.trim();
     if (!wish || disabled) return;
+    // Round 10: the text stays until the change lands (a new look id), so Stop or a failure keeps what was typed.
     onSubmit(wish);
-    setText("");
   }
   return (
     <form

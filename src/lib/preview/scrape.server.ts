@@ -6,6 +6,7 @@
  * goes through assertPublic (no private IPs), redirects are followed manually,
  * bodies are size-capped, and non-HTML responses are skipped.
  */
+import { requestSignal, stopOrTimeout } from "@/lib/abort.server";
 import { collectSiteArt } from "@/lib/preview/site-art";
 import {
   REIMAGO_HOSTS,
@@ -153,7 +154,7 @@ async function fetchCss(url: string, deadline: number): Promise<string> {
       await assertPublic(current);
       const response = await fetch(current, {
         redirect: "manual",
-        signal: AbortSignal.timeout(Math.min(remaining, 6000)),
+        signal: stopOrTimeout(Math.min(remaining, 6000)),
         headers: { Accept: "text/css", "User-Agent": "ReimagoReimagine/1.0 (+https://reimago.ai)" },
       });
       if (response.status >= 300 && response.status < 400) {
@@ -453,7 +454,7 @@ export async function scrapeSite(rawUrl: string, notes: string): Promise<SiteFac
   const docs: Doc[] = [home];
   const queue = [...extra];
   const worker = async () => {
-    while (queue.length) {
+    while (queue.length && !requestSignal()?.aborted) {
       const next = queue.shift();
       if (!next) return;
       const remaining = deadline - Date.now();

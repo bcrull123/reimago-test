@@ -5,6 +5,9 @@ import { SiteShell, Wordmark } from "@/components/site-shell";
 import { ModeChoices, NewSiteForm, type ModeChoice } from "@/components/new-site-form";
 import { bareHost, briefForFacts, emptyNewSite, newSiteProblem, type NewSiteBrief } from "@/lib/new-site";
 import { handOffToCursor } from "@/lib/reimagine.functions";
+import { checkSiteReachable, recordRenderTime, renderAverage } from "@/lib/preview.functions";
+import { ProgressRing, RotatingStatus } from "@/components/progress-ring";
+import { statusLines } from "@/lib/status-copy";
 import { cursorStatus, previewCustom, previewDirections, previewImagine, previewFinish, previewFromBrief, previewLook, previewRead, previewRefine, previewRetryAi, previewUploadLogo, savePreviewPicture } from "@/lib/preview.functions";
 import { capturePreviewPicture, pictureFileName } from "@/lib/preview-picture";
 import { logSubmit, notifyReplyWebhook } from "@/lib/reply-webhook.functions";
@@ -22,7 +25,7 @@ const REBUILDS = [
 ] as const;
 
 
-type Stage = "" | "read" | "dream" | "paint" | "picture" | "send" | "finish";
+type Stage = "" | "check" | "read" | "dream" | "paint" | "picture" | "send" | "finish";
 
 /** Progress shown while looks are made (phase 1) and while the chosen look is finished (phase 2). */
 const LOOK_STAGES: { key: Stage; label: string }[] = [
@@ -243,6 +246,11 @@ export function HomePage() {
   const seenIds = useRef<string[]>([]);
   const [choosingSend, setChoosingSend] = useState(false);
   const lead = useRef<{ form: PendingLead; sent: boolean; sentIds: string[] } | null>(null);
+  /** Round 10: the render in progress (for the ring, the status copy and Stop). */
+  const [run, setRun] = useState<{ kind: "round1" | "edit" | "newsite"; start: number; avg: number } | null>(null);
+  const runAbort = useRef<AbortController | null>(null);
+  const runRef = useRef<{ kind: "round1" | "edit" | "newsite"; start: number; signal: AbortSignal } | null>(null);
+  const [stopped, setStopped] = useState("");
   const choosing = useRef(false);
   const draftRef = useRef<HTMLElement>(null);
   const scrollOnResult = useRef(false);
@@ -272,24 +280,72 @@ export function HomePage() {
     draftRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
   }, [result, looks]);
 
+  /** Round 10: start a render — a fresh AbortController for Stop, and the ring's yardstick from the server. */
+  function beginRun(kind: "round1" | "edit" | "newsite"): AbortSignal {
+    runAbort.current?.abort();
+    const controller = new AbortController();
+    runAbort.current = controller;
+    const start = Date.now();
+    setStopped("");
+    runRef.current = { kind, start, signal: controller.signal };
+    setRun({ kind, start, avg: kind === "edit" ? 25_000 : kind === "newsite" ? 80_000 : 95_000 });
+    renderAverage({ data: { kind } })
+      .then((a) => setRun((r) => (r && r.start === start ? { ...r, avg: a.ms } : r)))
+      .catch(() => undefined);
+    return controller.signal;
+  }
+
+  /** A finished render's wall time goes to the server's rolling average (never a stopped or failed one). */
+  function endRun(signal: AbortSignal, ok: boolean) {
+    const r = runRef.current;
+    if (!r || r.signal !== signal) return;
+    runRef.current = null;
+    setRun(null);
+    if (runAbort.current?.signal === signal) runAbort.current = null;
+    if (ok && !signal.aborted) void recordRenderTime({ data: { kind: r.kind, ms: Date.now() - r.start } }).catch(() => undefined);
+  }
+
+  /** Stop: abort the server work in flight, and go back to the form with everything still filled in. */
+  function stopRun() {
+    runAbort.current?.abort();
+    runAbort.current = null;
+    runRef.current = null;
+    setRun(null);
+    setWorking(false);
+    setRetrying(false);
+    setRefining(false);
+    setEditingId("");
+    setStage("");
+    setError("");
+    setStopped("Stopped. Nothing was sent, and your answers are still here. Change anything and try again.");
+  }
+
   /**
    * Phase 1: plan the pages + three design directions, then build each look's images and
    * homepage in parallel (three separate requests, so none of them runs into host time limits).
    */
-  async function makeLooks(nextFacts: SiteFacts, nextVariation: number): Promise<{ looks: LookInfo[]; note: string }> {
+  async function makeLooks(nextFacts: SiteFacts, nextVariation: number, signal?: AbortSignal): Promise<{ looks: LookInfo[]; note: string }> {
+    const stop = () => {
+      if (signal?.aborted) throw new DOMException("Stopped", "AbortError");
+    };
+    stop();
     setStage("dream");
     // Earlier rounds' looks (the server reads them itself) so a new round comes back visibly different.
-    const planned = await previewDirections({ data: { facts: nextFacts, variation: nextVariation, previous: nextVariation ? seenIds.current.slice(-12) : [], current: nextVariation ? (looks ?? []).map((l) => l.id) : [] } });
+    const planned = await previewDirections({ data: { facts: nextFacts, variation: nextVariation, previous: nextVariation ? seenIds.current.slice(-12) : [], current: nextVariation ? (looks ?? []).map((l) => l.id) : [] }, signal });
+    stop();
     if (!planned.ok) throw new Error(planned.error);
     setStage("paint");
     const settled = await Promise.allSettled(
       planned.directions.map(async (direction, index) => {
-        const built = await previewLook({ data: { facts: nextFacts, plan: planned.plan, direction, index, variation: nextVariation } });
+        const built = await previewLook({ data: { facts: nextFacts, plan: planned.plan, direction, index, variation: nextVariation }, signal });
+        stop();
         // The from-scratch look: its template build first (images, sub-pages, the fallback), then Grok's own design.
         if (!built.ok || !direction.custom) return built;
         // Grok Imagine designs it first (the mockup), then Grok builds the page to match (or from the text brief).
-        await previewImagine({ data: { id: built.look.id } }).catch(() => undefined);
-        const custom = await previewCustom({ data: { id: built.look.id } }).catch(() => undefined);
+        await previewImagine({ data: { id: built.look.id }, signal }).catch(() => undefined);
+        stop();
+        const custom = await previewCustom({ data: { id: built.look.id }, signal }).catch(() => undefined);
+        stop();
         if (!custom?.ok) return { ...built, look: { ...built.look, custom: { concept: direction.custom.brief.concept, status: "fallback" as const, note: "The from-scratch design could not be built this time, so this card shows a template look." } } };
         // The custom page's own picture line (Imagine art / the site's signature graphic) replaces the template step's.
         return { ...built, look: { ...built.look, name: custom.name, layout: custom.layout ?? built.look.layout, photos: custom.custom.photoLine ?? built.look.photos, custom: custom.custom, rev: (built.look.rev ?? 0) + 1 } };
@@ -306,6 +362,7 @@ export function HomePage() {
         firstError = item.status === "fulfilled" ? (item.value.ok ? "" : item.value.error) : item.reason instanceof Error ? item.reason.message : "";
       }
     }
+    stop();
     if (!made.length) throw new Error(firstError || "The looks could not be built. Try again.");
     if (made.length < planned.directions.length) notes.push(`${planned.directions.length - made.length} look could not be built this time.`);
     made.sort((a, b) => a.index - b.index);
@@ -458,14 +515,24 @@ export function HomePage() {
     seenIds.current = [];
     lead.current = null;
     const gotcha = new FormData(event.currentTarget).get("_gotcha");
+    const signal = beginRun("round1");
+    let ok = false;
     try {
+      // Round 10: a quick (≈3 s) check that the domain exists before the long work starts.
+      setStage("check");
+      const reach = await checkSiteReachable({ data: { url: site }, signal }).catch(() => undefined);
+      if (reach && !reach.ok) {
+        setError(reach.error);
+        return;
+      }
       setStage("read");
-      const read = await previewRead({ data: { url: site, notes: notes.trim() } });
+      const read = await previewRead({ data: { url: site, notes: notes.trim() }, signal });
       if (!read.ok) {
         setError(read.error);
         return;
       }
-      const made = await makeLooks(read.facts, 0);
+      const made = await makeLooks(read.facts, 0, signal);
+      ok = true;
       setFacts(read.facts);
       setVariation(0);
       scrollOnResult.current = true;
@@ -478,10 +545,13 @@ export function HomePage() {
       };
       setMailed(CHOOSE_PROMPT);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "The preview could not be made.");
+      if (!signal.aborted) setError(err instanceof Error ? err.message : "The preview could not be made.");
     } finally {
-      setWorking(false);
-      setStage("");
+      endRun(signal, ok);
+      if (!signal.aborted) {
+        setWorking(false);
+        setStage("");
+      }
     }
   }
 
@@ -511,6 +581,8 @@ export function HomePage() {
     lead.current = null;
     const brief = { ...newSite };
     const logo = newLogo;
+    const signal = beginRun("newsite");
+    let ok = false;
     try {
       const gotcha = document.querySelector<HTMLInputElement>('input[name="_gotcha"]')?.value ?? "";
       setStage("read");
@@ -523,12 +595,14 @@ export function HomePage() {
           reader.onerror = () => reject(new Error("The logo could not be read."));
           reader.readAsDataURL(logo);
         });
-        const up = await previewUploadLogo({ data: { image: dataUrl } }).catch(() => undefined);
+        const up = await previewUploadLogo({ data: { image: dataUrl }, signal }).catch(() => undefined);
         if (up?.ok) logoUrl = up.url;
       }
-      const start = await previewFromBrief({ data: { brief: briefForFacts(brief, logoUrl) } });
+      if (signal.aborted) return;
+      const start = await previewFromBrief({ data: { brief: briefForFacts(brief, logoUrl) }, signal });
       if (!start.ok) throw new Error(start.error);
-      const made = await makeLooks(start.facts, 0);
+      const made = await makeLooks(start.facts, 0, signal);
+      ok = true;
       setFacts(start.facts);
       setVariation(0);
       // Looks were built: hold the brief until the visitor chooses one (sent with its picture).
@@ -537,10 +611,13 @@ export function HomePage() {
       scrollOnResult.current = true;
       showLooks(made.looks, made.note);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "The looks could not be built. Try again.");
+      if (!signal.aborted) setError(err instanceof Error ? err.message : "The looks could not be built. Try again.");
     } finally {
-      setWorking(false);
-      setStage("");
+      endRun(signal, ok);
+      if (!signal.aborted) {
+        setWorking(false);
+        setStage("");
+      }
     }
   }
 
@@ -584,13 +661,17 @@ export function HomePage() {
     setRefining(true);
     setRetrying(true);
     setEditingId(card?.id ?? "");
+    const signal = beginRun(card ? "edit" : "round1");
+    let ok = false;
     try {
       // Feedback that names a look ("The Night Brick is best, just a little too dark") edits THAT look:
       // same name, layout, photo and copy, only the requested change, as three close variations.
       // A card's own box sends that card's identity explicitly (id, index, style name): it always wins targeting.
       const routed = await previewRefine({
         data: { text: wish, ids: (looks ?? []).map((l) => l.id), focused: focusedLook, feedback, card: card ? { id: card.id, index: card.index, style: card.name } : undefined },
+        signal,
       }).catch(() => undefined);
+      if (signal.aborted) return;
       if (routed?.ok && routed.mode === "none") {
         setError(routed.note);
         return;
@@ -614,9 +695,11 @@ export function HomePage() {
         setChosenLook("");
         setResult(null);
         window.setTimeout(() => document.querySelector(`[data-look="${edited.id}"]`)?.scrollIntoView({ behavior: "smooth", block: "center" }), 80);
+        ok = true;
         return;
       }
-      const made = await makeLooks(nextFacts, nextVariation);
+      const made = await makeLooks(nextFacts, nextVariation, signal);
+      ok = true;
       setFacts(nextFacts);
       setVariation(nextVariation);
       setFeedback(nextFeedback);
@@ -624,12 +707,15 @@ export function HomePage() {
       showLooks(made.looks, made.note);
       window.setTimeout(() => document.querySelector("[data-choose-banner]")?.scrollIntoView({ behavior: "smooth", block: "start" }), 50);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "New looks could not be made. Try again.");
+      if (!signal.aborted) setError(err instanceof Error ? err.message : "New looks could not be made. Try again.");
     } finally {
-      setRefining(false);
-      setRetrying(false);
-      setEditingId("");
-      setStage("");
+      endRun(signal, ok);
+      if (!signal.aborted) {
+        setRefining(false);
+        setRetrying(false);
+        setEditingId("");
+        setStage("");
+      }
     }
   }
 
@@ -727,28 +813,15 @@ export function HomePage() {
           aria-live="polite"
         >
           <div className="flex flex-col items-center">
-            <div className="relative size-48" aria-hidden>
-              <div className="absolute inset-3 rounded-full border border-fg/30" />
-              <div
-                className="clock-sweep absolute top-1/2 left-[calc(50%-1.25rem)] h-20 w-10 origin-bottom"
-                style={{ marginTop: "-5rem" }}
-              >
-                <span className="clock-digit absolute left-1/2 top-0 font-display text-5xl italic leading-none text-fg">
-                  1
-                </span>
-                <span className="absolute top-10 bottom-0 left-1/2 w-px -translate-x-1/2 bg-fg" />
-              </div>
-              <span className="absolute left-1/2 top-1/2 size-2 -translate-x-1/2 -translate-y-1/2 rounded-full bg-fg" />
-            </div>
-            <p className="mt-6 text-sm font-medium text-fg">
-              {choosingSend
-                ? "Building your site and preparing your picture…"
-                : refining
-                  ? "Working on your change…"
-                  : stage === "finish"
-                  ? "Building your site in this look"
-                  : (LOOK_STAGES.find((item) => item.key === stage)?.label ?? "Building your site")}
-            </p>
+            {/* Round 10: a segmented ring that fills by elapsed / the server's average for this kind of render. */}
+            <ProgressRing start={run?.start ?? Date.now()} averageMs={run?.avg ?? (choosingSend || stage === "finish" ? 60_000 : 95_000)} />
+            <RotatingStatus
+              lines={
+                choosingSend
+                  ? ["Building every page in this look…", "Snapping a picture of your look…", "Sending it your way…"]
+                  : statusLines(refining && editingId ? "edit" : lead.current?.form.kind === "new_site" || run?.kind === "newsite" ? "newsite" : "reimagine", refining && editingId ? (stage === "dream" || stage === "paint" ? stage : "") : stage)
+              }
+            />
             <ol className="mt-4 space-y-1.5 text-sm">
               {(choosingSend
                 ? CHOOSE_STAGES
@@ -769,14 +842,24 @@ export function HomePage() {
                     <span aria-hidden className="inline-block w-4 text-center">
                       {done ? "✓" : active ? "•" : "○"}
                     </span>
-                    {item.label}
+                    {item.key === "read" && run?.kind === "newsite" ? "Getting to know your business…" : item.label}
                   </li>
                 );
               })}
             </ol>
             <p className="mt-4 max-w-xs text-center text-xs text-muted">
-              {choosingSend || stage === "finish" ? "This usually takes about a minute." : "Three looks take a minute or two — worth the wait."}
+              {choosingSend || stage === "finish" ? "This usually takes about a minute." : run?.kind === "edit" ? "A change usually takes under half a minute." : "Three looks take a minute or two — worth the wait."}
             </p>
+            {run && !choosingSend ? (
+              <button
+                type="button"
+                onClick={stopRun}
+                data-stop
+                className="mt-4 inline-flex h-10 items-center justify-center rounded-md border border-border bg-bg px-5 text-sm font-medium text-fg shadow-sm transition-transform duration-150 hover:bg-surface active:scale-[0.96]"
+              >
+                Stop
+              </button>
+            ) : null}
           </div>
         </div>
       ) : null}
@@ -830,6 +913,7 @@ export function HomePage() {
                         {error}
                       </p>
                     ) : null}
+                    {stopped && !working ? <p className="text-sm text-muted" data-stopped role="status">{stopped}</p> : null}
                     {mailed ? <p className="text-sm text-muted">{mailed}</p> : null}
                   </>
                 ) : (
@@ -915,6 +999,7 @@ export function HomePage() {
                     {error}
                   </p>
                 ) : null}
+                {stopped && !working ? <p className="text-sm text-muted" data-stopped role="status">{stopped}</p> : null}
                 {mailed ? <p className="text-sm text-muted">{mailed}</p> : null}
                   </>
                 )}

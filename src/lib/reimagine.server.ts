@@ -1,6 +1,7 @@
 import { lookup } from "node:dns/promises";
 import { isIP } from "node:net";
 import { getRequestIP } from "@tanstack/react-start/server";
+import { requestSignal, stopOrTimeout } from "@/lib/abort.server";
 import { pickLogo } from "@/lib/preview/logo-pick";
 
 /*
@@ -116,7 +117,7 @@ export async function fetchPage(start: URL, timeoutMs = 30_000): Promise<{ url: 
     try {
       const response = await fetch(current, {
         redirect: "manual",
-        signal: AbortSignal.timeout(remaining),
+        signal: stopOrTimeout(remaining),
         headers: {
           Accept: "text/html,application/xhtml+xml;q=0.9,text/plain;q=0.5",
           "User-Agent": "ReimagoReimagine/1.0 (+https://reimago.ai)",
@@ -142,7 +143,7 @@ export async function fetchPage(start: URL, timeoutMs = 30_000): Promise<{ url: 
     } catch (error) {
       lastError = error;
       const left = deadline - Date.now();
-      if (left < 1000) break;
+      if (left < 1000 || requestSignal()?.aborted) break;
       const message = error instanceof Error ? error.message : "";
       if (!/fetch failed|aborted|timeout|Timeout|ECONN|socket|network/i.test(message)) throw error;
       await new Promise((resolve) => setTimeout(resolve, Math.min(1500, left)));

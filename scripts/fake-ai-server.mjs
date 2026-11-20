@@ -387,8 +387,14 @@ http
   .createServer((req, res) => {
     let body = "";
     req.on("data", (c) => (body += c));
+    // Round 10: FAKE_SLOW_MS slows every answer (to test Stop); an upstream call the app aborts is logged.
+    res.on("close", () => {
+      if (!res.writableEnded) console.log(`[fake] request aborted by the app: ${req.url}`);
+    });
     req.on("end", async () => {
       try {
+        if (process.env.FAKE_SLOW_MS) await sleep(Number(process.env.FAKE_SLOW_MS));
+        if (res.destroyed) return;
         const json = JSON.parse(body || "{}");
         // Grok Imagine as the designer: the homepage design mockup (generations, or edits from the logo).
         // FAKE_IMAGINE=fail answers 500 (the custom look falls back to the text-brief design).
