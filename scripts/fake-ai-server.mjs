@@ -14,6 +14,7 @@
  * review) so the validators are exercised.
  */
 import http from "node:http";
+import { PNG } from "pngjs";
 import { fakeBrief, fakeDesign, fakeEdit, fakeMockupBuild, fakeMockupPng } from "./fake-custom-design.mjs";
 
 const PORT = Number(process.env.PORT ?? 9999);
@@ -345,6 +346,28 @@ function critique(userText, vision) {
   };
 }
 
+
+/** A plain colored mark so logo prompts are not answered with a stock photo (PREVIEW_MOCK uses the lettered stand-in instead). */
+function fakeLogoPng(name, kind) {
+  const p = new PNG({ width: 256, height: 256 });
+  const hue = [...`${name}:${kind}`].reduce((h, c) => (h * 33 + c.charCodeAt(0)) >>> 0, 7) % 360;
+  const ink = kind === "wordmark" ? [40, 30, 24] : kind === "emblem" ? [16, 90, 70] : [140, 110, 30];
+  const bg = [250, 248, 244];
+  for (let i = 0; i < p.data.length; i += 4) { p.data[i] = bg[0]; p.data[i + 1] = bg[1]; p.data[i + 2] = bg[2]; p.data[i + 3] = 255; }
+  const fill = (x0, y0, x1, y1, c) => {
+    for (let y = y0; y < y1; y++) for (let x = x0; x < x1; x++) {
+      const i = (y * 256 + x) << 2; p.data[i] = c[0]; p.data[i + 1] = c[1]; p.data[i + 2] = c[2];
+    }
+  };
+  if (kind === "wordmark") fill(40, 118, 216, 138, ink);
+  else if (kind === "emblem") {
+    for (let y = 40; y < 180; y++) for (let x = 58; x < 198; x++) {
+      const dx = x - 128, dy = y - 110; if (dx * dx + dy * dy <= 70 * 70) { const i = (y * 256 + x) << 2; p.data[i] = ink[0]; p.data[i + 1] = ink[1]; p.data[i + 2] = ink[2]; }
+    }
+  } else fill(78, 48, 178, 148, ink);
+  return PNG.sync.write(p);
+}
+
 // ---------------------------------------------------------------- images
 const imageCache = new Map();
 async function photoFor(prompt, wide) {
@@ -396,6 +419,23 @@ http
         if (process.env.FAKE_SLOW_MS) await sleep(Number(process.env.FAKE_SLOW_MS));
         if (res.destroyed) return;
         const json = JSON.parse(body || "{}");
+        // Round 10b: a logo (text is required; do not apply the usual "no text / no logos" warning).
+        if ((req.url.endsWith("/images/generations") || req.url.endsWith("/images/edits")) && /A professional logo for a business named/i.test(json.prompt ?? "")) {
+          await sleep(400);
+          if (process.env.FAKE_LOGO === "fail") {
+            log("imagine logo", "FAIL (FAKE_LOGO=fail)");
+            res.writeHead(500, { "content-type": "application/json" });
+            res.end(JSON.stringify({ error: "fake logo failure" }));
+            return;
+          }
+          const name = (json.prompt.match(/business named "([^"]+)"/) ?? ["", "LOGO"])[1];
+          const kind = /emblem or badge/i.test(json.prompt ?? "") ? "emblem" : /icon or monogram/i.test(json.prompt ?? "") ? "icon_name" : "wordmark";
+          const bytes = fakeLogoPng(name, kind);
+          log("imagine logo", kind, name, json.model, `${(json.prompt ?? "").length} chars`);
+          res.writeHead(200, { "content-type": "application/json" });
+          res.end(JSON.stringify({ data: [{ b64_json: bytes.toString("base64") }] }));
+          return;
+        }
         // Grok Imagine as the designer: the homepage design mockup (generations, or edits from the logo).
         // FAKE_IMAGINE=fail answers 500 (the custom look falls back to the text-brief design).
         if ((req.url.endsWith("/images/generations") || req.url.endsWith("/images/edits")) && /website homepage design/i.test(json.prompt ?? "")) {

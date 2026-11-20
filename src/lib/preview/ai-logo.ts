@@ -18,6 +18,9 @@ export type LogoBrief = {
 
 export type LogoSpec = { kind: LogoKind; label: string; prompt: string };
 
+/** One generated option the visitor can pick (same shape whether Imagine or a stand-in made it). */
+export type LogoOption = { id: string; url: string; kind: LogoKind; label: string };
+
 /** The name (or domain) lettered on the mark. */
 export function logoWord(brief: Pick<LogoBrief, "business_name" | "domain">): string {
   const name = brief.business_name.trim();

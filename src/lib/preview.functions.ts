@@ -537,6 +537,43 @@ export const previewUploadLogo = createServerFn({ method: "POST" })
     }
   });
 
+/**
+ * Round 10b — "Have AI make one": a few logo options from the Build a New Site answers, made by Grok Imagine
+ * (or lettered stand-in marks when PREVIEW_MOCK=1). The visitor picks one; it is then used like an uploaded logo.
+ */
+export const previewMakeLogos = createServerFn({ method: "POST" })
+  .validator((input: { brief?: Record<string, unknown>; variation?: number }) => {
+    const s = (key: string, max: number) => (typeof input?.brief?.[key] === "string" ? String(input.brief[key]).slice(0, max) : "");
+    const variation = Number(input?.variation);
+    return {
+      brief: { business_name: s("business_name", 60), what: s("what", 600), location: s("location", 80), style: s("style", 300), domain: s("domain", 200) },
+      variation: Number.isFinite(variation) ? Math.max(0, Math.min(20, Math.floor(variation))) : 0,
+    };
+  })
+  .handler(async ({ data }): Promise<PreviewStepResult<{ options: { id: string; url: string; kind: string; label: string }[] }>> => {
+    (await import("./abort.server")).watchStop("logo");
+    (await import("./env.server")).logKeyPresenceOnce();
+    const { logoProblem } = await import("./preview/ai-logo");
+    const problem = logoProblem(data.brief);
+    if (problem) return { ok: false, error: problem };
+    try {
+      if (await limited("logo-ai", 8)) return { ok: false, error: "Too many logo designs from this network in the last hour. Try again shortly." };
+      const { isMockMode, imageProvider } = await import("./ai-provider.server");
+      if (!isMockMode() && imageProvider() === "none") {
+        console.info("[logo] failed: Grok Imagine is not configured");
+        return { ok: false, error: "Grok Imagine isn't available on this server right now. Upload a file, or try again later." };
+      }
+      const { makeAiLogos } = await import("./preview/ai-logo.server");
+      const options = await makeAiLogos(data.brief, data.variation);
+      if (!options.length) return { ok: false, error: "Grok Imagine couldn't make logos this time. Upload a file, or try again in a moment." };
+      return { ok: true, options };
+    } catch (error) {
+      if (error instanceof Error && error.name === "StoppedError") throw error;
+      console.info(`[logo] failed: ${error instanceof Error ? error.message.replace(/\s+/g, " ").slice(0, 160) : "error"}`);
+      return { ok: false, error: "Grok Imagine couldn't make logos this time. Upload a file, or try again in a moment." };
+    }
+  });
+
 /** Round 10: the progress ring's yardstick — the rolling average render time for this kind (ms). */
 export const renderAverage = createServerFn({ method: "POST" })
   .validator((input: { kind?: string }) => ({ kind: (["round1", "edit", "newsite"].includes(String(input?.kind)) ? input.kind : "round1") as "round1" | "edit" | "newsite" }))
