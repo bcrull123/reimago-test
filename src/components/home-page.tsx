@@ -2,15 +2,15 @@ import { useEffect, useRef, useState, type FormEvent } from "react";
 import { Link } from "@tanstack/react-router";
 import { ArrowRight } from "lucide-react";
 import { SiteShell, Wordmark } from "@/components/site-shell";
-import { CreateSiteWizard, type CreateBrief, type CreateFiles } from "@/components/create-site-wizard";
-import { checkDomainName, handOffToCursor } from "@/lib/reimagine.functions";
-import { cursorStatus, previewCustom, previewDirections, previewImagine, previewFinish, previewFromBrief, previewLook, previewRead, previewRefine, previewRetryAi, savePreviewPicture } from "@/lib/preview.functions";
+import { ModeChoices, NewSiteForm, type ModeChoice } from "@/components/new-site-form";
+import { bareHost, briefForFacts, emptyNewSite, newSiteProblem, type NewSiteBrief } from "@/lib/new-site";
+import { handOffToCursor } from "@/lib/reimagine.functions";
+import { cursorStatus, previewCustom, previewDirections, previewImagine, previewFinish, previewFromBrief, previewLook, previewRead, previewRefine, previewRetryAi, previewUploadLogo, savePreviewPicture } from "@/lib/preview.functions";
 import { capturePreviewPicture, pictureFileName } from "@/lib/preview-picture";
-import { notifyReplyWebhook } from "@/lib/reply-webhook.functions";
+import { logSubmit, notifyReplyWebhook } from "@/lib/reply-webhook.functions";
 import { LivePreview } from "@/components/live-preview";
 import { CardEditBox, LooksPicker } from "@/components/looks-picker";
 import type { LookInfo, PreviewInfo, SiteFacts } from "@/lib/preview/types";
-import type { DomainOffer } from "@/lib/logicboxes-types";
 import type { ReimagineOk } from "@/lib/reimagine-types";
 
 
@@ -74,13 +74,14 @@ const THANKS = "Sent! Check your email. The site, your email, the note, the look
 const THANKS_NO_PICTURE = "Sent! Check your email. The site, your email, the note, the look you chose, and a link to it were sent. Nothing on the live site was changed.";
 /** Shown when the looks are ready: the brief waits until the visitor chooses one. */
 const CHOOSE_PROMPT = "Your looks are ready below. Choose the one you like and we'll build every page in that style and email you a picture. Nothing is sent until you choose.";
-/** The wizard's brief when no looks could be built (it is sent right away, as before). */
-const THANKS_NO_LOOKS = "We got the brief. The site, your email, and your answers were sent. Nothing on the live site was changed.";
 
-/** The visitor's form, held until they choose a look (Formcarry is sent once, then). */
+/**
+ * The visitor's form, held until they choose a look. Round 10: every look they choose is sent (once per look),
+ * so a second "Choose this look" on a different look or variant is never silently dropped.
+ */
 type PendingLead =
   | { kind: "reimagine"; email: string; website: string; note: string; gotcha: string }
-  | { kind: "create"; email: string; gotcha: string; brief: CreateBrief; files: CreateFiles };
+  | { kind: "new_site"; email: string; gotcha: string; brief: NewSiteBrief; logo: File | null; logoUrl: string };
 
 /** The screenshot sent with the form as `picture` (plus `picture_url` when stored, or `picture_error`). */
 type PictureFields = { file?: File; url?: string; error?: string };
@@ -141,6 +142,7 @@ async function submitFormcarry(fields: {
   data.append("website", domain);
   data.append("note", fields.note);
   data.append("_gotcha", fields.gotcha);
+  data.append("mode", "reimagine");
   data.append("preview_url", fields.previewUrl ?? "");
   data.append("preview_pages", (fields.previewPages ?? []).join("\n"));
   data.append("chosen_look", fields.chosenLook ?? "");
@@ -149,6 +151,16 @@ async function submitFormcarry(fields: {
   // The Custom Design look's Grok Imagine mockup (the picture stays the built page's screenshot).
   if (fields.designMockupUrl) data.append("design_mockup_url", fields.designMockupUrl);
 
+  await postFormcarry(data);
+}
+
+/** Round 10: one POST to Formcarry; throws (with the HTTP status) unless Formcarry answers code 200. */
+class SubmitError extends Error {
+  constructor(message: string, readonly status: number) {
+    super(message);
+  }
+}
+async function postFormcarry(data: FormData): Promise<number> {
   const response = await fetch(FORMCARRY, {
     method: "POST",
     headers: { Accept: "application/json" },
@@ -156,56 +168,35 @@ async function submitFormcarry(fields: {
   });
   const json = (await response.json().catch(() => null)) as { code?: number; message?: string } | null;
   if (json?.code !== 200) {
-    throw new Error(json?.message || "The form could not be sent. Try again.");
+    throw new SubmitError(json?.message || `The form could not be sent (status ${response.status}). Try again.`, response.status);
   }
+  return response.status;
 }
 
-async function submitCreateBrief(
+/** Round 10 — "Build a New Site": mode=new_site, the business details and the domain choice. */
+async function submitNewSite(
   email: string,
   gotcha: string,
-  brief: CreateBrief,
-  files: CreateFiles,
+  brief: NewSiteBrief,
+  logo: File | null,
+  logoUrl: string,
   chosen?: { previewUrl: string; previewPages: string[]; chosenLook: string; changeRequests?: string[]; picture?: PictureFields },
 ): Promise<void> {
-  const pages = brief.pages.length ? brief.pages : ["Home", "About", "Services", "Contact"];
-  const industry = [brief.industry, brief.what].filter(Boolean).join(": ");
   const data = new FormData();
   data.append("email", email);
-  data.append("website", bareDomain(brief.domain || brief.existing_site || brief.business_name || "new-site"));
-  data.append("note", brief.anything_else);
+  data.append("website", brief.domain_choice === "have" ? bareHost(brief.domain) : brief.business_name.trim() || "new-site");
+  data.append("note", brief.style.trim());
   data.append("_gotcha", gotcha);
-  data.append("mode", "create_new_site");
-  data.append("business_name", brief.business_name);
-  data.append("industry", industry);
-  data.append("location", brief.location);
-  data.append("existing_site", brief.existing_site);
-  data.append("emulate_url_1", brief.emulate_url_1);
-  data.append("emulate_url_2", brief.emulate_url_2);
-  data.append("emulate_url_3", brief.emulate_url_3);
-  data.append("emulate_likes", brief.emulate_likes.join(", "));
-  data.append("emulate_note", brief.emulate_note);
-  data.append("goal", brief.goal);
-  data.append("customers", brief.customers);
-  data.append("services", brief.services);
-  data.append("pages", pages.join(", "));
-  data.append("style", brief.style);
-  data.append("brand_color", brief.brand_color);
-  data.append("phone", brief.phone);
-  data.append("contact_email", brief.contact_email);
-  data.append("address", brief.address);
-  data.append("hours", brief.hours);
-  data.append("domain_choice", brief.domain_choice);
-  data.append("domain", brief.domain);
-  // "owned" or "selected-pending-checkout" (chosen in the wizard, not registered or paid for yet).
-  data.append("domain_status", brief.domain_status ?? "");
-  if (brief.domain_checkout_url) data.append("domain_checkout_url", brief.domain_checkout_url);
-  data.append("features", brief.features.join(", "));
-  data.append("product_count", brief.product_count);
-  data.append("files_link", brief.files_link);
-  data.append("copy_text", brief.copy_text);
-  data.append("video_link", brief.video_link);
-  data.append("anything_else", brief.anything_else);
-  data.append("ai_suggested", (brief.ai_suggested ?? []).join(", "));
+  data.append("mode", "new_site");
+  data.append("business_name", brief.business_name.trim());
+  data.append("what_and_who", brief.what.trim());
+  data.append("location", brief.location.trim());
+  data.append("style", brief.style.trim());
+  // "have" (they own it; the domain is sent) or "get" (domain, email & hosting wanted; only recorded, nothing bought).
+  data.append("domain_choice", brief.domain_choice === "have" ? "have_domain" : brief.domain_choice === "get" ? "get_domain_email_hosting" : "");
+  data.append("domain", brief.domain_choice === "have" ? bareHost(brief.domain) : "");
+  if (logoUrl) data.append("logo_url", logoUrl);
+  if (logo && logo.size < 10_000_000) data.append("logo", logo, logo.name);
   data.append("preview_url", chosen?.previewUrl ?? "");
   if (chosen) {
     data.append("preview_pages", chosen.previewPages.join("\n"));
@@ -213,34 +204,14 @@ async function submitCreateBrief(
     data.append("change_requests", changeRequestsText(chosen.changeRequests));
   }
   appendPicture(data, chosen?.picture);
-  const named: [string, File | null][] = [
-    ["logo", files.logo],
-    ["brand_guide", files.brand],
-    ["copy_file", files.copy],
-    ["testimonials", files.testimonials],
-    ["licenses", files.licenses],
-    ["video", files.video],
-  ];
-  for (const [name, file] of named) {
-    if (file && file.size < 10_000_000) data.append(name, file, file.name);
-  }
-  for (const photo of files.photos) {
-    if (photo.size < 10_000_000) data.append("photo", photo, photo.name);
-  }
-  const response = await fetch(FORMCARRY, {
-    method: "POST",
-    headers: { Accept: "application/json" },
-    body: data,
-  });
-  const json = (await response.json().catch(() => null)) as { code?: number; message?: string } | null;
-  if (json?.code !== 200) {
-    throw new Error(json?.message || "The form could not be sent. Try again.");
-  }
+  await postFormcarry(data);
 }
 
 export function HomePage() {
   const [url, setUrl] = useState("");
-  const [intent, setIntent] = useState<"reimagine" | "register" | "create" | null>(null);
+  const [intent, setIntent] = useState<ModeChoice | null>(null);
+  const [newSite, setNewSite] = useState<NewSiteBrief>(emptyNewSite);
+  const [newLogo, setNewLogo] = useState<File | null>(null);
   const [siteFocused, setSiteFocused] = useState(false);
   const [email, setEmail] = useState("");
   const [notes, setNotes] = useState("");
@@ -261,9 +232,6 @@ export function HomePage() {
   const [facts, setFacts] = useState<SiteFacts | null>(null);
   const [variation, setVariation] = useState(0);
   const [mailed, setMailed] = useState<string>("");
-  const [checkingName, setCheckingName] = useState(false);
-  const [offers, setOffers] = useState<DomainOffer[] | null>(null);
-  const [domainNote, setDomainNote] = useState("");
   const [leadSent, setLeadSent] = useState(false);
   const [feedback, setFeedback] = useState<string[]>([]);
   const [refining, setRefining] = useState(false);
@@ -274,7 +242,7 @@ export function HomePage() {
   /** Every look id shown this session (oldest first). */
   const seenIds = useRef<string[]>([]);
   const [choosingSend, setChoosingSend] = useState(false);
-  const lead = useRef<{ form: PendingLead; sent: boolean } | null>(null);
+  const lead = useRef<{ form: PendingLead; sent: boolean; sentIds: string[] } | null>(null);
   const choosing = useRef(false);
   const draftRef = useRef<HTMLElement>(null);
   const scrollOnResult = useRef(false);
@@ -382,9 +350,13 @@ export function HomePage() {
   async function chooseLook(look: LookInfo) {
     if (choosing.current) return;
     choosing.current = true;
-    const pending = lead.current && !lead.current.sent ? lead.current : null;
+    // Round 10: each chosen look is sent once (a different look or variant is a new submission, never dropped).
+    const pending = lead.current && !lead.current.sentIds.includes(look.id) ? lead.current : null;
+    const leadMode = lead.current?.form.kind === "new_site" ? "new_site" : "reimagine";
+    const lookName = `${look.name}${look.edit ? ` · ${look.edit.variant}` : ""}`;
+    void logSubmit({ data: { id: look.id, mode: leadMode, look: lookName, event: pending ? "choose" : "not-resent" } }).catch(() => undefined);
     // Claim the submission before any await, so a second click can never send it again.
-    if (pending) pending.sent = true;
+    if (pending) pending.sentIds = [...pending.sentIds, look.id];
     setError("");
     setChoosingSend(Boolean(pending));
     setRetrying(true);
@@ -404,7 +376,7 @@ export function HomePage() {
       if (!pending) return;
       // Even if the other pages failed, the brief goes out with this look's homepage (never lose the lead).
       const form = pending.form;
-      const domain = form.kind === "reimagine" ? bareDomain(form.website) : bareDomain(form.brief.domain || form.brief.existing_site || form.brief.business_name || "new-site");
+      const domain = form.kind === "reimagine" ? bareDomain(form.website) : form.brief.domain_choice === "have" ? bareHost(form.brief.domain) : form.brief.business_name.trim() || "new-site";
       setStage("picture");
       const picture = await previewPicture(look, domain);
       setStage("send");
@@ -419,7 +391,9 @@ export function HomePage() {
           id: look.id,
           email: form.email,
           website: domain,
-          note: form.kind === "reimagine" ? form.note : form.brief.anything_else,
+          note: form.kind === "reimagine" ? form.note : form.brief.style,
+          mode: form.kind === "new_site" ? "new_site" : "reimagine",
+          ...(form.kind === "new_site" ? { businessName: form.brief.business_name, domainChoice: form.brief.domain_choice, domain: form.brief.domain_choice === "have" ? bareHost(form.brief.domain) : "" } : {}),
           previewUrl,
           previewPages,
           chosenLook: chosenLookName,
@@ -431,13 +405,20 @@ export function HomePage() {
         if (form.kind === "reimagine") {
           await submitFormcarry({ email: form.email, website: form.website, note: form.note, gotcha: form.gotcha, previewUrl, previewPages, chosenLook: chosenLookName, changeRequests: feedback, picture, designMockupUrl: look.custom?.mockupUrl });
         } else {
-          await submitCreateBrief(form.email, form.gotcha, form.brief, form.files, { previewUrl, previewPages, chosenLook: chosenLookName, changeRequests: feedback, picture });
+          await submitNewSite(form.email, form.gotcha, form.brief, form.logo, form.logoUrl, { previewUrl, previewPages, chosenLook: chosenLookName, changeRequests: feedback, picture });
         }
+        pending.sent = true;
+        void logSubmit({ data: { id: look.id, mode: leadMode, look: lookName, event: "sent", status: 200 } }).catch(() => undefined);
         setLeadSent(true);
         setMailed(picture.file ? THANKS : THANKS_NO_PICTURE);
       } catch (err) {
-        pending.sent = false;
-        setError(`Your site is built, but the form could not be sent: ${err instanceof Error ? err.message : "try again"}. Press Choose this look again to resend.`);
+        // Round 10: never show "Sent" when Formcarry didn't accept it; the look can be chosen again to resend.
+        pending.sentIds = pending.sentIds.filter((id) => id !== look.id);
+        const status = err instanceof SubmitError ? err.status : 0;
+        void logSubmit({ data: { id: look.id, mode: leadMode, look: lookName, event: "failed", status, reason: err instanceof Error ? err.message.slice(0, 150) : "network error" } }).catch(() => undefined);
+        setLeadSent(false);
+        setMailed("");
+        setError(`Your site is built, but the form could not be sent${status ? ` (status ${status})` : ""}: ${err instanceof Error ? err.message : "try again"}. Press Choose this look again to resend.`);
       }
     } finally {
       choosing.current = false;
@@ -447,44 +428,17 @@ export function HomePage() {
     }
   }
 
-  async function lookupDomain(nameInput?: string) {
-    setError("");
-    setOffers(null);
-    setDomainNote("");
-    const name = (nameInput ?? url).trim();
-    if (!name) {
-      setError("Enter your domain.");
-      return;
-    }
-    setCheckingName(true);
-    try {
-      const result = await checkDomainName({ data: { name } });
-      setOffers(result.offers);
-      setDomainNote(result.note);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "The domain check did not answer.");
-    } finally {
-      setCheckingName(false);
-    }
-  }
-
   async function onSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setError("");
     const site = url.trim();
     if (!intent) {
-      setError("Choose Reimagine My Website, Register a Domain, or Create a New Site.");
+      setError("Choose Reimagine My Site or Build a New Site.");
       return;
     }
-    if (intent === "create") return;
+    if (intent === "newsite") return void buildNewSite();
     if (!site || site === "https://" || site === "http://") {
-      setError(
-        intent === "reimagine" ? "Enter your site." : intent === "register" ? "Enter your domain." : "Enter a site to emulate.",
-      );
-      return;
-    }
-    if (intent === "register") {
-      await lookupDomain(site);
+      setError("Enter your site.");
       return;
     }
     if (!isEmail(email.trim())) {
@@ -520,6 +474,7 @@ export function HomePage() {
       lead.current = {
         form: { kind: "reimagine", email: email.trim(), website: site, note: notes.trim(), gotcha: typeof gotcha === "string" ? gotcha : "" },
         sent: false,
+        sentIds: [],
       };
       setMailed(CHOOSE_PROMPT);
     } catch (err) {
@@ -530,8 +485,14 @@ export function HomePage() {
     }
   }
 
-  async function buildNewSite(brief: CreateBrief, files: CreateFiles) {
+  /** Round 10 — "Build a New Site": no source site; the owner's answers become the site facts. */
+  async function buildNewSite() {
     setError("");
+    const problem = newSiteProblem(newSite);
+    if (problem) {
+      setError(problem);
+      return;
+    }
     if (!isEmail(email.trim())) {
       setError("Enter an email so sales can follow up.");
       return;
@@ -548,36 +509,35 @@ export function HomePage() {
     setEditedName("");
     seenIds.current = [];
     lead.current = null;
-    let made: { looks: LookInfo[]; note: string } | null = null;
-    let buildError = "";
+    const brief = { ...newSite };
+    const logo = newLogo;
     try {
       const gotcha = document.querySelector<HTMLInputElement>('input[name="_gotcha"]')?.value ?? "";
-      try {
-        setStage("read");
-        const start = await previewFromBrief({ data: { brief: brief as unknown as Record<string, unknown> } });
-        if (!start.ok) throw new Error(start.error);
-        made = await makeLooks(start.facts, 0);
-        setFacts(start.facts);
-        setVariation(0);
-      } catch (err) {
-        buildError = err instanceof Error ? err.message : "The preview could not be built.";
+      setStage("read");
+      // The optional logo is stored first, so the looks can use it like a scraped site's logo.
+      let logoUrl = "";
+      if (logo && /^image\/(png|jpeg)$/.test(logo.type) && logo.size <= 1_500_000) {
+        const dataUrl = await new Promise<string>((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve(String(reader.result ?? ""));
+          reader.onerror = () => reject(new Error("The logo could not be read."));
+          reader.readAsDataURL(logo);
+        });
+        const up = await previewUploadLogo({ data: { image: dataUrl } }).catch(() => undefined);
+        if (up?.ok) logoUrl = up.url;
       }
-      if (!made) {
-        // No looks to choose from: send the brief now (as before), so the answers still reach sales.
-        setStage("send");
-        await submitCreateBrief(email.trim(), gotcha, brief, files);
-        setLeadSent(true);
-        setMailed(THANKS_NO_LOOKS);
-        setError(buildError);
-        return;
-      }
-      // Looks were built: hold the brief until the visitor chooses one (sent once, with its picture).
-      lead.current = { form: { kind: "create", email: email.trim(), gotcha, brief, files }, sent: false };
+      const start = await previewFromBrief({ data: { brief: briefForFacts(brief, logoUrl) } });
+      if (!start.ok) throw new Error(start.error);
+      const made = await makeLooks(start.facts, 0);
+      setFacts(start.facts);
+      setVariation(0);
+      // Looks were built: hold the brief until the visitor chooses one (sent with its picture).
+      lead.current = { form: { kind: "new_site", email: email.trim(), gotcha, brief, logo, logoUrl }, sent: false, sentIds: [] };
       setMailed(CHOOSE_PROMPT);
       scrollOnResult.current = true;
       showLooks(made.looks, made.note);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "The form could not be sent. Try again.");
+      setError(err instanceof Error ? err.message : "The looks could not be built. Try again.");
     } finally {
       setWorking(false);
       setStage("");
@@ -821,9 +781,10 @@ export function HomePage() {
         </div>
       ) : null}
       <main>
-        <section className="mx-auto grid w-full max-w-6xl grid-cols-[250px_minmax(0,1fr)] items-start gap-3 px-4 py-6 sm:gap-8 sm:px-6">
-          <div className="w-[250px]">
-            <Wordmark className="size-[250px]" />
+        {/* Round 10: one column on phones (the form was squeezed to ~100px beside the 250px wordmark). */}
+        <section className="mx-auto grid w-full max-w-6xl grid-cols-1 items-start gap-5 px-4 py-6 md:grid-cols-[250px_minmax(0,1fr)] md:gap-8 sm:px-6">
+          <div className="mx-auto w-[250px] md:mx-0">
+            <Wordmark className="mx-auto size-[180px] md:size-[250px]" />
             <h1 className="mt-3 text-center font-display leading-tight">
               <span className="block text-4xl text-ink">Let AI:</span>
               <span className="mt-1 block whitespace-nowrap font-display text-[1.75rem] italic text-primary">
@@ -834,39 +795,13 @@ export function HomePage() {
           <div className="min-w-0">
             <form onSubmit={onSubmit} className="rounded-2xl border-2 border-primary bg-bg p-4 shadow-[0_18px_40px_-24px_rgba(0,104,232,0.85)] sm:p-6">
               <div className="space-y-4">
-                <fieldset className="flex flex-col gap-2 sm:flex-row sm:gap-6">
-                  <label className="flex items-center gap-2.5 text-sm font-medium text-fg">
-                    <input
-                      type="checkbox"
-                      checked={intent === "reimagine"}
-                      onChange={(event) => setIntent(event.target.checked ? "reimagine" : null)}
-                      className="size-4 shrink-0 accent-primary"
-                    />
-                    Reimagine My Website
-                  </label>
-                  <label className="flex items-center gap-2.5 text-sm font-medium text-fg">
-                    <input
-                      type="checkbox"
-                      checked={intent === "register"}
-                      onChange={(event) => {
-                        setIntent(event.target.checked ? "register" : null);
-                        setOffers(null);
-                        setDomainNote("");
-                      }}
-                      className="size-4 shrink-0 accent-primary"
-                    />
-                    Register a Domain
-                  </label>
-                  <label className="flex items-center gap-2.5 text-sm font-medium text-fg">
-                    <input
-                      type="checkbox"
-                      checked={intent === "create"}
-                      onChange={(event) => setIntent(event.target.checked ? "create" : null)}
-                      className="size-4 shrink-0 accent-primary"
-                    />
-                    Create a New Site
-                  </label>
-                </fieldset>
+                <ModeChoices
+                  value={intent}
+                  onChange={(next) => {
+                    setIntent(next);
+                    setError("");
+                  }}
+                />
                 <input
                   type="text"
                   name="_gotcha"
@@ -876,17 +811,27 @@ export function HomePage() {
                   aria-hidden="true"
                   className="pointer-events-none absolute -left-[9999px] h-px w-px opacity-0"
                 />
-                {intent === "create" ? (
-                  <CreateSiteWizard
-                    email={email}
-                    setEmail={setEmail}
-                    agreed={agreed}
-                    setAgreed={setAgreed}
-                    working={working}
-                    error={error}
-                    mailed={mailed}
-                    onBuild={(brief, files) => void buildNewSite(brief, files)}
-                  />
+                {intent === "newsite" ? (
+                  <>
+                    <NewSiteForm
+                      brief={newSite}
+                      setBrief={setNewSite}
+                      logo={newLogo}
+                      setLogo={setNewLogo}
+                      email={email}
+                      setEmail={setEmail}
+                      agreed={agreed}
+                      setAgreed={setAgreed}
+                      working={working}
+                      onBuild={() => void buildNewSite()}
+                    />
+                    {error ? (
+                      <p className="text-sm text-danger" role="alert">
+                        {error}
+                      </p>
+                    ) : null}
+                    {mailed ? <p className="text-sm text-muted">{mailed}</p> : null}
+                  </>
                 ) : (
                   <>
                 <label className="block" htmlFor="site-url">
@@ -894,24 +839,14 @@ export function HomePage() {
                     id="site-url"
                     name="url"
                     value={url}
-                    onChange={(event) => {
-                      setUrl(event.target.value);
-                      setOffers(null);
-                      setDomainNote("");
-                    }}
+                    onChange={(event) => setUrl(event.target.value)}
                     onFocus={() => setSiteFocused(true)}
                     onBlur={() => setSiteFocused(false)}
                     inputMode="url"
                     autoCapitalize="none"
                     autoCorrect="off"
                     spellCheck={false}
-                    placeholder={
-                      intent === "register"
-                        ? "Enter your domain here. Let AI help you find a good one."
-                        : siteFocused && intent === "reimagine"
-                          ? "Enter Your Site Here"
-                          : "https://www.site.com"
-                    }
+                    placeholder={siteFocused && intent === "reimagine" ? "Enter Your Site Here" : "https://www.site.com"}
                     className={
                       intent
                         ? `${fieldClass} border-2 border-primary bg-bg ring-2 ring-primary/30 placeholder:text-primary`
@@ -919,25 +854,6 @@ export function HomePage() {
                     }
                   />
                 </label>
-                {intent === "register" && domainNote ? <p className="text-sm text-muted">{domainNote}</p> : null}
-                {intent === "register" && offers ? (
-                  <ul className="space-y-1 text-sm">
-                    {offers.map((offer) => (
-                      <li key={offer.domain} className="flex items-center justify-between gap-3">
-                        <span className="text-fg">{offer.domain}</span>
-                        <span className={offer.state === "available" ? "font-medium text-primary" : "text-muted"}>
-                          {offer.state === "available"
-                            ? "Available"
-                            : offer.state === "taken"
-                              ? "Taken"
-                              : offer.state === "premium"
-                                ? "Premium, not offered"
-                                : "Unknown"}
-                        </span>
-                      </li>
-                    ))}
-                  </ul>
-                ) : null}
                 <div className="grid gap-4 sm:grid-cols-2">
                   <label className="block" htmlFor="site-email">
                     <span className="text-sm font-medium text-fg">Email</span>
@@ -988,11 +904,11 @@ export function HomePage() {
                 </label>
                 <button
                   type="submit"
-                  disabled={working || checkingName}
+                  disabled={working}
                   className="inline-flex h-12 w-full items-center justify-center gap-2 rounded-md bg-accent px-6 text-sm font-semibold text-ink transition-transform duration-150 ease-out hover:bg-accent/90 active:scale-[0.96] disabled:opacity-40 sm:w-auto"
                 >
-                  {working ? "Building the site…" : checkingName ? "Checking…" : intent === "register" ? "Find a domain" : "Reimagine my site"}
-                  {working || checkingName ? null : <ArrowRight className="size-4" aria-hidden />}
+                  {working ? "Building the site…" : "Reimagine my site"}
+                  {working ? null : <ArrowRight className="size-4" aria-hidden />}
                 </button>
                 {error ? (
                   <p className="text-sm text-danger" role="alert">

@@ -109,7 +109,7 @@ async function editCard(index, text, shot) {
 
 // ---- Round 1 (no note).
 await page.goto(base, { waitUntil: "networkidle" });
-await page.getByLabel("Reimagine My Website").check();
+await page.locator('[data-mode="reimagine"]').click();
 await page.locator("#site-url").fill(target);
 await page.locator("#site-email").fill("e2e-test@example.com");
 if (note) await page.locator("#site-notes").fill(note);

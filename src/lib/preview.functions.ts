@@ -498,3 +498,33 @@ export const savePreviewPicture = createServerFn({ method: "POST" })
       return { ok: false, error: error instanceof Error ? error.message : "The picture could not be stored." };
     }
   });
+
+/**
+ * Round 10 — "Build a New Site": the owner's optional logo (PNG / JPEG, ≤1.5 MB), stored with the previews so the
+ * looks can use it like a scraped site's logo. Returns its URL on this app.
+ */
+export const previewUploadLogo = createServerFn({ method: "POST" })
+  .validator((input: { image?: string }) => {
+    const raw = typeof input?.image === "string" ? input.image : "";
+    const m = raw.match(/^data:(image\/(?:png|jpeg));base64,([A-Za-z0-9+/]+=*)$/);
+    if (!m || m[2]!.length > 2_000_000) throw new Error("The logo must be a PNG or JPG under 1.5 MB.");
+    return { type: m[1]!, b64: m[2]! };
+  })
+  .handler(async ({ data }): Promise<PreviewStepResult<{ url: string }>> => {
+    (await import("./env.server")).logKeyPresenceOnce();
+    try {
+      if (await limited("logo", 20)) return { ok: false, error: "Too many uploads from this network in the last hour." };
+      const { newPageId, saveImage } = await import("./pages.server");
+      const { imageSize } = await import("./preview/images.server");
+      const { publicBase } = await import("./publish.server");
+      const bytes = Buffer.from(data.b64, "base64");
+      const size = imageSize(bytes);
+      if (!size || size.width < 16 || size.height < 16 || size.width > 6000 || size.height > 6000) return { ok: false, error: "That file isn't a readable PNG or JPG." };
+      const id = newPageId();
+      await saveImage(id, "upload-logo", data.type, bytes);
+      console.info(`[new-site] logo uploaded: ${data.type} ${size.width}x${size.height} (${Math.round(bytes.length / 1024)} KB)`);
+      return { ok: true, url: `${publicBase()}/made/${id}/img/upload-logo` };
+    } catch (error) {
+      return { ok: false, error: error instanceof Error ? error.message : "The logo could not be stored." };
+    }
+  });

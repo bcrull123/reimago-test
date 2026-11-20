@@ -42,7 +42,7 @@ const watcher = setInterval(async () => {
 
 const t0 = Date.now();
 await page.goto(base, { waitUntil: "networkidle" });
-await page.getByLabel("Reimagine My Website").check();
+await page.locator('[data-mode="reimagine"]').click();
 await page.locator("#site-url").fill(target);
 await page.locator("#site-email").fill("e2e-test@example.com");
 await page.locator("#site-notes").fill("Make it feel premium and modern, and make the phone number easy to tap.");

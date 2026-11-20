@@ -27,7 +27,7 @@ await page.context().route("**/formcarry.com/**", async (route) => {
   await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(ok ? { code: 200 } : { code: 500, message: "Simulated Formcarry failure" }) });
 });
 await page.goto(base, { waitUntil: "networkidle" });
-await page.getByLabel("Reimagine My Website").check();
+await page.locator('[data-mode="reimagine"]').click();
 await page.locator("#site-url").fill(target);
 await page.locator("#site-email").fill("e2e-test@example.com");
 await page.locator("#site-notes").fill(process.env.NOTE ?? "Keep the rocket");

@@ -708,7 +708,8 @@ export function factsFromBrief(brief: Record<string, unknown>): SiteFacts {
     name,
     tagline: s("what", 120),
     description: [s("what"), s("customers")].filter(Boolean).map(sentence).join(" ").slice(0, 400),
-    logo: "",
+    // Round 10: a logo the owner uploaded on "Build a New Site" (stored with the previews; nothing else is fetched).
+    logo: /^https?:\/\/[^/\s]+\/made\/[a-f0-9]{16}\/img\/upload-logo$/.test(s("logo_url", 300)) ? s("logo_url", 300) : "",
     colors: /^#[0-9a-fA-F]{6}$/.test(color) ? [color.toLowerCase()] : [],
     phone: s("phone", 40) ? formatPhone(s("phone", 40)) : "",
     email: goodEmail(email) || EMAIL.test(email) ? email : "",

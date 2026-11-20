@@ -22,7 +22,7 @@ const page = await browser.newPage({ viewport: { width: 1400, height: 1000 } });
 await page.context().route("**/formcarry.com/**", (route) => route.fulfill({ status: 200, contentType: "application/json", body: '{"code":200}' }));
 const t0 = Date.now();
 await page.goto(base, { waitUntil: "networkidle" });
-await page.getByLabel("Reimagine My Website").check();
+await page.locator('[data-mode="reimagine"]').click();
 await page.locator("#site-url").fill(target);
 await page.locator("#site-email").fill("e2e-test@example.com");
 await page.locator('input[type="checkbox"]').filter({ hasNot: page.locator("[name]") }).last().check();
