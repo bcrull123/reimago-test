@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type FormEvent } from "react";
 import { Link } from "@tanstack/react-router";
 import { ArrowRight } from "lucide-react";
 import { SiteShell, Wordmark } from "@/components/site-shell";
-import { ModeChoices, NewSiteForm, type ModeChoice } from "@/components/new-site-form";
+import { ModeChoices, NewSiteForm, type LogoSource, type ModeChoice } from "@/components/new-site-form";
 import { bareHost, briefForFacts, emptyNewSite, newSiteProblem, type NewSiteBrief } from "@/lib/new-site";
 import { handOffToCursor } from "@/lib/reimagine.functions";
 import { checkSiteReachable, recordRenderTime, renderAverage } from "@/lib/preview.functions";
@@ -84,7 +84,7 @@ const CHOOSE_PROMPT = "Your looks are ready below. Choose the one you like and w
  */
 type PendingLead =
   | { kind: "reimagine"; email: string; website: string; note: string; gotcha: string }
-  | { kind: "new_site"; email: string; gotcha: string; brief: NewSiteBrief; logo: File | null; logoUrl: string };
+  | { kind: "new_site"; email: string; gotcha: string; brief: NewSiteBrief; logo: File | null; logoUrl: string; logoSource: LogoSource };
 
 /** The screenshot sent with the form as `picture` (plus `picture_url` when stored, or `picture_error`). */
 type PictureFields = { file?: File; url?: string; error?: string };
@@ -184,6 +184,7 @@ async function submitNewSite(
   brief: NewSiteBrief,
   logo: File | null,
   logoUrl: string,
+  logoSource: LogoSource,
   chosen?: { previewUrl: string; previewPages: string[]; chosenLook: string; changeRequests?: string[]; picture?: PictureFields },
 ): Promise<void> {
   const data = new FormData();
@@ -201,6 +202,7 @@ async function submitNewSite(
   data.append("domain", brief.domain_choice === "have" ? bareHost(brief.domain) : "");
   if (logoUrl) data.append("logo_url", logoUrl);
   if (logo && logo.size < 10_000_000) data.append("logo", logo, logo.name);
+  if (logoSource && (logoUrl || logo)) data.append("logo_source", logoSource);
   data.append("preview_url", chosen?.previewUrl ?? "");
   if (chosen) {
     data.append("preview_pages", chosen.previewPages.join("\n"));
@@ -216,6 +218,8 @@ export function HomePage() {
   const [intent, setIntent] = useState<ModeChoice | null>(null);
   const [newSite, setNewSite] = useState<NewSiteBrief>(emptyNewSite);
   const [newLogo, setNewLogo] = useState<File | null>(null);
+  const [newLogoUrl, setNewLogoUrl] = useState("");
+  const [logoSource, setLogoSource] = useState<LogoSource>("");
   const [siteFocused, setSiteFocused] = useState(false);
   const [email, setEmail] = useState("");
   const [notes, setNotes] = useState("");
@@ -463,7 +467,7 @@ export function HomePage() {
         if (form.kind === "reimagine") {
           await submitFormcarry({ email: form.email, website: form.website, note: form.note, gotcha: form.gotcha, previewUrl, previewPages, chosenLook: chosenLookName, changeRequests: feedback, picture, designMockupUrl: look.custom?.mockupUrl });
         } else {
-          await submitNewSite(form.email, form.gotcha, form.brief, form.logo, form.logoUrl, { previewUrl, previewPages, chosenLook: chosenLookName, changeRequests: feedback, picture });
+          await submitNewSite(form.email, form.gotcha, form.brief, form.logo, form.logoUrl, form.logoSource, { previewUrl, previewPages, chosenLook: chosenLookName, changeRequests: feedback, picture });
         }
         pending.sent = true;
         void logSubmit({ data: { id: look.id, mode: leadMode, look: lookName, event: "sent", status: 200 } }).catch(() => undefined);
@@ -588,8 +592,9 @@ export function HomePage() {
       const gotcha = document.querySelector<HTMLInputElement>('input[name="_gotcha"]')?.value ?? "";
       setStage("read");
       // The optional logo is stored first, so the looks can use it like a scraped site's logo.
-      let logoUrl = "";
-      if (logo && /^image\/(png|jpeg)$/.test(logo.type) && logo.size <= 1_500_000) {
+      // An AI-made logo is already stored; an upload is stored now.
+      let logoUrl = newLogoUrl;
+      if (!logoUrl && logo && /^image\/(png|jpeg)$/.test(logo.type) && logo.size <= 1_500_000) {
         const dataUrl = await new Promise<string>((resolve, reject) => {
           const reader = new FileReader();
           reader.onload = () => resolve(String(reader.result ?? ""));
@@ -607,7 +612,7 @@ export function HomePage() {
       setFacts(start.facts);
       setVariation(0);
       // Looks were built: hold the brief until the visitor chooses one (sent with its picture).
-      lead.current = { form: { kind: "new_site", email: email.trim(), gotcha, brief, logo, logoUrl }, sent: false, sentIds: [] };
+      lead.current = { form: { kind: "new_site", email: email.trim(), gotcha, brief, logo, logoUrl, logoSource }, sent: false, sentIds: [] };
       setMailed(CHOOSE_PROMPT);
       scrollOnResult.current = true;
       showLooks(made.looks, made.note);
@@ -902,6 +907,9 @@ export function HomePage() {
                       setBrief={setNewSite}
                       logo={newLogo}
                       setLogo={setNewLogo}
+                      setLogoUrl={setNewLogoUrl}
+                      logoSource={logoSource}
+                      setLogoSource={setLogoSource}
                       email={email}
                       setEmail={setEmail}
                       agreed={agreed}

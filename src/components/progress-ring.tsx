@@ -10,7 +10,7 @@ import { ringFraction } from "@/lib/status-copy";
 const SEGMENTS = 24;
 
 
-export function ProgressRing({ start, averageMs, done = false }: { start: number; averageMs: number; done?: boolean }) {
+export function ProgressRing({ start, averageMs, done = false, compact = false }: { start: number; averageMs: number; done?: boolean; compact?: boolean }) {
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
     const t = window.setInterval(() => setNow(Date.now()), 250);
@@ -27,7 +27,7 @@ export function ProgressRing({ start, averageMs, done = false }: { start: number
     return `M ${100 + r * Math.cos(a0)} ${100 + r * Math.sin(a0)} A ${r} ${r} 0 0 1 ${100 + r * Math.cos(a1)} ${100 + r * Math.sin(a1)}`;
   };
   return (
-    <div className="relative size-48" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(fraction * 100)} aria-label="Progress" data-progress-ring data-fraction={fraction.toFixed(3)}>
+    <div className={compact ? "relative size-28" : "relative size-48"} role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(fraction * 100)} aria-label="Progress" data-progress-ring data-fraction={fraction.toFixed(3)}>
       <svg viewBox="0 0 200 200" className="size-full">
         {Array.from({ length: SEGMENTS }, (_, i) => (
           <path
@@ -41,7 +41,7 @@ export function ProgressRing({ start, averageMs, done = false }: { start: number
         ))}
       </svg>
       <div className="absolute inset-0 flex flex-col items-center justify-center">
-        <span className="font-display text-4xl leading-none text-fg tabular-nums">{Math.round(fraction * 100)}%</span>
+        <span className={`font-display leading-none text-fg tabular-nums ${compact ? "text-2xl" : "text-4xl"}`}>{Math.round(fraction * 100)}%</span>
         <span className="mt-1 text-xs text-muted tabular-nums">
           {Math.floor(secs / 60)}:{String(secs % 60).padStart(2, "0")}
         </span>

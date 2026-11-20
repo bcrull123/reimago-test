@@ -550,7 +550,7 @@ export const previewMakeLogos = createServerFn({ method: "POST" })
       variation: Number.isFinite(variation) ? Math.max(0, Math.min(20, Math.floor(variation))) : 0,
     };
   })
-  .handler(async ({ data }): Promise<PreviewStepResult<{ options: { id: string; url: string; kind: string; label: string }[] }>> => {
+  .handler(async ({ data }): Promise<PreviewStepResult<{ options: import("./preview/ai-logo").LogoOption[] }>> => {
     (await import("./abort.server")).watchStop("logo");
     (await import("./env.server")).logKeyPresenceOnce();
     const { logoProblem } = await import("./preview/ai-logo");
