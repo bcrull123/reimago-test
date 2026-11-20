@@ -2,7 +2,8 @@ import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { PNG } from "pngjs";
-import { logoFileStem, logoProblem, logoSpecs, logoWord, standInLogoPng, type LogoBrief } from "./ai-logo.ts";
+import { logoFileStem, logoProblem, logoSpecs, logoWord, type LogoBrief } from "./ai-logo.ts";
+import { standInLogoPng } from "./ai-logo-standin.ts";
 
 const glow: LogoBrief = {
   business_name: "Glow Studio",

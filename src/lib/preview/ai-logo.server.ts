@@ -5,7 +5,8 @@ import { throwIfStopped } from "@/lib/abort.server";
 import { generateImage, isMockMode, sniffImageType } from "@/lib/ai-provider.server";
 import { newPageId, saveImage } from "@/lib/pages.server";
 import { publicBase } from "@/lib/publish.server";
-import { logoSpecs, logoWord, standInLogoPng, type LogoBrief, type LogoOption } from "./ai-logo";
+import { logoSpecs, logoWord, type LogoBrief, type LogoOption } from "./ai-logo";
+import { standInLogoPng } from "./ai-logo-standin";
 import { imageSize } from "./images.server";
 
 function baseUrl(): string {
@@ -25,6 +26,11 @@ export async function makeAiLogos(brief: LogoBrief, variation = 0): Promise<Logo
   console.info(`[logo] making ${specs.length} options for "${word}" (${specs.map((s) => s.kind).join(", ")})${standIn ? " [stand-in]" : ""}`);
   const batchId = newPageId();
   const base = baseUrl();
+  const delay = Number(process.env.PREVIEW_LOGO_DELAY_MS);
+  if (delay > 0) {
+    await new Promise((resolve) => setTimeout(resolve, Math.min(delay, 20_000)));
+    throwIfStopped("logo");
+  }
   const settled = await Promise.all(
     specs.map(async (spec, i) => {
       const t = Date.now();
