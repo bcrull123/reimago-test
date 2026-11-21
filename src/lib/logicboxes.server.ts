@@ -1,5 +1,6 @@
 import { env } from "@/lib/env.server";
 import type { DomainCheck, DomainOffer, DomainState } from "@/lib/logicboxes-types";
+import { DOMAIN_TOKEN_ENV_NAMES } from "@/lib/domain-config";
 
 export type { DomainOffer };
 
@@ -72,6 +73,7 @@ async function callProxy(token: string, params: Record<string, string[]>, attemp
         signal: AbortSignal.timeout(timeoutMs),
       });
       const json = (await response.json().catch(() => null)) as ProxyBody | null;
+      console.info(`[domain] proxy attempt ${attempt + 1}/${attempts}: HTTP ${response.status}${json ? "" : " (no JSON body)"}`);
       if (response.status === 401) throw new Error("The domain check was refused.");
       if (response.status === 403) throw new Error("That domain check is not allowed.");
       if (response.status === 400) throw new Error("The domain check was rejected.");
@@ -86,14 +88,15 @@ async function callProxy(token: string, params: Record<string, string[]>, attemp
       return data;
     } catch (error) {
       if (error instanceof Error && /refused|not allowed|rejected|could not check/.test(error.message)) throw error;
+      console.info(`[domain] proxy attempt ${attempt + 1}/${attempts}: ${error instanceof Error && error.name === "TimeoutError" ? "timed out" : "no answer"}`);
       lastError = "The domain check did not answer.";
     }
   }
   throw new Error(lastError);
 }
 
-function proxyToken(): string | undefined {
-  const names = ["Onesite_Domains_API", "ONESITE_DOMAINS_API", "LOGICBOXES_PROXY_TOKEN"];
+export function proxyToken(): string | undefined {
+  const names = DOMAIN_TOKEN_ENV_NAMES;
   for (const name of names) {
     const value = env(name);
     if (value) return value;
@@ -132,4 +135,31 @@ export async function checkDomainAvailability(raw: string, options: { degrade?: 
     const why = error instanceof Error ? error.message : "The domain check did not answer.";
     return sampleCheck(name, `${why} This is a sample, not a live check — availability is confirmed at checkout.`);
   }
+}
+
+/**
+ * Round 11 — availability for specific names ("brightkettle.com", "brightkettle.co", …) in ONE proxy call:
+ * `domain-name` and `tlds` are parallel arrays, one entry per name (see attachments/LOGICBOXES-REMOTE-FOR-BOB.md).
+ * Read-only: this never registers, reserves or buys anything (registration happens at checkout, later).
+ * Premium names (available + costHash) come back as "premium" and are never offered.
+ * Throws an Error whose message is the plain reason when the proxy is not configured or does not answer;
+ * `PREVIEW_MOCK=1` is handled by the caller.
+ */
+export async function checkDomainList(domains: string[], options: { timeoutMs?: number; attempts?: number } = {}): Promise<DomainOffer[]> {
+  const token = proxyToken();
+  if (!token) throw new Error("not configured (the domain check token is not set on this app)");
+  const pairs = domains
+    .map((d) => {
+      const [label, ...rest] = d.toLowerCase().split(".");
+      return label && rest.length === 1 ? { label, tld: rest[0]!, domain: d.toLowerCase() } : undefined;
+    })
+    .filter((x): x is { label: string; tld: string; domain: string } => Boolean(x));
+  if (!pairs.length) return [];
+  const t0 = Date.now();
+  const data = await callProxy(token, { "domain-name": pairs.map((p) => p.label), tlds: pairs.map((p) => p.tld) }, options.attempts ?? 2, options.timeoutMs ?? 12_000);
+  const rows = data && typeof data === "object" ? (data as Record<string, unknown>) : {};
+  const offers = pairs.map((p) => classifyOffer(p.domain, rows[p.domain]));
+  const count = (s: DomainState) => offers.filter((o) => o.state === s).length;
+  console.info(`[domain] checked ${offers.length} name(s) in ${Date.now() - t0}ms: ${count("available")} available, ${count("taken")} taken, ${count("premium")} premium (hidden), ${count("unknown")} unknown`);
+  return offers;
 }

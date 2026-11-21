@@ -40,6 +40,9 @@ export const notifyReplyWebhook = createServerFn({ method: "POST" })
       businessName: str(input?.businessName, 120),
       domainChoice: str(input?.domainChoice, 20),
       domain: str(input?.domain, 200),
+      // Round 11: the name picked in "Pick your domain". Never registered; reserved at checkout.
+      chosenDomain: /^[a-z0-9-]+\.[a-z]{2,24}$/.test(str(input?.chosenDomain, 80).toLowerCase()) ? str(input?.chosenDomain, 80).toLowerCase() : "",
+      domainStatus: ["selected_not_registered", "not_selected"].includes(str(input?.domainStatus, 30)) ? str(input?.domainStatus, 30) : "",
       details: clampDetails(input?.details),
     };
 
@@ -80,7 +83,7 @@ export const notifyReplyWebhook = createServerFn({ method: "POST" })
       // The Custom Design look: the Grok Imagine mockup it was built from (empty for template looks).
       design_mockup_url: site.custom?.mockup && !site.design?.custom?.failed ? `${publicBase()}/made/${data.id}/img/mockup` : "",
       mode: data.mode,
-      ...(data.mode === "new_site" ? { business_name: data.businessName, domain_choice: data.domainChoice, domain: data.domain, ...data.details } : {}),
+      ...(data.mode === "new_site" ? { business_name: data.businessName, domain_choice: data.domainChoice, domain: data.domain, ...(data.domainStatus ? { chosen_domain: data.chosenDomain, domain_status: data.domainStatus } : {}), ...data.details } : {}),
       submitted_at: new Date().toISOString(),
     });
     if (!result.sent) console.warn(`[reply-webhook] look ${data.id} (${data.mode}): not delivered (${result.status ?? result.error ?? "no answer"}, ${result.attempts} attempt${result.attempts === 1 ? "" : "s"})`);

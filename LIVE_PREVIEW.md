@@ -384,7 +384,7 @@ Bob on aceee96: "It still doesn't have the what would you change box in the rend
 - **Custom Design card:** the two thumbnails ("Design · Grok Imagine" and "Built page · Grok") and their captions are gone. The box takes their place, as on the other cards. `design_mockup_url` still goes to Formcarry and the webhook (`look.custom.mockupUrl`), and the `[imagine]` / `[design]` logs are unchanged.
 - **Full-size rendering:** the look being previewed gets the same box (`data-preview-edit`) between its "Choose this look" bar and the live page. It edits only that look, like the card's own box. The preview pages themselves (`/made/<id>`, "Open full site") ship no JavaScript, so they have no box.
 - **Phone:** under 420 px wide, the field and the Change button stack. The button is primary-colored, at least 6.5rem wide and 44 px tall, with `whitespace-nowrap`, so its label always shows (the e2e checks the label text and size at 390 px).
-- **Build stamp:** the site footer shows `Build <short commit> · <build time> UTC` (`data-build-stamp`). It comes from `BUILD_COMMIT`, `VERCEL_GIT_COMMIT_SHA` or `GITHUB_SHA`, else `git rev-parse --short HEAD`, else the first line of `RELEASE.txt` (currently `r10f`) when the host builds without `.git` or a commit env var, read at build time (`vite.config.ts` `define: __BUILD_STAMP__`). With `npm run dev`, it is read when the server starts.
+- **Build stamp:** the site footer shows `Build <short commit> · <build time> UTC` (`data-build-stamp`). It comes from `BUILD_COMMIT`, `VERCEL_GIT_COMMIT_SHA` or `GITHUB_SHA`, else `git rev-parse --short HEAD`, else the first line of `RELEASE.txt` (currently `r11`) when the host builds without `.git` or a commit env var, read at build time (`vite.config.ts` `define: __BUILD_STAMP__`). With `npm run dev`, it is read when the server starts.
 
 ### Round 9b: photo changes never "change" to the same photo; keys, timings, Google optional
 
@@ -782,6 +782,23 @@ On the published app, cafe501.com and webhero.com came back with three look card
 
 **Tests:** `src/lib/public-base.test.ts`, `src/lib/preview-display-url.test.ts`, `readPhotoRequest("Make it yummy")` in `src/lib/preview/photo-request.test.ts`, style-notes path in `src/lib/preview/owner-request.test.ts`. E2E: `scripts/blank-thumb-e2e.mjs` (cafe501.com / webhero.com, then “Make it yummy” on the first card). Screenshots: `/workspace/live-preview-shots/round10f/`. Published footer stamp: `RELEASE.txt` (`r10f`) when the host builds without `.git`.
 
+### Round 11: "Pick your domain" pop-up (Build a New Site + "Get me a domain, email & hosting")
+
+When the owner chose **Get me a domain, email & hosting**, a **Pick your domain** pop-up opens as the three looks appear (and a chip under the looks reopens it: "Pick your domain" / "Change domain").
+
+- **Flow:** Grok (XAI_API_KEY) invents ~14 short brandable names from the business name, what it does, area and style → one availability call to the Webhero/LogicBoxes proxy → the pop-up lists the **available** ones (.com first, then the other allowed endings); taken and premium names are tucked into a greyed "Not available (n)" list. Select one → **Use this domain**.
+- **Nothing is registered or bought.** The pick is stored in the page and sent with the lead as `chosen_domain` + `domain_status=selected_not_registered` (Formcarry and the reply webhook; `domain_choice` stays `get_domain_email_hosting`). With no pick: `chosen_domain=""`, `domain_status=not_selected`. The UI says "We'll reserve it at checkout". There is no registration call anywhere (`domains/register.json` is never sent); `src/lib/domain-checkout.server.ts` stays the future cart hook.
+- **Try again** makes a fresh batch and never repeats a name already shown. **Have one in mind? Type it** + **Check**: no ending → `.com` added ("We added .com"); an ending that is not live yet → "`.biz` isn't offered yet. Here's the .com version." (and the .com version is checked); a taken name → close AI variants (checked too).
+- **Progress ring + Stop** (brand color) while working; mobile bottom-sheet layout.
+- **If the check can't run** (token missing on the published app, proxy down/timeout): the pop-up says **"Can't check availability right now"**, still lists the ideas marked "Not checked", and logs `[domain] check unavailable: <reason>`.
+- **The Webhero call** (reused, unchanged contract in `attachments/LOGICBOXES-REMOTE-FOR-BOB.md`): `POST $LOGICBOXES_PROXY_URL` (default `https://secure.webhero.com/api/logicboxes.php`), header `X-API-Key: <token>`, body `{"env":"live","method":"GET","endpoint":"domains/available.json","params":{"domain-name":[…],"tlds":[…]}}` (parallel arrays, all names in one call, 12 s timeout, 2 attempts) — `checkDomainList()` in `src/lib/logicboxes.server.ts`. Only `status: "available"` without `costHash` is offered. The proxy does not return a price, so the pop-up says the price is shown at checkout.
+- **Allowed endings: one list.** `src/lib/domain-config.ts` → `DOMAIN_TLDS` (default `com, net, org, co`). Webhero is adding more endings that are not live yet; when one goes live add it there, or set the optional server env var `DOMAIN_TLDS` (comma list, e.g. `com,net,org,co,biz`; it replaces the default, first = preferred). AI ideas and the typed check never go outside the list.
+- **Env:** token `Onesite_Domains_API` (also read as `ONESITE_DOMAINS_API` / `LOGICBOXES_PROXY_TOKEN`), optional `LOGICBOXES_PROXY_URL`, optional `DOMAIN_TLDS`; `XAI_API_KEY` for AI ideas (without it, name-based ideas are used and logged). The once-per-instance `[env]` line now also prints `DOMAIN_CHECK=true|false DOMAIN_TLDS=com,net,org,co(default|env)`.
+- **Logs:** `[domain] AI ideas: N valid of M in Xms`, `[domain] proxy attempt 1/2: HTTP 200`, `[domain] checked N name(s) in Xms: A available, T taken, P premium (hidden), U unknown`, `[domain] batch K: …`, `[domain] typed "x.com" is taken; …`, `[domain] check unavailable: <reason>`. Never the token or any key.
+- **Local tests:** `PREVIEW_MOCK=1` uses a stand-in check (about one in three taken; names ending taken/google/example… are taken); `PREVIEW_DOMAIN_MOCK=unavailable` simulates "can't check"; `PREVIEW_DOMAIN_MOCK=live` sends the mock run through the real proxy code (point `LOGICBOXES_PROXY_URL` at a fake); `PREVIEW_DOMAIN_DELAY_MS` slows the mock so the ring can be screenshot.
+
+**Tests:** `src/lib/domain-ideas.test.ts`. E2E: `scripts/domain-pick-e2e.mjs` (screenshots in `/workspace/live-preview-shots/round11/`). Footer stamp `r11`.
+
 ## Create a New Site: domain first
 
 (Round 10: the home page no longer shows this wizard; "Build a New Site" replaced it. Kept for reference.)
@@ -811,7 +828,9 @@ The old domain step (step 12) is gone. Wizard answers are kept in memory only (s
 | Variable | Needed | What it does |
 | --- | --- | --- |
 | `XAI_API_KEY` | yes (for AI) | Grok text model (plans, directions, sections, critique) and Grok Imagine images. |
-| `Onesite_Domains_API` | yes | Webhero proxy token for domain search (unchanged). |
+| `Onesite_Domains_API` | yes | Webhero proxy token for domain search (unchanged); also powers the Round 11 "Pick your domain" pop-up. |
+| `LOGICBOXES_PROXY_URL` | no | Webhero proxy URL (default `https://secure.webhero.com/api/logicboxes.php`). |
+| `DOMAIN_TLDS` | no | Comma list of the domain endings the pop-up may offer (default `com,net,org,co`; see `src/lib/domain-config.ts`). |
 | **`DOMAIN_CHECKOUT_URL`** | no | Unused by default. A future hook for the Webhero cart (alpha.webhero.com) that will register a domain the visitor selected in the wizard. See `src/lib/domain-checkout.server.ts`. Nothing is ever registered today. |
 | `AI_PROVIDER` | no | `xai` (default), `openai`, or `mock`. |
 | `AI_MODEL` | no | Override the text model (default `grok-4.5`; `gpt-4.1-mini` for openai). |

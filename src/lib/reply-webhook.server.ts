@@ -34,6 +34,9 @@ export type ReplyPayload = {
   business_name?: string;
   domain_choice?: string;
   domain?: string;
+  /** Round 11: "Pick your domain" result for domain_choice "get": the picked name ("" = none) and `selected_not_registered` / `not_selected`. Never registered here. */
+  chosen_domain?: string;
+  domain_status?: string;
   /** Round 10d: optional extra details from "Add more details" (only the ones the owner filled). */
   industry?: string;
   customers?: string;

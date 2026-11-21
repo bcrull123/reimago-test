@@ -105,7 +105,7 @@ export function NewSiteForm(props: {
           <input type="radio" name="ns-domain-choice" checked={brief.domain_choice === "get"} onChange={() => setBrief({ ...brief, domain_choice: "get", domain: "" })} className="size-4 accent-primary" />
           Get me a domain, email &amp; hosting
         </label>
-        {brief.domain_choice === "get" ? <p className="ml-6 text-xs text-muted">We'll note it and help you pick one after you choose a look. Nothing is bought now.</p> : null}
+        {brief.domain_choice === "get" ? <p className="ml-6 text-xs text-muted">When your looks appear, a pop-up helps you pick a name. We'll reserve it at checkout — nothing is bought now.</p> : null}
       </fieldset>
       <MoreDetails brief={brief} setBrief={setBrief} photos={props.photos} setPhotos={props.setPhotos} open={moreOpen} setOpen={setMoreOpen} disabled={props.working} />
       <label className="block" htmlFor="ns-email">

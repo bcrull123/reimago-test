@@ -3,7 +3,9 @@ import { Link } from "@tanstack/react-router";
 import { ArrowRight } from "lucide-react";
 import { SiteShell } from "@/components/site-shell";
 import { MarketingBubble } from "@/components/marketing-bubble";
+import { DomainChip, DomainPicker } from "@/components/domain-picker";
 import { ModeChoices, NewSiteForm, type LogoSource, type ModeChoice } from "@/components/new-site-form";
+import { SELECTED_NOT_REGISTERED } from "@/lib/domain-ideas";
 import { bareHost, briefForFacts, emptyNewSite, extraLeadFields, newSiteProblem, type NewSiteBrief } from "@/lib/new-site";
 import { handOffToCursor } from "@/lib/reimagine.functions";
 import { checkSiteReachable, recordRenderTime, renderAverage } from "@/lib/preview.functions";
@@ -189,6 +191,7 @@ async function submitNewSite(
   photos: File[],
   photoUrls: string[],
   chosen?: { previewUrl: string; previewPages: string[]; chosenLook: string; changeRequests?: string[]; picture?: PictureFields },
+  pickedDomain = "",
 ): Promise<void> {
   const data = new FormData();
   data.append("email", email);
@@ -203,6 +206,11 @@ async function submitNewSite(
   // "have" (they own it; the domain is sent) or "get" (domain, email & hosting wanted; only recorded, nothing bought).
   data.append("domain_choice", brief.domain_choice === "have" ? "have_domain" : brief.domain_choice === "get" ? "get_domain_email_hosting" : "");
   data.append("domain", brief.domain_choice === "have" ? bareHost(brief.domain) : "");
+  // Round 11: the name picked in the "Pick your domain" pop-up. NOT registered: it is reserved at checkout later.
+  if (brief.domain_choice === "get") {
+    data.append("chosen_domain", pickedDomain);
+    data.append("domain_status", pickedDomain ? SELECTED_NOT_REGISTERED : "not_selected");
+  }
   if (logoUrl) data.append("logo_url", logoUrl);
   if (logo && logo.size < 10_000_000) data.append("logo", logo, logo.name);
   if (logoSource && (logoUrl || logo)) data.append("logo_source", logoSource);
@@ -246,6 +254,11 @@ export function HomePage() {
   const [looks, setLooks] = useState<LookInfo[] | null>(null);
   const [focusedLook, setFocusedLook] = useState("");
   const [chosenLook, setChosenLook] = useState("");
+  // Round 11: "Pick your domain" pop-up (New Site + "Get me a domain, email & hosting"). Read-only: nothing is registered.
+  const [domainBrief, setDomainBrief] = useState<NewSiteBrief | null>(null);
+  const [domainOpen, setDomainOpen] = useState(false);
+  const [pickedDomain, setPickedDomain] = useState("");
+  const pickedDomainRef = useRef("");
   const [looksNote, setLooksNote] = useState("");
   const [retryingId, setRetryingId] = useState("");
   const [facts, setFacts] = useState<SiteFacts | null>(null);
@@ -471,6 +484,7 @@ export function HomePage() {
                 businessName: form.brief.business_name,
                 domainChoice: form.brief.domain_choice,
                 domain: form.brief.domain_choice === "have" ? bareHost(form.brief.domain) : "",
+                ...(form.brief.domain_choice === "get" ? { chosenDomain: pickedDomainRef.current, domainStatus: pickedDomainRef.current ? SELECTED_NOT_REGISTERED : "not_selected" } : {}),
                 details: extraLeadFields(form.brief, form.photoUrls),
               }
             : {}),
@@ -485,7 +499,7 @@ export function HomePage() {
         if (form.kind === "reimagine") {
           await submitFormcarry({ email: form.email, website: form.website, note: form.note, gotcha: form.gotcha, previewUrl, previewPages, chosenLook: chosenLookName, changeRequests: feedback, picture, designMockupUrl: look.custom?.mockupUrl });
         } else {
-          await submitNewSite(form.email, form.gotcha, form.brief, form.logo, form.logoUrl, form.logoSource, form.photos, form.photoUrls, { previewUrl, previewPages, chosenLook: chosenLookName, changeRequests: feedback, picture });
+          await submitNewSite(form.email, form.gotcha, form.brief, form.logo, form.logoUrl, form.logoSource, form.photos, form.photoUrls, { previewUrl, previewPages, chosenLook: chosenLookName, changeRequests: feedback, picture }, pickedDomainRef.current);
         }
         pending.sent = true;
         void logSubmit({ data: { id: look.id, mode: leadMode, look: lookName, event: "sent", status: 200 } }).catch(() => undefined);
@@ -602,6 +616,10 @@ export function HomePage() {
     setEditedName("");
     seenIds.current = [];
     lead.current = null;
+    setDomainBrief(null);
+    setDomainOpen(false);
+    setPickedDomain("");
+    pickedDomainRef.current = "";
     const brief = { ...newSite };
     const logo = newLogo;
     const signal = beginRun("newsite");
@@ -654,6 +672,11 @@ export function HomePage() {
       setMailed(CHOOSE_PROMPT);
       scrollOnResult.current = true;
       showLooks(made.looks, made.note);
+      // Round 11: "Get me a domain, email & hosting" -> the "Pick your domain" pop-up opens as the looks appear.
+      if (brief.domain_choice === "get") {
+        setDomainBrief(brief);
+        setDomainOpen(true);
+      }
     } catch (err) {
       if (!signal.aborted) setError(err instanceof Error ? err.message : "The looks could not be built. Try again.");
     } finally {
@@ -1092,6 +1115,7 @@ export function HomePage() {
                   }}
                 />
               ) : null}
+              {looks && domainBrief ? <DomainChip value={pickedDomain} onOpen={() => setDomainOpen(true)} /> : null}
               {looksNote && !result ? <p className="mt-3 text-sm text-faint">{looksNote}</p> : null}
               <div className="mt-6">
                 {(() => {
@@ -1283,6 +1307,18 @@ export function HomePage() {
           </div>
         </section>
       </main>
+      {domainBrief ? (
+        <DomainPicker
+          brief={{ business_name: domainBrief.business_name, what: domainBrief.what, location: domainBrief.location, style: domainBrief.style }}
+          open={domainOpen}
+          onClose={() => setDomainOpen(false)}
+          value={pickedDomain}
+          onPick={(domain) => {
+            pickedDomainRef.current = domain;
+            setPickedDomain(domain);
+          }}
+        />
+      ) : null}
     </SiteShell>
   );
 }

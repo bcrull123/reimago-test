@@ -1,3 +1,4 @@
+import { DOMAIN_TOKEN_ENV_NAMES, parseTldList } from "./domain-config.ts";
 export function env(key: string): string | undefined {
   const v = process.env[key]?.trim();
   return v || undefined;
@@ -25,6 +26,7 @@ export function logKeyPresenceOnce(): void {
   console.info(
     `[env] keys present (true/false only): XAI_API_KEY=${has("XAI_API_KEY")} SERPER_API_KEY=${has("SERPER_API_KEY")} ` +
       `REPLY_WEBHOOK_URL=${has("REPLY_WEBHOOK_URL")} REPLY_WEBHOOK_KEY=${has("REPLY_WEBHOOK_KEY")} PHOTO_SEARCH_PROXY=${env("PHOTO_SEARCH_PROXY_URL") && env("PHOTO_SEARCH_PROXY_KEY") ? "true" : "false"} · ` +
+      `DOMAIN_CHECK=${DOMAIN_TOKEN_ENV_NAMES.some((name) => env(name)) ? "true" : "false"} DOMAIN_TLDS=${parseTldList(env("DOMAIN_TLDS")).join(",")}${env("DOMAIN_TLDS") ? "(env)" : "(default)"} · ` +
       `running as: ${isWorkspacePreview() ? "workspace preview" : "published app"}`,
   );
 }

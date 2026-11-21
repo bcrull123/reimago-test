@@ -184,12 +184,12 @@ describe("renderSitePage v3", () => {
     images: { hero: { name: "hero", type: "image/jpeg", source: "generated", alt: "A plumber at work" } },
   };
 
-  it("renders the homepage with stored images and relative page links, no scripts", () => {
+  it("renders the homepage with stored images and root-relative page links, no scripts", () => {
     const html = renderSitePage(site, "home")!;
     assert.ok(home.length >= 4, "mock homepage has several sections");
     assert.doesNotMatch(html, /<script/i);
-    assert.match(html, /src="0123456789abcdef\/img\/hero"/);
-    assert.match(html, /href="0123456789abcdef\/contact"/);
+    assert.match(html, /src="\/made\/0123456789abcdef\/img\/hero"/);
+    assert.match(html, /href="\/made\/0123456789abcdef\/contact"/);
     assert.match(html, /fonts.googleapis.com\/css2/);
     assert.match(html, new RegExp(`a-${design.archetype}`));
     assert.doesNotMatch(html, /@img:|@page:/);
