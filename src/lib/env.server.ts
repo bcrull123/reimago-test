@@ -27,7 +27,7 @@ export function logKeyPresenceOnce(): void {
     `[env] keys present (true/false only): XAI_API_KEY=${has("XAI_API_KEY")} SERPER_API_KEY=${has("SERPER_API_KEY")} ` +
       `REPLY_WEBHOOK_URL=${has("REPLY_WEBHOOK_URL")} REPLY_WEBHOOK_KEY=${has("REPLY_WEBHOOK_KEY")} PHOTO_SEARCH_PROXY=${env("PHOTO_SEARCH_PROXY_URL") && env("PHOTO_SEARCH_PROXY_KEY") ? "true" : "false"} · ` +
       `DOMAIN_CHECK=${DOMAIN_TOKEN_ENV_NAMES.some((name) => env(name)) ? "true" : "false"} DOMAIN_TLDS=${parseTldList(env("DOMAIN_TLDS")).join(",")}${env("DOMAIN_TLDS") ? "(env)" : "(default)"} · ` +
-      `ADMIN_PATH=${has("ADMIN_PATH")} ADMIN_PASSWORD=${has("ADMIN_PASSWORD")} ADMIN_SESSION_SECRET=${has("ADMIN_SESSION_SECRET")} FORMCARRY_API_KEY=${has("FORMCARRY_API_KEY")} LEADS_STORE=${env("DATABASE_URL") ? "postgres(DATABASE_URL)" : "memory(no DATABASE_URL)"} · ` +
+      `ADMIN_PATH=${has("ADMIN_PATH")} ADMIN_PASSWORD=${has("ADMIN_PASSWORD")} ADMIN_SESSION_SECRET=${has("ADMIN_SESSION_SECRET")} SETUP_CODE=${has("SETUP_CODE")} FORMCARRY_API_KEY=${has("FORMCARRY_API_KEY")} LEADS_STORE=${env("DATABASE_URL") ? "postgres(DATABASE_URL)" : "memory(no DATABASE_URL)"} · ` +
       `running as: ${isWorkspacePreview() ? "workspace preview" : "published app"}`,
   );
 }

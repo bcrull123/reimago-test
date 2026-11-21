@@ -1,10 +1,15 @@
 /**
- * Round 12 — ADMIN auth (the back-end control panel). Deliberately its OWN module:
+ * Round 12 / 12b — ADMIN auth (the back-end control panel). Deliberately its OWN module:
  *   - cookie  `rmg_admin`  (customers will get `rmg_customer`, see customer-auth.server.ts — never the same cookie)
- *   - secret  ADMIN_SESSION_SECRET (or derived from ADMIN_PASSWORD + ADMIN_PATH) — never shared with customer sessions
- *   - the panel lives at the secret path ADMIN_PATH; unset / invalid => the admin does not exist (normal 404 everywhere)
+ *   - secret  ADMIN_SESSION_SECRET, or the secret stored at setup, or derived from ADMIN_PASSWORD + ADMIN_PATH
+ *   - the panel lives at a secret path: env ADMIN_PATH when set, otherwise the path generated at first-run /setup
+ *
+ * Precedence: a complete ADMIN_PATH + ADMIN_PASSWORD in the environment always wins over the database record.
+ * That is also how an owner recovers a lost in-app login. The two are never mixed (the env path and password
+ * are used together; the DB path is not also accepted).
+ *
  * Nothing here touches the Better Auth stack in src/lib/auth/* — that is for customers.
- * No value (password, path, secret, token) is ever logged.
+ * No value (password, path, secret, token, hash) is ever logged.
  */
 import { createHash, createHmac, timingSafeEqual } from "node:crypto";
 import { env } from "./env.server.ts";
@@ -12,7 +17,21 @@ import { env } from "./env.server.ts";
 export const ADMIN_COOKIE = "rmg_admin";
 export const SESSION_HOURS = 12;
 /** Paths a real route already uses (or will): never accepted as the secret path. */
-const RESERVED = new Set(["admin", "api", "made", "save", "thanks", "privacy", "terms", "operator-terms", "login", "account", "signup", "assets"]);
+export const RESERVED = new Set(["admin", "api", "made", "save", "thanks", "privacy", "terms", "operator-terms", "login", "account", "signup", "assets", "setup"]);
+
+export type AdminConfig = {
+  source: "env" | "db";
+  path: string;
+  sessionSecret: string;
+  passwordMark: string;
+  /** Present when source is "env". Compared in constant time. Never logged. */
+  envPassword?: string;
+  /** Present when source is "db" (scrypt string). Never logged. */
+  passwordHash?: string;
+  email: string;
+  brandName: string;
+  brandColor: string;
+};
 
 export function adminPathValue(raw: string | undefined = env("ADMIN_PATH")): string | null {
   if (!raw) return null;
@@ -21,7 +40,7 @@ export function adminPathValue(raw: string | undefined = env("ADMIN_PATH")): str
   return p;
 }
 
-/** Why the admin is off, for the server log only (never shown to a visitor). */
+/** Why the *env* admin is off, for tests and the server log. Unset env is normal when the install uses /setup. */
 export function adminProblem(): string | null {
   if (!env("ADMIN_PATH")) return "ADMIN_PATH is not set";
   if (!adminPathValue()) return "ADMIN_PATH is not usable (8-80 letters, digits, - or _; not a reserved word)";
@@ -36,11 +55,17 @@ const same = (a: string, b: string): boolean => {
   return timingSafeEqual(ha, hb);
 };
 
-/** Is this URL segment the secret path? Constant-time; false whenever the admin is off. */
+/** Constant-time compare of a URL segment to a known path. */
+export function pathEquals(candidate: string, path: string): boolean {
+  if (!candidate || !path) return false;
+  return same(candidate, path);
+}
+
+/** Env-only: is this URL segment the secret path? False when env admin is off. Kept for tests and callers that only care about env. */
 export function pathMatches(candidate: string): boolean {
   const path = adminPathValue();
   if (!path || !env("ADMIN_PASSWORD")) return false;
-  return same(candidate, path);
+  return pathEquals(candidate, path);
 }
 
 export function checkPassword(input: string): boolean {
@@ -50,31 +75,83 @@ export function checkPassword(input: string): boolean {
 }
 
 const b64 = (s: string | Buffer) => Buffer.from(s).toString("base64url");
-function sessionSecret(): string {
+function envSessionSecret(): string {
   const explicit = env("ADMIN_SESSION_SECRET");
   if (explicit && explicit.length >= 16) return explicit;
-  // No separate secret set: derive one from the password + path (changing either signs everyone out).
   return createHmac("sha256", `rmg-admin-session-v1:${adminPathValue() ?? ""}`).update(env("ADMIN_PASSWORD") ?? "").digest("hex");
 }
-const passwordMark = () => createHash("sha256").update(`pw:${env("ADMIN_PASSWORD") ?? ""}`).digest("hex").slice(0, 10);
-const sign = (payload: string) => createHmac("sha256", sessionSecret()).update(payload).digest("base64url");
+const envPasswordMark = () => createHash("sha256").update(`pw:${env("ADMIN_PASSWORD") ?? ""}`).digest("hex").slice(0, 10);
 
-export function issueToken(now = Date.now()): string {
-  const payload = b64(JSON.stringify({ exp: now + SESSION_HOURS * 3600_000, pv: passwordMark(), k: "admin" }));
-  return `${payload}.${sign(payload)}`;
+/** Complete env config, or null. Env wins over the database only when both path and password are usable. */
+export function configFromEnv(): AdminConfig | null {
+  const path = adminPathValue();
+  const password = env("ADMIN_PASSWORD");
+  if (!path || !password) return null;
+  return {
+    source: "env",
+    path,
+    sessionSecret: envSessionSecret(),
+    passwordMark: envPasswordMark(),
+    envPassword: password,
+    email: "",
+    brandName: "",
+    brandColor: "",
+  };
 }
 
-export function verifyToken(token: string | undefined, now = Date.now()): boolean {
-  if (!token || !adminEnabled()) return false;
+/** Effective admin config: env (if complete) else the /setup database record. */
+export async function getAdminConfig(): Promise<AdminConfig | null> {
+  const fromEnv = configFromEnv();
+  if (fromEnv) return fromEnv;
+  try {
+    const { readAdminSettings } = await import("./admin-settings.server.ts");
+    return await readAdminSettings();
+  } catch {
+    return null;
+  }
+}
+
+export async function passwordMatches(input: string, cfg: AdminConfig): Promise<boolean> {
+  if (!input) return false;
+  if (cfg.source === "env") return Boolean(cfg.envPassword && same(input, cfg.envPassword));
+  if (!cfg.passwordHash) return false;
+  const { verifyPassword } = await import("./admin-password.ts");
+  return verifyPassword(input, cfg.passwordHash);
+}
+
+function signWith(cfg: AdminConfig, payload: string) {
+  return createHmac("sha256", cfg.sessionSecret).update(payload).digest("base64url");
+}
+
+export function issueTokenFor(cfg: AdminConfig, now = Date.now()): string {
+  const payload = b64(JSON.stringify({ exp: now + SESSION_HOURS * 3600_000, pv: cfg.passwordMark, k: "admin" }));
+  return `${payload}.${signWith(cfg, payload)}`;
+}
+
+export function verifyTokenFor(token: string | undefined, cfg: AdminConfig, now = Date.now()): boolean {
+  if (!token) return false;
   const [payload, sig, extra] = token.split(".");
   if (!payload || !sig || extra !== undefined) return false;
-  if (!same(sig, sign(payload))) return false;
+  if (!same(sig, signWith(cfg, payload))) return false;
   try {
     const data = JSON.parse(Buffer.from(payload, "base64url").toString("utf8")) as { exp?: number; pv?: string; k?: string };
-    return data.k === "admin" && typeof data.exp === "number" && data.exp > now && data.pv === passwordMark();
+    return data.k === "admin" && typeof data.exp === "number" && data.exp > now && data.pv === cfg.passwordMark;
   } catch {
     return false;
   }
+}
+
+/** Env-only helpers, kept so existing tests and the env-only path stay unchanged. */
+const envCfgOrNull = () => configFromEnv();
+export function issueToken(now = Date.now()): string {
+  const cfg = envCfgOrNull();
+  if (!cfg) return issueTokenFor({ source: "env", path: "", sessionSecret: envSessionSecret(), passwordMark: envPasswordMark(), email: "", brandName: "", brandColor: "" }, now);
+  return issueTokenFor(cfg, now);
+}
+export function verifyToken(token: string | undefined, now = Date.now()): boolean {
+  const cfg = envCfgOrNull();
+  if (!token || !cfg) return false;
+  return verifyTokenFor(token, cfg, now);
 }
 
 export function readCookie(header: string | null | undefined, name: string): string | undefined {
@@ -86,13 +163,21 @@ export function readCookie(header: string | null | undefined, name: string): str
 }
 
 export const isAdminRequest = (cookieHeader: string | null | undefined): boolean => verifyToken(readCookie(cookieHeader, ADMIN_COOKIE));
+export const isSignedIn = (cookieHeader: string | null | undefined, cfg: AdminConfig): boolean => verifyTokenFor(readCookie(cookieHeader, ADMIN_COOKIE), cfg);
 
-/** Set-Cookie for a new session. HttpOnly, SameSite=Strict, scoped to the secret path, Secure on https. */
+export function sessionCookieFor(cfg: AdminConfig, secure: boolean): string {
+  return `${ADMIN_COOKIE}=${issueTokenFor(cfg)}; Path=/${cfg.path}; Max-Age=${SESSION_HOURS * 3600}; HttpOnly; SameSite=Strict${secure ? "; Secure" : ""}`;
+}
+export function clearedCookieFor(path: string, secure: boolean): string {
+  return `${ADMIN_COOKIE}=; Path=/${path}; Max-Age=0; HttpOnly; SameSite=Strict${secure ? "; Secure" : ""}`;
+}
 export function sessionCookie(path: string, secure: boolean): string {
+  const cfg = envCfgOrNull();
+  if (cfg) return sessionCookieFor({ ...cfg, path }, secure);
   return `${ADMIN_COOKIE}=${issueToken()}; Path=/${path}; Max-Age=${SESSION_HOURS * 3600}; HttpOnly; SameSite=Strict${secure ? "; Secure" : ""}`;
 }
 export function clearedCookie(path: string, secure: boolean): string {
-  return `${ADMIN_COOKIE}=; Path=/${path}; Max-Age=0; HttpOnly; SameSite=Strict${secure ? "; Secure" : ""}`;
+  return clearedCookieFor(path, secure);
 }
 
 // ------------------------------------------------------------------------------------ login rate limit
@@ -112,14 +197,39 @@ export function noteLoginFailure(key: string, now = Date.now()) {
 }
 export const clearLoginFailures = (key: string) => failures.delete(key);
 
-/** Headers on every admin response: never cached, never indexed. */
+/** Headers on every admin (and setup) response: never cached, never indexed. */
 export const ADMIN_HEADERS = { "Cache-Control": "no-store, max-age=0", "X-Robots-Tag": "noindex, nofollow, noarchive", "Referrer-Policy": "no-referrer" } as const;
 
 let logged = false;
-/** One `[admin]` line per server instance: whether it is on, never any value. */
-export function logAdminStateOnce() {
+/** One `[admin]` line per server instance: how it is configured, never any value. */
+export async function logAdminStateOnce() {
   if (logged) return;
   logged = true;
-  const problem = adminProblem();
-  console.info(problem ? `[admin] disabled: ${problem}` : "[admin] enabled at the secret path (ADMIN_PATH)");
+  const fromEnv = configFromEnv();
+  if (fromEnv) {
+    console.info("[admin] enabled at the secret path (ADMIN_PATH env, takes precedence over any in-app setup)");
+    return;
+  }
+  if (adminProblem() === "ADMIN_PASSWORD is not set" || adminProblem()?.startsWith("ADMIN_PATH is not usable")) {
+    console.info(`[admin] env admin ignored: ${adminProblem()}`);
+  }
+  try {
+    const { hasDurableStore, readAdminSettings } = await import("./admin-settings.server.ts");
+    const rec = await readAdminSettings();
+    if (rec) {
+      console.info("[admin] enabled at the secret path (saved at /setup)");
+      return;
+    }
+    if (!hasDurableStore()) {
+      console.info("[admin] unclaimed: /setup cannot run (no DATABASE_URL); set ADMIN_PATH and ADMIN_PASSWORD, or add a database");
+      return;
+    }
+    console.info(`[admin] unclaimed: first-run setup is available at /setup${env("SETUP_CODE") ? " (SETUP_CODE required)" : ""}`);
+  } catch {
+    console.info("[admin] unclaimed: could not read the admin store");
+  }
+}
+
+export function resetAdminLogFlag() {
+  logged = false;
 }

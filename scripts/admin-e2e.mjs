@@ -128,7 +128,7 @@ const cookie = (await context.cookies()).find((c) => c.name === "rmg_admin");
 check("Session cookie rmg_admin: HttpOnly, SameSite=Strict, scoped to the secret path", cookie?.httpOnly && cookie.sameSite === "Strict" && cookie.path === `/${cp}`, JSON.stringify({ httpOnly: cookie?.httpOnly, sameSite: cookie?.sameSite, path: cookie?.path }));
 check("No other (customer) cookie is set", !(await context.cookies()).some((c) => c.name === "rmg_customer"));
 const navText = await page.locator("[data-admin-nav]").innerText();
-check("Left nav: Leads active, Orders / Domains / Settings greyed", /Leads/.test(navText) && (await page.locator('[data-admin-nav-item][aria-disabled="true"]').count()) === 3);
+check("Left nav: Leads and Settings active, Orders / Domains greyed", /Leads/.test(navText) && /Settings/.test(navText) && (await page.locator('[data-admin-nav-item][aria-disabled="true"]').count()) === 2);
 
 // ---- 4. Leads list.
 await page.waitForFunction(() => document.querySelectorAll("[data-leads-table] [data-lead-row]").length >= 2, null, { timeout: 15_000 });

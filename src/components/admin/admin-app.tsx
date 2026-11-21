@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useRef, useState, type CSSProperties, type FormEvent, type ReactNode } from "react";
 import { BRAND } from "@/lib/brand";
 import { chicagoShort, chicagoTime, LEAD_STATUSES, pickNames, type Lead, type LeadStatus } from "@/lib/leads";
+import { AdminUrlCard } from "@/components/admin/admin-url";
+import { MIN_PASSWORD } from "@/lib/admin-constants";
 
 /**
  * Round 12 — the back-end control panel (admin). Mounted only at the secret ADMIN_PATH; every request here goes to
@@ -101,7 +103,7 @@ const NAV: { id: string; label: string; ready: boolean }[] = [
   { id: "leads", label: "Leads", ready: true },
   { id: "orders", label: "Orders", ready: false },
   { id: "domains", label: "Domains", ready: false },
-  { id: "settings", label: "Settings", ready: false },
+  { id: "settings", label: "Settings", ready: true },
 ];
 
 function Panel({ cp, onSignedOut }: { cp: string; onSignedOut: () => void }) {
@@ -112,6 +114,7 @@ function Panel({ cp, onSignedOut }: { cp: string; onSignedOut: () => void }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [openId, setOpenId] = useState("");
+  const [section, setSection] = useState("leads");
   const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 
   const load = useCallback(
@@ -162,9 +165,9 @@ function Panel({ cp, onSignedOut }: { cp: string; onSignedOut: () => void }) {
         <nav aria-label="Control panel" className="flex gap-1 overflow-x-auto px-3 pb-3 md:block md:space-y-1 md:px-3 md:pb-0">
           {NAV.map((item) =>
             item.ready ? (
-              <span key={item.id} aria-current="page" data-admin-nav-item={item.id} className="block shrink-0 rounded-md bg-white/10 px-3 py-2 text-sm font-medium text-white ring-1 ring-brand/70">
+              <button key={item.id} type="button" onClick={() => { setSection(item.id); setOpenId(""); }} aria-current={section === item.id ? "page" : undefined} data-admin-nav-item={item.id} className={`block shrink-0 rounded-md px-3 py-2 text-left text-sm font-medium ${section === item.id ? "bg-white/10 text-white ring-1 ring-brand/70" : "text-white/70 hover:bg-white/5 hover:text-white"}`}>
                 {item.label}
-              </span>
+              </button>
             ) : (
               <span key={item.id} aria-disabled="true" title="Coming soon" data-admin-nav-item={item.id} className="block shrink-0 cursor-not-allowed rounded-md px-3 py-2 text-sm text-white/35">
                 {item.label} <span className="ml-1 text-[10px] uppercase tracking-wide">soon</span>
@@ -178,6 +181,10 @@ function Panel({ cp, onSignedOut }: { cp: string; onSignedOut: () => void }) {
       </aside>
 
       <main className="min-w-0 flex-1 px-4 py-5 sm:px-6">
+        {section === "settings" ? (
+          <SettingsPanel cp={cp} onSignedOut={onSignedOut} />
+        ) : (
+        <>
         <div className="flex flex-wrap items-end justify-between gap-3">
           <div>
             <h1 className="font-display text-2xl text-ink sm:text-3xl">Leads</h1>
@@ -295,9 +302,11 @@ function Panel({ cp, onSignedOut }: { cp: string; onSignedOut: () => void }) {
           ))}
           {!leads.length ? <li><Empty loading={loading} filtered={filtered} /></li> : null}
         </ul>
+        </>
+        )}
       </main>
 
-      {open ? <Drawer cp={cp} lead={open} onClose={() => setOpenId("")} onChanged={(next) => setLeads((all) => all.map((l) => (l.id === next.id ? next : l)))} /> : null}
+      {open && section === "leads" ? <Drawer cp={cp} lead={open} onClose={() => setOpenId("")} onChanged={(next) => setLeads((all) => all.map((l) => (l.id === next.id ? next : l)))} /> : null}
     </div>
   );
 }
@@ -527,6 +536,163 @@ function Drawer({ cp, lead, onClose, onChanged }: { cp: string; lead: Lead; onCl
         </Section>
         {picked ? <div className="h-4" /> : null}
       </aside>
+    </div>
+  );
+}
+
+
+type SettingsInfo = {
+  source: "env" | "db";
+  email: string;
+  adminPath: string;
+  adminUrl: string;
+  envOverride: boolean;
+  canChangePassword: boolean;
+  canRegeneratePath: boolean;
+  brandName: string;
+  brandColor: string;
+};
+
+function SettingsPanel({ cp, onSignedOut }: { cp: string; onSignedOut: () => void }) {
+  const { call } = useApi(cp);
+  const [info, setInfo] = useState<SettingsInfo | null>(null);
+  const [error, setError] = useState("");
+  const [current, setCurrent] = useState("");
+  const [next, setNext] = useState("");
+  const [confirm, setConfirm] = useState("");
+  const [pwMsg, setPwMsg] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [newUrl, setNewUrl] = useState("");
+  const [confirmRegen, setConfirmRegen] = useState(false);
+
+  async function load() {
+    const res = await call<SettingsInfo & { error?: string }>("settings");
+    if (res.status === 401) return onSignedOut();
+    if (!res.ok) throw new Error(res.data.error ?? "Could not load settings.");
+    setInfo(res.data);
+  }
+  useEffect(() => {
+    void load().catch((err) => setError(err instanceof Error ? err.message : "Could not load settings."));
+  }, []);
+
+  async function changePassword(event: FormEvent) {
+    event.preventDefault();
+    setBusy(true);
+    setError("");
+    setPwMsg("");
+    try {
+      const res = await call<SettingsInfo & { error?: string }>("settings/password", { method: "POST", body: { current, next, confirm } });
+      if (res.status === 401) return onSignedOut();
+      if (!res.ok) throw new Error(res.data.error ?? "Could not change the password.");
+      setCurrent("");
+      setNext("");
+      setConfirm("");
+      setPwMsg("Password saved. You’ll use it the next time you sign in.");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not change the password.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function regen() {
+    setBusy(true);
+    setError("");
+    try {
+      const res = await call<SettingsInfo & { error?: string; adminUrl?: string }>("settings/path", { method: "POST", body: {} });
+      if (res.status === 401) return onSignedOut();
+      if (!res.ok || !res.data.adminUrl) throw new Error(res.data.error ?? "Could not create a new address.");
+      setNewUrl(res.data.adminUrl);
+      setInfo(res.data);
+      setConfirmRegen(false);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not create a new address.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div data-admin-settings>
+      <h1 className="font-display text-2xl text-ink sm:text-3xl">Settings</h1>
+      <p className="mt-1 text-sm text-muted">The control panel address and the admin password.</p>
+
+      {info?.envOverride ? (
+        <p role="status" data-env-override className="mt-4 rounded-md border border-border bg-bg px-3 py-2 text-sm text-muted">
+          Sign-in is using <span className="font-mono">ADMIN_PATH</span> and <span className="font-mono">ADMIN_PASSWORD</span> set on the server, which take priority over the in-app login. To recover a lost password, set those two (and optionally <span className="font-mono">ADMIN_SESSION_SECRET</span>) in the environment, then remove them to go back to the password created at setup.
+        </p>
+      ) : null}
+
+      <section className="mt-6 max-w-xl rounded-xl border border-border bg-bg p-5">
+        <h2 className="text-xs font-semibold uppercase tracking-wide text-faint">Admin address</h2>
+        {info ? (
+          <>
+            <div className="mt-3">
+              <AdminUrlCard url={newUrl || info.adminUrl} heading={newUrl ? "Your new private admin address — the old one no longer works" : "Your private admin address"} />
+            </div>
+            <p className="mt-3 text-sm text-muted">Bookmark it. There is no link to the control panel from the site.</p>
+            {newUrl ? (
+              <a href={newUrl} data-open-admin className="mt-3 inline-flex h-11 items-center rounded-md bg-brand px-4 text-sm font-semibold text-ink hover:bg-brand-hover">
+                Open the new address
+              </a>
+            ) : info.canRegeneratePath ? (
+              confirmRegen ? (
+                <div className="mt-4 rounded-md border border-danger/30 bg-red-50 px-3 py-3" data-regen-confirm>
+                  <p className="text-sm text-red-900">The current address will stop working. Copy the new one and bookmark it.</p>
+                  <div className="mt-3 flex gap-2">
+                    <button type="button" disabled={busy} onClick={() => void regen()} data-regen-path className="h-10 rounded-md bg-brand px-4 text-sm font-semibold text-ink hover:bg-brand-hover disabled:opacity-40">
+                      {busy ? "Creating…" : "Create a new address"}
+                    </button>
+                    <button type="button" onClick={() => setConfirmRegen(false)} className="h-10 rounded-md border border-border px-4 text-sm">
+                      Cancel
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <button type="button" onClick={() => setConfirmRegen(true)} data-regen-start className="mt-4 h-10 rounded-md border border-border bg-bg px-4 text-sm font-medium text-fg hover:bg-surface">
+                  Get a new admin address
+                </button>
+              )
+            ) : null}
+          </>
+        ) : (
+          <p className="mt-3 text-sm text-muted">Loading…</p>
+        )}
+      </section>
+
+      <section className="mt-6 max-w-xl rounded-xl border border-border bg-bg p-5">
+        <h2 className="text-xs font-semibold uppercase tracking-wide text-faint">Password</h2>
+        {info?.email ? <p className="mt-2 text-sm text-fg">Owner email: <span className="font-medium">{info.email}</span></p> : null}
+        {info?.canChangePassword ? (
+          <form onSubmit={changePassword} className="mt-4 space-y-3" data-change-password>
+            <label className="block text-sm font-medium text-ink">
+              Current password
+              <input type="password" autoComplete="current-password" value={current} onChange={(e) => setCurrent(e.target.value)} required className="mt-1.5 h-11 w-full rounded-md border border-border bg-bg px-3 text-sm" data-pw-current />
+            </label>
+            <label className="block text-sm font-medium text-ink">
+              New password
+              <input type="password" autoComplete="new-password" value={next} onChange={(e) => setNext(e.target.value)} required minLength={MIN_PASSWORD} className="mt-1.5 h-11 w-full rounded-md border border-border bg-bg px-3 text-sm" data-pw-next />
+            </label>
+            <p className="text-xs text-muted">At least {MIN_PASSWORD} characters.</p>
+            <label className="block text-sm font-medium text-ink">
+              Confirm new password
+              <input type="password" autoComplete="new-password" value={confirm} onChange={(e) => setConfirm(e.target.value)} required className="mt-1.5 h-11 w-full rounded-md border border-border bg-bg px-3 text-sm" data-pw-confirm />
+            </label>
+            <button type="submit" disabled={busy} data-pw-save className="h-11 rounded-md bg-brand px-4 text-sm font-semibold text-ink hover:bg-brand-hover disabled:opacity-40">
+              {busy ? "Saving…" : "Save password"}
+            </button>
+            {pwMsg ? <p role="status" data-pw-ok className="text-sm text-emerald-800">{pwMsg}</p> : null}
+          </form>
+        ) : (
+          <p className="mt-3 text-sm text-muted">The password is set by <span className="font-mono">ADMIN_PASSWORD</span> in the server environment, so it cannot be changed here.</p>
+        )}
+      </section>
+
+      {error ? (
+        <p role="alert" data-settings-error className="mt-4 max-w-xl text-sm text-danger">
+          {error}
+        </p>
+      ) : null}
     </div>
   );
 }

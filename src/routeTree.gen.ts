@@ -13,11 +13,13 @@ import { Route as IndexRouteImport } from './routes/index'
 import { Route as OperatorTermsRouteImport } from './routes/operator-terms'
 import { Route as PrivacyRouteImport } from './routes/privacy'
 import { Route as SaveRouteImport } from './routes/save'
+import { Route as SetupRouteImport } from './routes/setup'
 import { Route as TermsRouteImport } from './routes/terms'
 import { Route as ThanksRouteImport } from './routes/thanks'
 import { Route as CpIndexRouteImport } from './routes/$cp.index'
 import { Route as ApiPhotoSearchRouteImport } from './routes/api.photo-search'
 import { Route as MadeIdRouteImport } from './routes/made.$id'
+import { Route as SetupApiRouteImport } from './routes/setup.api'
 import { Route as CpApiSplatRouteImport } from './routes/$cp.api.$'
 import { Route as MadeIdSlugRouteImport } from './routes/made.$id.$slug'
 import { Route as MadeIdImgNameRouteImport } from './routes/made.$id.img.$name'
@@ -40,6 +42,11 @@ const PrivacyRoute = PrivacyRouteImport.update({
 const SaveRoute = SaveRouteImport.update({
   id: '/save',
   path: '/save',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const SetupRoute = SetupRouteImport.update({
+  id: '/setup',
+  path: '/setup',
   getParentRoute: () => rootRouteImport,
 } as any)
 const TermsRoute = TermsRouteImport.update({
@@ -67,6 +74,11 @@ const MadeIdRoute = MadeIdRouteImport.update({
   path: '/made/$id',
   getParentRoute: () => rootRouteImport,
 } as any)
+const SetupApiRoute = SetupApiRouteImport.update({
+  id: '/api',
+  path: '/api',
+  getParentRoute: () => SetupRoute,
+} as any)
 const CpApiSplatRoute = CpApiSplatRouteImport.update({
   id: '/$cp/api/$',
   path: '/$cp/api/$',
@@ -88,10 +100,12 @@ export interface FileRoutesByFullPath {
   '/operator-terms': typeof OperatorTermsRoute
   '/privacy': typeof PrivacyRoute
   '/save': typeof SaveRoute
+  '/setup': typeof SetupRouteWithChildren
   '/terms': typeof TermsRoute
   '/thanks': typeof ThanksRoute
   '/api/photo-search': typeof ApiPhotoSearchRoute
   '/made/$id': typeof MadeIdRouteWithChildren
+  '/setup/api': typeof SetupApiRoute
   '/$cp/': typeof CpIndexRoute
   '/$cp/api/$': typeof CpApiSplatRoute
   '/made/$id/$slug': typeof MadeIdSlugRoute
@@ -102,10 +116,12 @@ export interface FileRoutesByTo {
   '/operator-terms': typeof OperatorTermsRoute
   '/privacy': typeof PrivacyRoute
   '/save': typeof SaveRoute
+  '/setup': typeof SetupRouteWithChildren
   '/terms': typeof TermsRoute
   '/thanks': typeof ThanksRoute
   '/api/photo-search': typeof ApiPhotoSearchRoute
   '/made/$id': typeof MadeIdRouteWithChildren
+  '/setup/api': typeof SetupApiRoute
   '/$cp': typeof CpIndexRoute
   '/$cp/api/$': typeof CpApiSplatRoute
   '/made/$id/$slug': typeof MadeIdSlugRoute
@@ -117,10 +133,12 @@ export interface FileRoutesById {
   '/operator-terms': typeof OperatorTermsRoute
   '/privacy': typeof PrivacyRoute
   '/save': typeof SaveRoute
+  '/setup': typeof SetupRouteWithChildren
   '/terms': typeof TermsRoute
   '/thanks': typeof ThanksRoute
   '/api/photo-search': typeof ApiPhotoSearchRoute
   '/made/$id': typeof MadeIdRouteWithChildren
+  '/setup/api': typeof SetupApiRoute
   '/$cp/': typeof CpIndexRoute
   '/$cp/api/$': typeof CpApiSplatRoute
   '/made/$id/$slug': typeof MadeIdSlugRoute
@@ -133,10 +151,12 @@ export interface FileRouteTypes {
     | '/operator-terms'
     | '/privacy'
     | '/save'
+    | '/setup'
     | '/terms'
     | '/thanks'
     | '/api/photo-search'
     | '/made/$id'
+    | '/setup/api'
     | '/$cp/'
     | '/$cp/api/$'
     | '/made/$id/$slug'
@@ -147,10 +167,12 @@ export interface FileRouteTypes {
     | '/operator-terms'
     | '/privacy'
     | '/save'
+    | '/setup'
     | '/terms'
     | '/thanks'
     | '/api/photo-search'
     | '/made/$id'
+    | '/setup/api'
     | '/$cp'
     | '/$cp/api/$'
     | '/made/$id/$slug'
@@ -161,10 +183,12 @@ export interface FileRouteTypes {
     | '/operator-terms'
     | '/privacy'
     | '/save'
+    | '/setup'
     | '/terms'
     | '/thanks'
     | '/api/photo-search'
     | '/made/$id'
+    | '/setup/api'
     | '/$cp/'
     | '/$cp/api/$'
     | '/made/$id/$slug'
@@ -176,6 +200,7 @@ export interface RootRouteChildren {
   OperatorTermsRoute: typeof OperatorTermsRoute
   PrivacyRoute: typeof PrivacyRoute
   SaveRoute: typeof SaveRoute
+  SetupRoute: typeof SetupRouteWithChildren
   TermsRoute: typeof TermsRoute
   ThanksRoute: typeof ThanksRoute
   ApiPhotoSearchRoute: typeof ApiPhotoSearchRoute
@@ -214,6 +239,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof SaveRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/setup': {
+      id: '/setup'
+      path: '/setup'
+      fullPath: '/setup'
+      preLoaderRoute: typeof SetupRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/terms': {
       id: '/terms'
       path: '/terms'
@@ -249,6 +281,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof MadeIdRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/setup/api': {
+      id: '/setup/api'
+      path: '/api'
+      fullPath: '/setup/api'
+      preLoaderRoute: typeof SetupApiRouteImport
+      parentRoute: typeof SetupRoute
+    }
     '/$cp/api/$': {
       id: '/$cp/api/$'
       path: '/$cp/api/$'
@@ -273,6 +312,16 @@ declare module '@tanstack/react-router' {
   }
 }
 
+interface SetupRouteChildren {
+  SetupApiRoute: typeof SetupApiRoute
+}
+
+const SetupRouteChildren: SetupRouteChildren = {
+  SetupApiRoute: SetupApiRoute,
+}
+
+const SetupRouteWithChildren = SetupRoute._addFileChildren(SetupRouteChildren)
+
 interface MadeIdRouteChildren {
   MadeIdSlugRoute: typeof MadeIdSlugRoute
   MadeIdImgNameRoute: typeof MadeIdImgNameRoute
@@ -291,6 +340,7 @@ const rootRouteChildren: RootRouteChildren = {
   OperatorTermsRoute: OperatorTermsRoute,
   PrivacyRoute: PrivacyRoute,
   SaveRoute: SaveRoute,
+  SetupRoute: SetupRouteWithChildren,
   TermsRoute: TermsRoute,
   ThanksRoute: ThanksRoute,
   ApiPhotoSearchRoute: ApiPhotoSearchRoute,

@@ -384,7 +384,7 @@ Bob on aceee96: "It still doesn't have the what would you change box in the rend
 - **Custom Design card:** the two thumbnails ("Design · Grok Imagine" and "Built page · Grok") and their captions are gone. The box takes their place, as on the other cards. `design_mockup_url` still goes to Formcarry and the webhook (`look.custom.mockupUrl`), and the `[imagine]` / `[design]` logs are unchanged.
 - **Full-size rendering:** the look being previewed gets the same box (`data-preview-edit`) between its "Choose this look" bar and the live page. It edits only that look, like the card's own box. The preview pages themselves (`/made/<id>`, "Open full site") ship no JavaScript, so they have no box.
 - **Phone:** under 420 px wide, the field and the Change button stack. The button is primary-colored, at least 6.5rem wide and 44 px tall, with `whitespace-nowrap`, so its label always shows (the e2e checks the label text and size at 390 px).
-- **Build stamp:** the site footer shows `Build <short commit> · <build time> UTC` (`data-build-stamp`). It comes from `BUILD_COMMIT`, `VERCEL_GIT_COMMIT_SHA` or `GITHUB_SHA`, else `git rev-parse --short HEAD`, else the first line of `RELEASE.txt` (currently `r12`) when the host builds without `.git` or a commit env var, read at build time (`vite.config.ts` `define: __BUILD_STAMP__`). With `npm run dev`, it is read when the server starts.
+- **Build stamp:** the site footer shows `Build <short commit> · <build time> UTC` (`data-build-stamp`). It comes from `BUILD_COMMIT`, `VERCEL_GIT_COMMIT_SHA` or `GITHUB_SHA`, else `git rev-parse --short HEAD`, else the first line of `RELEASE.txt` (currently `r12b`) when the host builds without `.git` or a commit env var, read at build time (`vite.config.ts` `define: __BUILD_STAMP__`). With `npm run dev`, it is read when the server starts.
 
 ### Round 9b: photo changes never "change" to the same photo; keys, timings, Google optional
 
@@ -817,6 +817,22 @@ When the owner chose **Get me a domain, email & hosting**, a **Pick your domain*
 
 **Tests:** `src/lib/leads.test.ts`, `src/lib/admin-auth.test.ts`. E2E: `scripts/admin-e2e.mjs` (start a fresh server with `PREVIEW_MOCK=1`, `ADMIN_PATH`, `ADMIN_PASSWORD`, the mock reply webhook; screenshots in `/workspace/live-preview-shots/round12/`). Footer stamp `r12`.
 
+### Round 12b: first-run /setup (create a password when you install)
+
+White-label customers should not have to set secret env vars just to get a control panel. If the install is **unclaimed** (no complete `ADMIN_PATH` + `ADMIN_PASSWORD` in the environment, and no `admin_settings` row in the database), visiting **/setup** shows a one-time form: owner email, create a password (min 10 characters, confirm), and optional brand name + color (pre-filled from `BRAND`; stored on the admin record, not yet applied to the public site). There is no link to /setup from the site (so a stranger is less likely to find a fresh install). After setup, /setup is the normal 404.
+
+On submit the server hashes the password with Node's built-in **scrypt**, generates a random secret path (`cp-` + 32 hex characters) and a session secret, stores them in Postgres (`admin_settings`, a single row; the first successful insert wins, later attempts 404), signs the owner in, and shows a **Save this address** screen with the full admin URL, a Copy button, and a note to bookmark it. Log: `[admin] setup completed` (never a path, password, or secret).
+
+**Env still wins:** a complete `ADMIN_PATH` + `ADMIN_PASSWORD` on the server always takes precedence over the in-app record (the env path and password are used together; the in-app path is a 404 while env is set). That is also **how an owner recovers** a lost address or password: set those two (and optionally `ADMIN_SESSION_SECRET`) in the environment, republish, sign in at the env path, then remove them to go back to the in-app login. reimago.ai already has the env vars set, so /setup there is a 404 and the existing login keeps working.
+
+**Optional `SETUP_CODE`:** if set, the setup form requires that code (default off). Use it to make a fresh install harder for a stranger to claim.
+
+**No `DATABASE_URL`:** /setup is still reachable while unclaimed, but it refuses with a clear "Setup needs a database" message — a password cannot be saved in the memory store.
+
+**Settings** is now a real section (Orders and Domains stay greyed): it shows the admin address with Copy, Change password, and "Get a new admin address" (the old URL then 404s). While env is in charge those actions are hidden and a short explanation is shown instead.
+
+**Tests:** `src/lib/admin-setup.test.ts` (plus the existing admin-auth tests). E2E: `scripts/admin-setup-e2e.mjs` (unclaimed /setup → save screen → login → change password → regenerate path → /setup 404; memory-store refusal; env override). Screenshots in `/workspace/live-preview-shots/round12b/`. Footer stamp `r12b`.
+
 ## Create a New Site: domain first
 
 (Round 10: the home page no longer shows this wizard; "Build a New Site" replaced it. Kept for reference.)
@@ -885,16 +901,17 @@ The old domain step (step 12) is gone. Wizard answers are kept in memory only (s
 | `PREVIEW_VISION_MODEL` | no | Model for the vision build (default `AI_MODEL`). |
 | `PREVIEW_IMAGINE_REFS` | no | `0` sends no site assets to Imagine as reference images (default: logo, signature graphic and own photos, ≤5). |
 | `PREVIEW_FIDELITY_MIN` | no | Custom Design fidelity score (0-100) under which the build gets one repair pass with the differences (default 60). |
-| **`ADMIN_PATH`** | for the control panel | The secret URL path of the admin, e.g. `cp-` + a long random string (no slashes needed). Unset: the admin does not exist and every path is a normal 404. |
-| **`ADMIN_PASSWORD`** | for the control panel | The admin sign-in password. Unset: the admin is disabled. Server-only secret. |
-| `ADMIN_SESSION_SECRET` | recommended | 16+ random characters that sign the `rmg_admin` session. If unset it is derived from `ADMIN_PASSWORD` + `ADMIN_PATH`. Never shared with customer sessions. |
+| **`ADMIN_PATH`** | optional (overrides /setup) | The secret URL path of the admin. When set together with `ADMIN_PASSWORD`, this env login takes priority over the in-app /setup record (and is how an owner recovers a lost login). Unset: use /setup on a fresh install, or the path saved there. |
+| **`ADMIN_PASSWORD`** | optional (overrides /setup) | The admin sign-in password when using env config. Unset: use the password created at /setup. Server-only secret. |
+| `ADMIN_SESSION_SECRET` | recommended with env login | 16+ random characters that sign the `rmg_admin` session for the env login. If unset it is derived from `ADMIN_PASSWORD` + `ADMIN_PATH`. Never shared with customer sessions. The in-app setup generates its own secret. |
+| `SETUP_CODE` | no | If set, first-run /setup requires this code. Default off. Server-only. |
 | `FORMCARRY_API_KEY` | no (future) | Only for a future backfill of old Formcarry submissions into the Leads list. Not used yet. |
 | `PREVIEW_STORE_DIR` | no | File storage folder when there is no `DATABASE_URL` (default: OS temp dir). |
 | `CURSOR_API_KEY` | no | When set, "Send to Cursor" starts a Cursor agent with the preview links; otherwise the button downloads a brief. |
 
 ## Code map
 
-- Round 12 leads + control panel: `src/lib/leads.ts` (shapes, cleaning, merge, filters, CSV), `src/lib/leads.server.ts` (Postgres), `src/lib/leads.functions.ts` (`saveLead`), `src/lib/attribution.ts`, `src/lib/admin-auth.server.ts` (admin cookie/password/rate limit), `src/lib/admin-api.server.ts` + `src/routes/$cp.api.$.ts` (API), `src/routes/$cp.index.tsx` (gate + page), `src/components/admin/admin-app.tsx` (UI), `src/lib/customer-auth.server.ts` (stub only).
+- Round 12 / 12b leads + control panel: `src/lib/leads.ts`, `src/lib/leads.server.ts`, `src/lib/leads.functions.ts`, `src/lib/attribution.ts`, `src/lib/admin-auth.server.ts` (env or /setup config, cookie, rate limit), `src/lib/admin-settings.server.ts` (`admin_settings` row), `src/lib/admin-password.ts` (scrypt), `src/lib/admin-setup.ts` / `admin-setup.server.ts` + `src/routes/setup.tsx` / `setup.api.ts` (first-run), `src/lib/admin-api.server.ts` + `src/routes/$cp.api.$.ts`, `src/routes/$cp.index.tsx`, `src/components/admin/admin-app.tsx` (Leads + Settings), `src/components/admin/setup-app.tsx`, `src/lib/customer-auth.server.ts` (stub only).
 - `src/lib/ai-provider.server.ts`: every AI call: text (`chatJson`, with image parts for vision) and `generateImage`. `src/lib/ai-json.ts`: JSON extraction and error types.
 - `src/lib/preview/logo.ts` / `logo.server.ts`: logo background detection, trimming, reversed copies, and per-surface treatment.
 - `src/lib/preview/ai-logo.ts` / `ai-logo-standin.ts` / `ai-logo.server.ts`: Build a New Site “Have AI make one” — prompts, and storing the Imagine (or stand-in) options. `previewMakeLogos` in `preview.functions.ts`.
