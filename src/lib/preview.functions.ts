@@ -30,30 +30,49 @@ async function limited(prefix: string, max: number): Promise<boolean> {
   return rateLimited(`${prefix}:${requestIp()}`, max);
 }
 
-/** Step 1 — read the visitor's site (homepage + up to 8 linked pages). */
+/**
+ * Step 1 — read the visitor's site (homepage + up to 8 linked pages).
+ *
+ * Round 13: never a dead end. `mode` "allow-thin" builds from the site's photos/colors (+ the typed `details`) even when
+ * it has no readable text; "note-only" skips the fetch entirely ("Build from your note instead"). A failed read says what
+ * the visitor can do next (`needsDetails`, `canBuildFromNote`) so the page shows an inline field, not a bare error.
+ */
 export const previewRead = createServerFn({ method: "POST" })
-  .validator((input: { url?: string; notes?: string }) => {
+  .validator((input: { url?: string; notes?: string; details?: string; mode?: string }) => {
     const url = typeof input?.url === "string" ? input.url.trim() : "";
     const notes = typeof input?.notes === "string" ? input.notes.trim().slice(0, 800) : "";
+    const details = typeof input?.details === "string" ? input.details.replace(/[<>{}`]+/g, " ").replace(/\s+/g, " ").trim().slice(0, 600) : "";
+    const mode = input?.mode === "allow-thin" || input?.mode === "note-only" ? input.mode : "normal";
     if (!url || url.length > 300) throw new Error("Enter a website address.");
-    return { url, notes };
+    return { url, notes, details, mode } as { url: string; notes: string; details: string; mode: "normal" | "allow-thin" | "note-only" };
   })
   .handler(async ({ data }): Promise<PreviewStepResult<{ facts: SiteFacts }>> => {
     (await import("./abort.server")).watchStop("read");
     (await import("./env.server")).logKeyPresenceOnce();
-    const { rateLimited, requestIp } = await import("./reimagine.server");
+    const { rateLimited, refundRateLimit, requestIp } = await import("./reimagine.server");
     if (rateLimited(requestIp())) {
       return { ok: false, error: "Too many previews from this network in the last hour. Try again shortly." };
     }
     try {
-      const { scrapeSite } = await import("./preview/scrape.server");
-      return { ok: true, facts: await scrapeSite(data.url, data.notes) };
+      const { scrapeSite, noteOnlyFacts } = await import("./preview/scrape.server");
+      if (data.mode === "note-only") {
+        if ((data.details + data.notes).length < 10) {
+          refundRateLimit(requestIp());
+          return { ok: false, error: "Tell us a bit about the business (a sentence is plenty) and we'll build from that.", needsDetails: true };
+        }
+        console.info(`[thin] note-only build for ${data.url.slice(0, 80)} (${data.details ? "details" : "note"})`);
+        return { ok: true, facts: noteOnlyFacts(data.url, data.notes, data.details) };
+      }
+      return { ok: true, facts: await scrapeSite(data.url, data.notes, { details: data.details, allowThin: data.mode === "allow-thin" }) };
     } catch (error) {
       const message = error instanceof Error ? error.message : "That site could not be read.";
+      // These end in an inline "tell us / build from your note" step, not a finished preview: they don't use up the hour's allowance.
+      refundRateLimit(requestIp());
+      if ((error as { needsDetails?: boolean } | undefined)?.needsDetails) return { ok: false, error: message, needsDetails: true };
       if (/fetch failed|aborted|timeout|Timeout/i.test(message)) {
-        return { ok: false, error: "That site did not respond in time. Check the address and try again." };
+        return { ok: false, error: "That site did not respond in time. Check the address and try again.", canBuildFromNote: true };
       }
-      return { ok: false, error: message };
+      return { ok: false, error: message, canBuildFromNote: true };
     }
   });
 
@@ -477,12 +496,6 @@ export const previewFinish = createServerFn({ method: "POST" })
     }
   });
 
-/** Whether the server can launch a Cursor cloud agent (CURSOR_API_KEY set). */
-export const cursorStatus = createServerFn({ method: "GET" }).handler(async () => {
-    (await import("./env.server")).logKeyPresenceOnce();
-  const { cursorConfigured } = await import("./reimagine.server");
-  return { api: cursorConfigured() };
-});
 
 /**
  * Keep the browser-made screenshot of a look's homepage next to the preview, so the lead email can link it
@@ -677,6 +690,7 @@ export const checkSiteReachable = createServerFn({ method: "POST" })
       return { ok: false, error: "That doesn't look like a web address. Try something like yourbusiness.com." };
     }
     if (!/^[a-z0-9.-]+\.[a-z]{2,}$/.test(host)) return { ok: false, error: `“${host || data.url}” doesn't look like a web address. Try something like yourbusiness.com.` };
+    if ((await import("./reimagine.server")).fixtureSite(new URL(`https://${host}/`))) return { ok: true, host };
     const t0 = Date.now();
     const { lookup } = await import("node:dns/promises");
     let address = "";

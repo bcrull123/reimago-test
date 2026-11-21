@@ -4,6 +4,7 @@ import type { CustomBrief } from "./custom-design.ts";
 import type { SiteArt } from "./site-art.ts";
 import type { TemporaryPhoto } from "./google-photo.ts";
 import type { LookTune } from "./look-edit.ts";
+import type { EraTag } from "./era-style.ts";
 
 export type SiteNavLink = { label: string; url: string };
 
@@ -55,6 +56,8 @@ export type SiteFacts = {
   brief?: string;
   /** Set when the live site could not be read and on-file copy was used. */
   note?: string;
+  /** Round 13: the site had no readable text (or couldn't be read), so the looks come from the note, photos, colors and logo. */
+  thin?: boolean;
   /** Sites the owner wants to emulate (wizard), lightly scanned for colors, fonts and tone. */
   inspiration?: Inspiration[];
 };
@@ -118,6 +121,8 @@ export type DesignDirection = {
   /** Below-the-fold section recipe; no two looks share one. */
   layout?: "editorial" | "showcase" | "bold";
   footer: "columns" | "minimal" | "statement";
+  /** Round 13: a period look the owner asked for ("late 90s", "Y2K", "brutalist"): see era-style.ts. */
+  era?: EraTag;
   /** Set on a look edited from the owner's feedback ("Night Brick, lighter"): cumulative levels + original palette. */
   tune?: LookTune;
   /** A bold headline idea for the hero. */
@@ -398,7 +403,11 @@ export type PreviewInfo = {
   rev?: number;
 };
 
-export type PreviewStepResult<T> = ({ ok: true } & T) | { ok: false; error: string };
+/**
+ * Round 13: a failed read can say what the visitor may do next: `needsDetails` (a thin site: show "Tell us a bit about the
+ * business"), `canBuildFromNote` (unreadable site: offer "Build from your note instead").
+ */
+export type PreviewStepResult<T> = ({ ok: true } & T) | { ok: false; error: string; needsDetails?: boolean; canBuildFromNote?: boolean };
 
 /** What the AI sent when some of its sections were dropped: the reasons and a short, masked raw sample. */
 export type AiDebug = { model: string; at: string; total: number; used: number; rejected: string[]; sample: string };

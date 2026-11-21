@@ -1,4 +1,6 @@
 import { lookup } from "node:dns/promises";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { isIP } from "node:net";
 import { getRequestIP } from "@tanstack/react-start/server";
 import { requestSignal, stopOrTimeout } from "@/lib/abort.server";
@@ -57,7 +59,25 @@ function blockedIp(ip: string): boolean {
   return false;
 }
 
+/**
+ * Round 13 (tests only): with PREVIEW_MOCK=1, hosts ending in ".fixture.test" are served from
+ * scripts/fixtures/sites/<host>/<path> (thin JS shells, table sites, a blocked site) so the "never dead-end" flows can be
+ * tested end to end without a public test site. Never active on the published app (PREVIEW_MOCK is unset there).
+ */
+export function fixtureSite(url: URL): { status: number; body: string } | undefined {
+  if (process.env.PREVIEW_MOCK !== "1" || !url.hostname.endsWith(".fixture.test")) return undefined;
+  if (url.hostname.startsWith("status403.")) return { status: 403, body: "" };
+  const path = url.pathname === "/" || !url.pathname ? "index.html" : url.pathname.replace(/^\/+/, "").replace(/\.\./g, "");
+  const file = join(process.cwd(), "scripts", "fixtures", "sites", url.hostname, /\.[a-z]+$/i.test(path) ? path : `${path.replace(/\/$/, "")}.html`);
+  try {
+    return { status: 200, body: readFileSync(file, "utf8") };
+  } catch {
+    return { status: 404, body: "" };
+  }
+}
+
 export async function assertPublic(url: URL): Promise<void> {
+  if (fixtureSite(url)) return;
   if (url.username || url.password) throw new Error("Remove any login from that address.");
   if (url.protocol !== "http:" && url.protocol !== "https:") {
     throw new Error("Use an http or https address.");
@@ -106,6 +126,11 @@ export function normalizeInput(raw: string): URL {
 }
 
 export async function fetchPage(start: URL, timeoutMs = 30_000): Promise<{ url: string; html: string }> {
+  const fixture = fixtureSite(start);
+  if (fixture) {
+    if (fixture.status >= 400) throw new Error(`That site responded with status ${fixture.status}.`);
+    return { url: start.toString(), html: fixture.body };
+  }
   const deadline = Date.now() + timeoutMs;
   let current = start;
   let hops = 0;
@@ -327,7 +352,17 @@ export async function readCapped(response: Response, max: number): Promise<Buffe
   return Buffer.concat(chunks).subarray(0, max);
 }
 
-export function rateLimited(key: string, max = 6): boolean {
+/** Tests only: RATE_LIMIT_SCALE=20 lets one e2e run make many previews from one address. Unset on the published app. */
+const RATE_SCALE = Math.max(1, Number(process.env.RATE_LIMIT_SCALE) || 1);
+
+/** Round 13: a read that only ended in "tell us about the business" / "build from your note" didn't use up the visitor's hour. */
+export function refundRateLimit(key: string): void {
+  const recent = hits.get(key);
+  recent?.pop();
+}
+
+export function rateLimited(key: string, maxPerHour = 6, scaled = true): boolean {
+  const max = maxPerHour * (scaled ? RATE_SCALE : 1);
   const now = Date.now();
   const recent = (hits.get(key) ?? []).filter((stamp) => now - stamp < 60 * 60 * 1000);
   if (recent.length >= max) {
@@ -360,6 +395,28 @@ export type CursorHandoff = {
   previewUrl: string;
   pages: string[];
 };
+
+/** Round 13: the admin-only hand-off's input, cleaned (the public server function is gone). */
+export function cleanHandoff(input: Record<string, unknown> | undefined): CursorHandoff {
+  const clip = (value: unknown, max: number) => (typeof value === "string" ? value.trim().slice(0, max) : "");
+  const list = (value: unknown, max: number, each = 80) =>
+    Array.isArray(value) ? value.map((item) => String(item).trim().slice(0, each)).filter(Boolean).slice(0, max) : [];
+  const previewUrl = clip(input?.previewUrl, 400);
+  if (!/^https?:\/\//.test(previewUrl)) throw new Error("The live preview is not ready.");
+  return {
+    host: clip(input?.host, 200),
+    submitted: clip(input?.submitted, 300),
+    url: clip(input?.url, 300),
+    title: clip(input?.title, 200),
+    description: clip(input?.description, 400),
+    nav: list(input?.nav, 8),
+    headings: list(input?.headings, 16),
+    text: clip(input?.text, 2500),
+    notes: clip(input?.notes, 800),
+    previewUrl,
+    pages: list(input?.pages, 8, 400),
+  };
+}
 
 export function cursorConfigured(): boolean {
   return Boolean(process.env.CURSOR_API_KEY?.trim());

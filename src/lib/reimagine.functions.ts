@@ -3,44 +3,6 @@ import type { DomainCheck } from "@/lib/logicboxes-types";
 import { normalizeDomain } from "@/lib/domain-name";
 import type { CreateBrief } from "@/components/create-site-wizard";
 
-export const handOffToCursor = createServerFn({ method: "POST" })
-  .validator((input: {
-    host?: string;
-    submitted?: string;
-    url?: string;
-    title?: string;
-    description?: string;
-    nav?: string[];
-    headings?: string[];
-    text?: string;
-    notes?: string;
-    previewUrl?: string;
-    pages?: string[];
-  }) => {
-    const clip = (value: unknown, max: number) => (typeof value === "string" ? value.trim().slice(0, max) : "");
-    const list = (value: unknown, max: number, each = 80) =>
-      Array.isArray(value) ? value.map((item) => String(item).trim().slice(0, each)).filter(Boolean).slice(0, max) : [];
-    const previewUrl = clip(input?.previewUrl, 400);
-    if (!/^https?:\/\//.test(previewUrl)) throw new Error("The live preview is not ready.");
-    return {
-      host: clip(input?.host, 200),
-      submitted: clip(input?.submitted, 300),
-      url: clip(input?.url, 300),
-      title: clip(input?.title, 200),
-      description: clip(input?.description, 400),
-      nav: list(input?.nav, 8),
-      headings: list(input?.headings, 16),
-      text: clip(input?.text, 2500),
-      notes: clip(input?.notes, 800),
-      previewUrl,
-      pages: list(input?.pages, 8, 400),
-    };
-  })
-  .handler(async ({ data }) => {
-    const { sendToCursor } = await import("./reimagine.server");
-    return sendToCursor(data);
-  });
-
 export const checkDomainName = createServerFn({ method: "POST" })
   .validator((input: { name?: string; degrade?: boolean }) => {
     const name = typeof input?.name === "string" ? input.name.trim().slice(0, 80) : "";

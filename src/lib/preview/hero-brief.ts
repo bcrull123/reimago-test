@@ -10,6 +10,7 @@
 import { businessKind, isCivic, nameWords, realServices } from "./image-prompts.ts";
 import { placeOf } from "./web-photo.ts";
 import type { SiteFacts } from "./types.ts";
+import { wantsVintage } from "./era-style.ts";
 
 export type HeroCategory =
   | "town"
@@ -38,6 +39,8 @@ export type HeroBrief = {
   avoid: string;
   /** No-AI fallback: titles/alt text that are off-topic for this kind of business. */
   offTopic: RegExp;
+  /** Round 13: the owner asked for something vintage / a period look, so old photos are welcome. */
+  allowVintage?: boolean;
   /** Scenes to search for (Google Images / free-license photos), best first; {city} {state} {service} filled in. */
   scenes: string[];
 };
@@ -182,8 +185,13 @@ export function heroBrief(facts: SiteFacts): HeroBrief {
   const hit = BRIEFS.find((b) => b.match.test(kind)) ?? BRIEFS.find((b) => b.match.test(text));
   const brief = hit ?? GENERAL;
   // Old/archival photos and portraits of unrelated people are off-topic for every business.
-  const offTopic = new RegExp(`${brief.offTopic.source}|${UNRELATED.source}`, "i");
-  return { ...brief, offTopic, kind: `${kind}${where}` };
+  const vintage = wantsVintage(facts);
+  // Round 13: when the owner asked for something vintage / a period look ("make it look 90s"), old photos are welcome.
+  const stripVintage = (source: string) =>
+    ["1[89]\\d\\d", "vintage", "archival"].reduce((acc, tok) => acc.split(`${tok}|`).join("").split(`|${tok}`).join(""), source);
+  const offTopic = vintage ? new RegExp(stripVintage(brief.offTopic.source), "i") : new RegExp(`${brief.offTopic.source}|${UNRELATED.source}`, "i");
+  const avoid = vintage ? brief.avoid.replace(/vintage or archival photos,?\s*/g, "") : brief.avoid;
+  return { ...brief, offTopic, avoid, allowVintage: vintage || undefined, kind: `${kind}${where}` };
 }
 
 /** Search queries for the brief's scenes, filled with the site's town and its main service. */

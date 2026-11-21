@@ -194,6 +194,7 @@ export function LooksPicker({
   onRetry,
   retryingId,
   sent,
+  replyOk = true,
   feedback = [],
   maxFeedback = 5,
   refining = false,
@@ -213,6 +214,8 @@ export function LooksPicker({
   retryingId?: string;
   /** The brief was emailed (after the visitor chose a look). */
   sent?: boolean;
+  /** Round 13: the reply email was handed to the Email Bot (webhook 2xx). false = "We'll email you shortly". */
+  replyOk?: boolean;
   /** "Not quite right?" rounds so far (oldest first). */
   feedback?: string[];
   maxFeedback?: number;
@@ -243,8 +246,8 @@ export function LooksPicker({
         <div data-choose-banner className="flex items-center gap-4 rounded-2xl border-2 border-emerald-500 bg-emerald-50 px-5 py-5 sm:px-7" aria-live="polite">
           <CheckCircle2 className="size-10 shrink-0 text-emerald-600" aria-hidden />
           <div>
-            <h2 className="text-2xl font-bold leading-tight text-ink sm:text-3xl">Sent! Check your email.</h2>
-            <p className="mt-1 text-sm text-muted sm:text-base">Your chosen look is built below, and a picture of it is on its way.</p>
+            <h2 className="text-2xl font-bold leading-tight text-ink sm:text-3xl" data-sent-heading={replyOk ? "email" : "shortly"}>{replyOk ? "Sent! Check your email." : "Got it! We'll email you shortly."}</h2>
+            <p className="mt-1 text-sm text-muted sm:text-base">{replyOk ? "Your chosen look is built below, and a picture of it is on its way." : "Your chosen look is built below. Our team has your request, and the email with a picture of it follows shortly."}</p>
           </div>
         </div>
       ) : (

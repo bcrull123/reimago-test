@@ -19,6 +19,7 @@ import {
 } from "./design.ts";
 import type { DesignDirection, SitePalette } from "./types.ts";
 import { tuneCss } from "./look-edit.ts";
+import { eraClasses, eraCss } from "./era-style.ts";
 
 export { BODY_FONTS, HEADING_FONTS, contrast, hashString, isHex, luminance, safeFont };
 
@@ -66,7 +67,8 @@ export function designClasses(design: DesignDirection | undefined, overlayHeader
     `h-${header}`,
     `f-${design.footer}`,
     ...design.motifs.map((m) => `m-${m}`),
-  ].join(" ");
+    eraClasses(design.era),
+  ].filter(Boolean).join(" ");
 }
 
 const GRAIN =
@@ -498,6 +500,7 @@ ${darkTheme ? "body.m-grain::after{mix-blend-mode:screen;opacity:.05}" : ""}
   .carousel{grid-auto-columns:88%}
   .s-hero-photo{min-height:640px}
 }
+${eraCss(design?.era)}
 ${tuneCss(design?.tune)}
 `.trim();
 }

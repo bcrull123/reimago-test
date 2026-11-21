@@ -9,7 +9,7 @@ import { MIN_PASSWORD } from "@/lib/admin-constants";
  * `/<ADMIN_PATH>/api/...` with the `rmg_admin` cookie. Sections other than Leads are greyed placeholders.
  * Colors come from the site's `--brand` variable (BRAND.color), so a clone's brand carries over.
  */
-type Store = { store: "postgres" | "memory"; published: boolean; total: number; formcarry_backfill: boolean };
+type Store = { store: "postgres" | "memory"; published: boolean; total: number; formcarry_backfill: boolean; reply_webhook?: { configured: boolean; problem?: string } };
 type Filters = { q: string; mode: string; status: string; from: string; to: string };
 const EMPTY: Filters = { q: "", mode: "", status: "", from: "", to: "" };
 
@@ -207,6 +207,11 @@ function Panel({ cp, onSignedOut }: { cp: string; onSignedOut: () => void }) {
             Leads are being kept in memory only (no DATABASE_URL on this app), so they will disappear on the next restart or republish.
           </p>
         ) : null}
+        {meta?.reply_webhook && !meta.reply_webhook.configured ? (
+          <p role="alert" data-admin-webhook-warning className="mt-4 rounded-md border border-danger/40 bg-red-50 px-3 py-2 text-sm text-red-900">
+            Customer reply emails are OFF: the Email Bot webhook is not set up ({meta.reply_webhook.problem || "REPLY_WEBHOOK_URL / REPLY_WEBHOOK_KEY missing"}). Leads still arrive here and in Formcarry, but nobody is emailed back automatically. Add both secrets in the published environment and republish.
+          </p>
+        ) : null}
         {meta && !meta.published && meta.store === "memory" ? <p className="mt-4 rounded-md border border-border bg-bg px-3 py-2 text-sm text-muted">Workspace preview: leads are kept in memory and reset when the preview restarts.</p> : null}
 
         <section aria-label="Filters" className="mt-4 grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-6" data-admin-filters>
@@ -249,7 +254,7 @@ function Panel({ cp, onSignedOut }: { cp: string; onSignedOut: () => void }) {
           <table className="w-full min-w-[820px] text-left text-sm" data-leads-table>
             <thead className="border-b border-border bg-surface/60 text-xs uppercase tracking-wide text-faint">
               <tr>
-                {["Date", "Name", "Email", "Mode", "Site / business", "Picked look(s)", "Domain", "Status"].map((h) => (
+                {["Date", "Name", "Email", "Mode", "Site / business", "Picked look(s)", "Domain", "Reply email", "Status"].map((h) => (
                   <th key={h} scope="col" className="px-3 py-2.5 font-medium">
                     {h}
                   </th>
@@ -271,6 +276,9 @@ function Panel({ cp, onSignedOut }: { cp: string; onSignedOut: () => void }) {
                     {lead.picks.length > 1 ? <span className="ml-1 text-xs text-faint">({lead.picks.length})</span> : null}
                   </td>
                   <td className="whitespace-nowrap px-3 py-2.5">{lead.chosen_domain || "—"}</td>
+                  <td className="whitespace-nowrap px-3 py-2.5" data-reply-status={replyKind(lead.webhook_status)}>
+                    <ReplyBadge status={lead.webhook_status} />
+                  </td>
                   <td className="px-3 py-2.5">
                     <StatusPill status={lead.lead_status} />
                   </td>
@@ -297,6 +305,7 @@ function Panel({ cp, onSignedOut }: { cp: string; onSignedOut: () => void }) {
                   {pickNames(lead) ? ` · ${pickNames(lead)}` : ""}
                   {lead.chosen_domain ? ` · ${lead.chosen_domain}` : ""}
                 </span>
+                <span className="mt-1.5 flex items-center gap-1.5 text-xs text-faint">Reply email <ReplyBadge status={lead.webhook_status} /></span>
               </button>
             </li>
           ))}
@@ -366,6 +375,19 @@ const Link = ({ href, children }: { href: string; children: ReactNode }) => (
 );
 const isHttp = (s: string) => /^https?:\/\//i.test(s);
 const delivery = (s: string) => (s ? s : "not reported");
+
+/** Round 13: the Email Bot reply webhook outcome as a small badge (list view and phone cards). */
+const replyKind = (s: string): "sent" | "failed" | "skipped" | "pending" => (/^sent/i.test(s) ? "sent" : /^failed/i.test(s) ? "failed" : /skipped|not configured/i.test(s) ? "skipped" : "pending");
+function ReplyBadge({ status }: { status: string }) {
+  const kind = replyKind(status);
+  const style = { sent: "bg-emerald-50 text-emerald-900 ring-emerald-300", failed: "bg-red-50 text-red-900 ring-red-300", skipped: "bg-amber-50 text-amber-900 ring-amber-300", pending: "bg-zinc-100 text-zinc-600 ring-zinc-300" }[kind];
+  const label = { sent: "Sent", failed: "Failed", skipped: "Not sent", pending: "Not reported" }[kind];
+  return (
+    <span title={status || "No webhook result reported for this lead yet"} className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ring-1 ${style}`}>
+      {label}
+    </span>
+  );
+}
 
 function Drawer({ cp, lead, onClose, onChanged }: { cp: string; lead: Lead; onClose: () => void; onChanged: (lead: Lead) => void }) {
   const { call } = useApi(cp);

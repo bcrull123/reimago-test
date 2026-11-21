@@ -84,7 +84,7 @@ await card.getByRole("button", { name: "Preview", exact: true }).click();
 await page.waitForTimeout(1500);
 const t1 = Date.now();
 await card.getByRole("button", { name: /Choose this look/ }).click();
-await page.waitForFunction(() => document.querySelectorAll("text") && [...document.querySelectorAll("button")].some((b) => b.textContent?.includes("Hand off to Cursor") || b.textContent?.includes("Send to Cursor")), null, { timeout: 300_000 });
+await page.waitForFunction(() => document.querySelectorAll("text") && [...document.querySelectorAll("button")].some((b) => b.textContent?.includes("Choose this look")), null, { timeout: 300_000 });
 clearInterval(watcher);
 const finishSeconds = Math.round((Date.now() - t1) / 100) / 10;
 await page.waitForTimeout(3000);

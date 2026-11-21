@@ -30,6 +30,7 @@ import { imagePrompt, isCivic, sceneFor } from "@/lib/preview/image-prompts";
 import type { Archetype, ImageTrace, PreviewTrace, PreviousRound } from "@/lib/preview/types";
 import { fromOklch, oklch, toOklab } from "@/lib/preview/look-edit";
 import { isFilenameLike, photoCaption } from "@/lib/preview/site-photos";
+import { applyEra } from "@/lib/preview/era-style";
 
 /** The owner's note + feedback rounds as a high-priority block at the end of a system prompt. */
 function requestBlock(facts: SiteFacts): string {
@@ -308,6 +309,8 @@ export async function directionsFor(
   // One name per look: its style ("Dark Premium"), the same on the card, the banner and in refine requests.
   directions = directions.map((d) => ({ ...d, name: lookName(d.archetype) }));
   directions = diversifyDirections(directions, opts.seed ?? 0, prev?.heroStyles ?? []);
+  // Round 13: "make it look late 90s / Y2K / brutalist" is forced onto every look (a different variant each), AI or not.
+  directions = applyEra(directions, facts);
   console.info(`[looks] round${prev?.names.length ? " (regenerated)" : ""}: ${directions.map((d) => `“${d.name}” ${d.archetype}/${d.heroStyle}`).join(" · ")}${prev?.names.length ? ` · previous round: ${prev.names.map((n, i) => `“${n}” ${prev.archetypes[i] ?? ""}/${prev.heroStyles[i] ?? ""}`).join(" · ")}` : ""}`);
   return { ...result, directions };
 }

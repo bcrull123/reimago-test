@@ -16,6 +16,7 @@ import {
   decode,
   extractLogo,
   fetchPage,
+  fixtureSite,
   httpUrl,
   isWordPress,
   MENU_NOISE,
@@ -430,16 +431,233 @@ function nameFrom(title: string, siteName: string, ldName: string, host: string)
   if (ldName) return scrubPlatform(ldName).slice(0, 60);
   const parts = scrubPlatform(title).split(/\s+[|\-–—:·•]\s+/).map((p) => p.trim()).filter(Boolean);
   // Titles are often "Page | Brand" or "Brand | Tagline"; prefer the shortest non-generic part.
-  const generic = /^(home|homepage|welcome|index)$/i;
+  const generic = /^(home|homepage|welcome|index|since\s+\d{4}|est\.?\s*\d{4}|established\s+\d{4})$/i;
   const candidates = parts.filter((p) => !generic.test(p));
   const pick = candidates.length > 1 ? candidates.reduce((a, b) => (b.length < a.length ? b : a)) : candidates[0];
   return (pick || host.replace(/^www\./, "")).slice(0, 60);
 }
 
-export async function scrapeSite(rawUrl: string, notes: string): Promise<SiteFacts> {
+
+// ---------------------------------------------------------------- Round 13: thin sites never dead-end
+
+/** Thrown when a site has nothing readable AND the visitor gave no note: the UI asks "Tell us a bit about the business". */
+export class ThinSiteError extends Error {
+  readonly needsDetails = true;
+  constructor() {
+    super("That site has very little text we can read, so we need a little help. Tell us a bit about the business and we'll build from that and the site's photos and colors.");
+  }
+}
+
+const BOILERPLATE = /cookie|javascript|copyright|©|all rights reserved|enable js|loading\.\.\.|privacy policy|skip to (?:main )?content/i;
+
+/** Breaks between blocks, so text in div/td/section (not just p/li) can be read line by line. */
+function blockLines(html: string): string[] {
+  const text = decode(
+    visible(html)
+      .replace(/<\/?(?:br|hr|p|div|li|ul|ol|td|th|tr|table|h[1-6]|section|article|header|footer|main|blockquote|dd|dt|dl|figcaption|address)\b[^>]*>/gi, "\n")
+      .replace(/<[^>]+>/g, " "),
+  );
+  return text
+    .split(/\n+/)
+    .map((line) => scrubPlatform(line.replace(/\s+/g, " ").trim()))
+    .filter((line) => line.length >= 25 && line.length <= 500 && line.split(" ").length >= 4 && !BOILERPLATE.test(line));
+}
+
+/** Text inside <noscript> (many JS sites keep a plain fallback there). */
+function noscriptLines(html: string): string[] {
+  const out: string[] = [];
+  for (const m of html.matchAll(/<noscript[^>]*>([\s\S]*?)<\/noscript>/gi)) {
+    for (const line of decode((m[1] ?? "").replace(/<(?:br|p|div|li)\b[^>]*>/gi, "\n").replace(/<[^>]+>/g, " ")).split(/\n+/)) {
+      const t = scrubPlatform(line.replace(/\s+/g, " ").trim());
+      if (t.length >= 25 && t.split(" ").length >= 4 && !/enable javascript|javascript (?:is|must|has)|turn on javascript|requires javascript|please enable/i.test(t)) out.push(t);
+    }
+  }
+  return out;
+}
+
+const SKIP_KEYS = /^(?:css|style|styles|class|classname|classes|url|src|srcset|href|id|ids|uri|path|type|font|fonts|color|colors|key|hash|token|nonce|sha|integrity|script|html|svg|icon|image|images|thumbnail|slug|locale|lang|env|config|theme|selector|animation|transform|template|tag|rel|format|mimetype|alt)$/i;
+
+/** Pull a JSON object starting at `start` (a "{" or "["), string-aware, up to a size cap. */
+function balancedJson(text: string, start: number, cap = 600_000): unknown {
+  const open = text[start];
+  const close = open === "{" ? "}" : "]";
+  let depth = 0;
+  let inString = false;
+  for (let i = start; i < Math.min(text.length, start + cap); i += 1) {
+    const ch = text[i];
+    if (inString) {
+      if (ch === "\\") i += 1;
+      else if (ch === '"') inString = false;
+    } else if (ch === '"') inString = true;
+    else if (ch === open) depth += 1;
+    else if (ch === close) {
+      depth -= 1;
+      if (depth === 0) {
+        try {
+          return JSON.parse(text.slice(start, i + 1));
+        } catch {
+          return undefined;
+        }
+      }
+    }
+  }
+  return undefined;
+}
+
+function humanString(value: string): string {
+  const t = decode(value.replace(/<[^>]+>/g, " ")).replace(/\s+/g, " ").trim();
+  if (t.length < 25 || t.length > 500 || t.split(" ").length < 4) return "";
+  if (/^https?:|[{};]|\bfunction\b|=>|^[#.]?[\w-]+:\s*[\w#.%(),\s-]+;?$/.test(t)) return "";
+  const letters = (t.match(/[A-Za-z]/g) ?? []).length;
+  if (letters / t.length < 0.7 || BOILERPLATE.test(t)) return "";
+  return scrubPlatform(t);
+}
+
+/**
+ * Words a JavaScript site ships inside its page: __NEXT_DATA__, other application/json blocks (Wix's warmup data,
+ * Squarespace's context), JSON-LD, and window.__NUXT__ / __INITIAL_STATE__ / SQUARESPACE_CONTEXT assignments.
+ * Only sentence-like strings are kept (no urls, css, ids), so a React/Wix/Squarespace shell still yields real copy.
+ */
+export function embeddedStrings(html: string, limit = 60): string[] {
+  const roots: unknown[] = [];
+  for (const m of html.matchAll(/<script\b([^>]*)>([\s\S]*?)<\/script>/gi)) {
+    const attrs = m[1] ?? "";
+    const body = (m[2] ?? "").trim();
+    if (!body) continue;
+    if (/type=["']application\/(?:ld\+)?json["']|id=["']__NEXT_DATA__["']|type=["']text\/json["']/i.test(attrs) && /^[{[]/.test(body)) {
+      try {
+        roots.push(JSON.parse(body));
+      } catch {
+        // not JSON after all
+      }
+      continue;
+    }
+    for (const a of body.matchAll(/(?:window\.__[A-Z_]+__|window\.__[A-Za-z_]+|__INITIAL_STATE__|__PRELOADED_STATE__|__NUXT__|SQUARESPACE_CONTEXT|wixEmbedsAPI|window\.[a-zA-Z]+Data)\s*=\s*(?=[{[])/g)) {
+      const parsed = balancedJson(body, (a.index ?? 0) + a[0].length);
+      if (parsed) roots.push(parsed);
+    }
+  }
+  const seen = new Set<string>();
+  const out: string[] = [];
+  const walk = (node: unknown, depth: number) => {
+    if (out.length >= limit || depth > 14) return;
+    if (typeof node === "string") {
+      const text = humanString(node);
+      const key = text.toLowerCase().slice(0, 120);
+      if (text && !seen.has(key)) {
+        seen.add(key);
+        out.push(text);
+      }
+    } else if (Array.isArray(node)) {
+      for (const item of node.slice(0, 400)) walk(item, depth + 1);
+    } else if (node && typeof node === "object") {
+      for (const [key, value] of Object.entries(node as Record<string, unknown>).slice(0, 400)) {
+        if (!SKIP_KEYS.test(key)) walk(value, depth + 1);
+      }
+    }
+  };
+  for (const root of roots) walk(root, 0);
+  return out;
+}
+
+/** Readable lines of a page, best source first: real paragraphs, then any block text, then <noscript>, then embedded JSON. */
+export function readableLines(html: string): { lines: string[]; source: "paragraphs" | "blocks" | "noscript" | "embedded" | "none" } {
+  const paras = paragraphs(html);
+  if (paras.join(" ").length >= 40) return { lines: paras, source: "paragraphs" };
+  const blocks = blockLines(html);
+  if (blocks.join(" ").length >= 40) return { lines: blocks, source: "blocks" };
+  const ns = noscriptLines(html);
+  if (ns.join(" ").length >= 40) return { lines: ns, source: "noscript" };
+  const emb = embeddedStrings(html);
+  if (emb.join(" ").length >= 40) return { lines: emb, source: "embedded" };
+  return { lines: [], source: "none" };
+}
+
+/** Same-site pages a thin homepage may be hiding behind: sitemap entries first, then the usual suspects. */
+const COMMON_PATHS = ["/about", "/about-us", "/menu", "/services", "/contact", "/contact-us", "/our-story", "/products", "/gallery"];
+
+async function fetchPlain(url: URL, timeoutMs: number): Promise<string> {
+  const fixture = fixtureSite(url);
+  if (fixture) {
+    if (fixture.status >= 400) throw new Error(`status ${fixture.status}`);
+    return fixture.body;
+  }
+  let current = url;
+  for (let hop = 0; hop < 3; hop += 1) {
+    await assertPublic(current);
+    const response = await fetch(current, {
+      redirect: "manual",
+      signal: stopOrTimeout(timeoutMs),
+      headers: { Accept: "application/xml,text/xml,text/plain,*/*;q=0.5", "User-Agent": "ReimagoReimagine/1.0 (+https://reimago.ai)" },
+    });
+    if (response.status >= 300 && response.status < 400) {
+      const location = response.headers.get("location");
+      if (!location) throw new Error("redirect");
+      current = new URL(location, current);
+      continue;
+    }
+    if (!response.ok) throw new Error(`status ${response.status}`);
+    return (await readCapped(response, 400_000)).toString("utf8");
+  }
+  throw new Error("too many redirects");
+}
+
+export function sitemapUrls(xml: string, base: URL): URL[] {
+  const found: URL[] = [];
+  for (const m of xml.matchAll(/<loc>\s*([^<\s]+)\s*<\/loc>/gi)) {
+    try {
+      const u = new URL(decode(m[1] ?? ""), base);
+      if (u.protocol !== "http:" && u.protocol !== "https:") continue;
+      if (!sameSite(u.hostname, base.hostname) || BINARY_EXT.test(u.pathname) || SKIP_PATH.test(u.pathname) || /\.xml$/i.test(u.pathname)) continue;
+      u.hash = "";
+      found.push(u);
+    } catch {
+      // skip
+    }
+  }
+  const scored = found.map((u) => {
+    let score = 0;
+    for (const [pattern, weight] of KEYWORDS) if (pattern.test(u.pathname)) score += weight;
+    const depth = u.pathname.split("/").filter(Boolean).length;
+    return { u, score: score + (depth <= 1 ? 2 : depth >= 3 ? -2 : 0) };
+  });
+  return scored.filter((x) => x.score > 0).sort((a, b) => b.score - a.score).map((x) => x.u);
+}
+
+async function deeperCrawl(base: URL, seen: Set<string>, deadline: number): Promise<URL[]> {
+  const urls: URL[] = [];
+  const add = (u: URL) => {
+    const key = pathKey(u);
+    if (seen.has(key)) return;
+    seen.add(key);
+    urls.push(u);
+  };
+  try {
+    let xml = await fetchPlain(new URL("/sitemap.xml", base), Math.min(4000, Math.max(800, deadline - Date.now())));
+    // A sitemap index points at child sitemaps: read the first one.
+    const child = xml.match(/<sitemap>[\s\S]*?<loc>\s*([^<\s]+)\s*<\/loc>/i)?.[1];
+    if (child && /<sitemapindex/i.test(xml)) {
+      try {
+        const childUrl = new URL(decode(child), base);
+        if (sameSite(childUrl.hostname, base.hostname)) xml = await fetchPlain(childUrl, Math.min(4000, Math.max(800, deadline - Date.now())));
+      } catch {
+        // keep the index
+      }
+    }
+    for (const u of sitemapUrls(xml, base).slice(0, 6)) add(u);
+  } catch {
+    // no sitemap
+  }
+  for (const path of COMMON_PATHS) add(new URL(path, base));
+  return urls.slice(0, 9);
+}
+
+export type ScrapeOptions = { /** What the visitor typed under "Tell us a bit about the business". */ details?: string; /** Build from the photos/colors even when there is no text and no note. */ allowThin?: boolean };
+
+export async function scrapeSite(rawUrl: string, notes: string, options: ScrapeOptions = {}): Promise<SiteFacts> {
   const start = normalizeInput(rawUrl);
   await assertPublic(start);
-  const deadline = Date.now() + TOTAL_BUDGET_MS;
+  let deadline = Date.now() + TOTAL_BUDGET_MS;
   let home: Doc;
   try {
     home = await fetchPage(start, 15_000);
@@ -486,6 +704,22 @@ export async function scrapeSite(rawUrl: string, notes: string): Promise<SiteFac
   if (deadline - Date.now() >= 5000) queue.push(...photoPages.slice(0, MAX_PHOTO_PAGES));
   if (queue.length) await Promise.all([worker(), worker(), worker(), worker()]);
   const tPhotoPages = Date.now() - t0;
+
+  // Round 13: a thin homepage (JS shell, text in images, table layouts) gets a deeper crawl: sitemap.xml, then /about,
+  // /menu, /services, /contact… Only when the pages read so far hold almost no text; always time-boxed (≤ 8 s extra).
+  const textTotal = () => docs.reduce((sum, doc) => sum + readableLines(doc.html).lines.join(" ").length, 0);
+  let deeper = 0;
+  if (textTotal() < 200 && !requestSignal()?.aborted) {
+    deadline = Math.max(deadline, Date.now() + 8000);
+    const seen = new Set(docs.map((d) => pathKey(new URL(d.url))));
+    seen.add(pathKey(base));
+    const more = await deeperCrawl(base, seen, deadline).catch(() => [] as URL[]);
+    const before = docs.length;
+    queue.push(...more);
+    if (queue.length) await Promise.all([worker(), worker(), worker(), worker()]);
+    deeper = docs.length - before;
+    console.info(`[thin] ${base.hostname}: homepage text is thin, deeper crawl tried ${more.length} page${more.length === 1 ? "" : "s"}, read ${deeper}, text now ${textTotal()} chars`);
+  }
 
   // Stylesheets (same site only, max 2) help find brand colors.
   const cssLinks = [...home.html.matchAll(/<link\b[^>]*>/gi)]
@@ -540,7 +774,8 @@ export async function scrapeSite(rawUrl: string, notes: string): Promise<SiteFac
 
   const pageOf = (pattern: RegExp) => docs.find((doc) => pattern.test(new URL(doc.url).pathname));
   const aboutDoc = pageOf(/about|our-story|who-we-are|history/i);
-  const aboutText = (aboutDoc ? paragraphs(aboutDoc.html, 60) : paragraphs(home.html, 80)).slice(0, 4).join("\n\n").slice(0, 1400);
+  const aboutParas = aboutDoc ? paragraphs(aboutDoc.html, 60) : paragraphs(home.html, 80);
+  const aboutText = (aboutParas.length ? aboutParas : readableLines((aboutDoc ?? home).html).lines).slice(0, 4).join("\n\n").slice(0, 1400);
 
   const serviceDocs = docs.filter((doc) => {
     const path = new URL(doc.url).pathname;
@@ -601,16 +836,28 @@ export async function scrapeSite(rawUrl: string, notes: string): Promise<SiteFac
     url: doc.url,
     title: cleanText(doc.html.match(/<title[^>]*>([\s\S]*?)<\/title>/i)?.[1] ?? "").slice(0, 120),
     headings: headingsOf(doc.html).slice(0, 12),
-    text: paragraphs(doc.html).join("\n").slice(0, 1800),
+    // Paragraphs first (unchanged for normal sites); thin pages fall back to block text, <noscript> and embedded JSON.
+    text: readableLines(doc.html).lines.join("\n").slice(0, 1800),
   }));
 
   const colors = brandColors([...css, ...inlineStyles], meta(home.html, "theme-color"));
   const industry =
     ld.map((f) => f.type ?? "").find((type) => type && !/^(Organization|LocalBusiness|WebSite|WebPage|Corporation|Place|ProfessionalService)$/i.test(type)) ?? "";
 
-  if (pages.every((p) => p.text.length < 40) && !description && !REIMAGO_HOSTS.has(start.hostname)) {
-    throw new Error("That page did not include enough public text to build from.");
+  // Round 13: never a dead end. "Thin" = no readable text on any page and no description. With a note (or typed details,
+  // or "use its photos and colors") the looks are built from the note + the site's photos, colors and logo and the visitor
+  // gets a soft notice; with nothing at all, the UI asks "Tell us a bit about the business".
+  const details = (options.details ?? "").replace(/\s+/g, " ").trim().slice(0, 600);
+  const thin = pages.every((p) => p.text.length < 40) && !description && !REIMAGO_HOSTS.has(start.hostname);
+  if (thin && !notes.trim() && !details && !options.allowThin) throw new ThinSiteError();
+  let thinNote: string | undefined;
+  if (thin) {
+    thinNote = details || notes.trim()
+      ? `${base.hostname.replace(/^www\./, "")} has very little text we can read, so these looks are built from ${details ? "what you told us" : "your request"} plus the site's photos, colors and logo.`
+      : `${base.hostname.replace(/^www\./, "")} has very little text we can read, so these looks use only its photos, colors and logo. Use “Not quite right?” to tell us what the business does.`;
+    console.info(`[thin] ${base.hostname}: no readable text (${docs.length} page${docs.length === 1 ? "" : "s"}, deeper ${deeper}); building from ${details ? "details" : notes.trim() ? "the note" : "photos/colors only"}`);
   }
+  const thinDescription = thin && details ? details.slice(0, 400) : "";
 
   return {
     mode: "reimagine",
@@ -618,7 +865,7 @@ export async function scrapeSite(rawUrl: string, notes: string): Promise<SiteFac
     host: base.hostname,
     name,
     tagline: tagline.slice(0, 120),
-    description: description.slice(0, 400),
+    description: (description || thinDescription).slice(0, 400),
     logo,
     colors,
     phone: phoneRaw ? formatPhone(phoneRaw) : "",
@@ -626,7 +873,7 @@ export async function scrapeSite(rawUrl: string, notes: string): Promise<SiteFac
     address: address.slice(0, 160),
     hours,
     services,
-    about: aboutText,
+    about: aboutText || thinDescription,
     testimonials,
     images,
     imageText: Object.fromEntries(images.filter((u) => imageLabels.has(u)).map((u) => [u, imageLabels.get(u)!])),
@@ -637,6 +884,44 @@ export async function scrapeSite(rawUrl: string, notes: string): Promise<SiteFac
     social,
     industry,
     notes: notes.slice(0, 800),
+    ...(thin ? { thin: true, note: thinNote } : {}),
+  };
+}
+
+/**
+ * Round 13: "Build from your note instead". The site can't be read at all (blocked, empty, timed out, not found), so the
+ * facts come from the address, the visitor's note and what they told us about the business. Nothing is fetched.
+ */
+export function noteOnlyFacts(rawUrl: string, notes: string, details: string): SiteFacts {
+  let host = rawUrl.trim().replace(/^https?:\/\//i, "").replace(/^www\./i, "").split(/[/?#]/)[0] ?? "";
+  host = host.toLowerCase().slice(0, 120);
+  const label = host.split(".")[0] ?? host;
+  const name = label.replace(/[-_]+/g, " ").replace(/\b\w/g, (c) => c.toUpperCase()).slice(0, 60) || "Your business";
+  const about = details.replace(/\s+/g, " ").trim().slice(0, 600);
+  return {
+    mode: "reimagine",
+    sourceUrl: host ? `https://${host}/` : "",
+    host: host || "your-site",
+    name,
+    tagline: "",
+    description: about.slice(0, 400),
+    logo: "",
+    colors: [],
+    phone: "",
+    email: "",
+    address: "",
+    hours: [],
+    services: [],
+    about,
+    testimonials: [],
+    images: [],
+    nav: [],
+    pages: [{ url: host ? `https://${host}/` : "", title: name, headings: [], text: about }],
+    social: [],
+    industry: "",
+    notes: notes.trim().slice(0, 800),
+    thin: true,
+    note: `We couldn't read ${host || "that site"}, so these looks are built from your note${about ? " and what you told us about the business" : ""}. Nothing on the live site was changed.`,
   };
 }
 

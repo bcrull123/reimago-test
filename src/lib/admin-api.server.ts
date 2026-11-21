@@ -24,6 +24,13 @@ function clientKey(request: Request): string {
   return createHash("sha256").update(`admin-login:${ip}`).digest("hex").slice(0, 12);
 }
 
+/** Round 13: is the Email Bot reply webhook set up? (presence only, never a value) */
+async function webhookState(): Promise<{ configured: boolean; problem?: string }> {
+  const { replyWebhookProblem } = await import("@/lib/reply-webhook.server");
+  const problem = replyWebhookProblem();
+  return problem ? { configured: false, problem } : { configured: true };
+}
+
 const adminUrl = (request: Request, path: string) => `${requestOrigin(request)}/${path}`;
 
 function settingsPayload(cfg: AdminConfig, request: Request) {
@@ -119,12 +126,26 @@ export async function handleAdminApi(request: Request, cp: string, splat: string
     }
   }
 
+  // Round 13: the Cursor hand-off is admin-only. It used to be a public server function behind a public button; with a
+  // CURSOR_API_KEY set that let any visitor start agents on the owner's account. Needs this session and is rate limited.
+  if (route === "cursor-handoff" && method === "POST") {
+    const server = await import("@/lib/reimagine.server");
+    if (server.rateLimited(`cursor-handoff:${key}`, 5, false)) return json({ error: "Too many hand-offs this hour. Try again later." }, 429);
+    try {
+      const input = server.cleanHandoff((await request.json().catch(() => ({}))) as Record<string, unknown>);
+      console.info(`[admin] cursor hand-off for ${input.host || "a site"} (${server.cursorConfigured() ? "api" : "no key"})`);
+      return json(await server.sendToCursor(input));
+    } catch (error) {
+      return json({ error: error instanceof Error ? error.message.slice(0, 200) : "Could not hand off." }, 400);
+    }
+  }
+
   const leads = await import("@/lib/leads.server");
   const query = Object.fromEntries(new URL(request.url).searchParams);
   try {
     if (route === "leads" && method === "GET") {
       const rows = await leads.listLeads(query);
-      return json({ leads: rows, total: await leads.countLeads(), store: leads.hasDurableStore() ? "postgres" : "memory", published: !isWorkspacePreview(), formcarry_backfill: Boolean(env("FORMCARRY_API_KEY")) });
+      return json({ leads: rows, total: await leads.countLeads(), store: leads.hasDurableStore() ? "postgres" : "memory", published: !isWorkspacePreview(), reply_webhook: await webhookState(), formcarry_backfill: Boolean(env("FORMCARRY_API_KEY")) });
     }
     if (route === "leads.csv" && method === "GET") {
       const rows = await leads.listLeads({ ...query, limit: 2000 });

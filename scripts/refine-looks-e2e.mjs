@@ -93,7 +93,7 @@ const sentAfterRefine = sent.length;
 
 // Choose the first new look → one request with note + change_requests.
 await page.locator("[data-look]").first().getByRole("button", { name: /Choose this look/ }).dblclick();
-await page.locator("text=Sent! Check your email.").first().waitFor({ timeout: 300_000 });
+await page.locator("text=/Sent! Check your email|email you shortly/").first().waitFor({ timeout: 300_000 });
 await page.waitForTimeout(3000);
 const form = sent.length ? await new Response(sent[0].body, { headers: { "content-type": sent[0].contentType } }).formData() : new FormData();
 const fields = {};

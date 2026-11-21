@@ -54,7 +54,7 @@ await cards.first().scrollIntoViewIfNeeded();
 await page.screenshot({ path: join(outDir, "01-app-wizard-looks.png") });
 const lookNames = await cards.locator("h3").allTextContents();
 await cards.nth(Number(process.argv[3] ?? 0)).getByRole("button", { name: /Choose this look/ }).click();
-await page.waitForFunction(() => [...document.querySelectorAll("button")].some((b) => /Hand off to Cursor|Send to Cursor/.test(b.textContent ?? "")), null, { timeout: 300_000 });
+await page.waitForFunction(() => [...document.querySelectorAll("button")].some((b) => /Choose this look/.test(b.textContent ?? "")), null, { timeout: 300_000 });
 const frame = page.locator('iframe[title^="Live preview"]');
 await page.waitForTimeout(2500);
 await frame.scrollIntoViewIfNeeded();

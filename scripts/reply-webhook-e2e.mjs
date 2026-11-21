@@ -49,7 +49,7 @@ await page.getByText(/Press Choose this look again to resend/).waitFor({ timeout
 const sentShown = await page.getByText(/^Sent!/).count();
 await page.screenshot({ path: join(outDir, "01-formcarry-failed-first.png") });
 await choose();
-await page.getByText(/check your email|inbox|on its way/i).first().waitFor({ timeout: 300_000 });
+await page.getByText(/check your email|inbox|on its way|email you shortly/i).first().waitFor({ timeout: 300_000 });
 await page.screenshot({ path: join(outDir, "02-check-your-email.png") });
 await page.waitForTimeout(8000);
 await browser.close();

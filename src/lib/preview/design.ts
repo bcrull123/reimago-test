@@ -6,6 +6,7 @@
 import { cleanBrief, fallbackBrief } from "./custom-design.ts";
 import { requestHints, sceneToFind } from "./owner-request.ts";
 import { seeded } from "./look-variety.ts";
+import { cleanEraTag } from "./era-style.ts";
 import { ARCHETYPE_LABEL } from "./archetype-label.ts";
 import { ARCHETYPES, MOTIFS, type Archetype, type DesignDirection, type Motif, type SiteFacts, type SitePalette } from "./types.ts";
 
@@ -295,6 +296,7 @@ export function normalizeDirection(raw: unknown, index: number, facts: Pick<Site
     heroStyle: oneOf<"caption" | "cinematic" | "collage" | "poster" | "panorama" | "framed" | "">(r.heroStyle, ["caption", "cinematic", "collage", "poster", "panorama", "framed"] as const, "") || undefined,
     layout: oneOf<"editorial" | "showcase" | "bold" | "">(r.layout, ["editorial", "showcase", "bold"] as const, "") || undefined,
     footer: oneOf(r.footer, ["columns", "minimal", "statement"] as const, preset.footer),
+    era: cleanEraTag(r.era),
     headline: clip(r.headline, 110),
     rationale: clip(r.rationale, 300),
     custom: customOf(r.custom, clip(r.name, 40), readablePalette(r.palette as Partial<SitePalette> | undefined, fallbackPalette)),

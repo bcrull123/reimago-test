@@ -7,11 +7,10 @@ import { DomainChip, DomainPicker } from "@/components/domain-picker";
 import { ModeChoices, NewSiteForm, type LogoSource, type ModeChoice } from "@/components/new-site-form";
 import { SELECTED_NOT_REGISTERED } from "@/lib/domain-ideas";
 import { bareHost, briefForFacts, emptyNewSite, extraLeadFields, newSiteProblem, type NewSiteBrief } from "@/lib/new-site";
-import { handOffToCursor } from "@/lib/reimagine.functions";
 import { checkSiteReachable, recordRenderTime, renderAverage } from "@/lib/preview.functions";
 import { ProgressRing, RotatingStatus } from "@/components/progress-ring";
 import { statusLines } from "@/lib/status-copy";
-import { cursorStatus, previewCustom, previewDirections, previewImagine, previewFinish, previewFromBrief, previewLook, previewRead, previewRefine, previewRetryAi, previewUploadLogo, previewUploadPhotos, savePreviewPicture } from "@/lib/preview.functions";
+import { previewCustom, previewDirections, previewImagine, previewFinish, previewFromBrief, previewLook, previewRead, previewRefine, previewRetryAi, previewUploadLogo, previewUploadPhotos, savePreviewPicture } from "@/lib/preview.functions";
 import { capturePreviewPicture, pictureFileName } from "@/lib/preview-picture";
 import { logSubmit, notifyReplyWebhook } from "@/lib/reply-webhook.functions";
 import { saveLead } from "@/lib/leads.functions";
@@ -81,6 +80,9 @@ const fieldClass =
 const FORMCARRY = "https://formcarry.com/s/NipZS0fF4w4";
 const THANKS = "Sent! Check your email. The site, your email, the note, the look you chose, a picture of it, and a link to it were sent. Nothing on the live site was changed.";
 const THANKS_NO_PICTURE = "Sent! Check your email. The site, your email, the note, the look you chose, and a link to it were sent. Nothing on the live site was changed.";
+// Round 13: "check your email" only when the reply webhook (Email Bot) answered 2xx. Otherwise be honest: the team has it, the reply follows.
+const LATER = "Got it! We'll email you shortly. The site, your email, the note, the look you chose, and a link to it were sent to our team. Nothing on the live site was changed.";
+const thanksFor = (picture: boolean, replied: boolean) => (replied ? (picture ? THANKS : THANKS_NO_PICTURE) : LATER);
 /** Shown when the looks are ready: the brief waits until the visitor chooses one. */
 const CHOOSE_PROMPT = "Your looks are ready below. Choose the one you like and we'll build every page in that style and email you a picture. Nothing is sent until you choose.";
 
@@ -249,10 +251,10 @@ export function HomePage() {
   const [working, setWorking] = useState(false);
   const [retrying, setRetrying] = useState(false);
   const [stage, setStage] = useState<Stage>("");
-  const [handing, setHanding] = useState(false);
-  const [handoff, setHandoff] = useState("");
-  const [cursorApi, setCursorApi] = useState(false);
   const [error, setError] = useState("");
+  // Round 13: a read that can't continue offers the next step inline (never a bare error).
+  const [recovery, setRecovery] = useState<{ kind: "thin" | "unreadable" | "unreachable" } | null>(null);
+  const [details, setDetails] = useState("");
   const [result, setResult] = useState<ReimagineOk | null>(null);
   const [looks, setLooks] = useState<LookInfo[] | null>(null);
   const [focusedLook, setFocusedLook] = useState("");
@@ -268,6 +270,8 @@ export function HomePage() {
   const [variation, setVariation] = useState(0);
   const [mailed, setMailed] = useState<string>("");
   const [leadSent, setLeadSent] = useState(false);
+  /** Round 13: the Email Bot reply webhook answered 2xx for the latest pick (false = "We'll email you shortly"). */
+  const [replyOk, setReplyOk] = useState(false);
   const [feedback, setFeedback] = useState<string[]>([]);
   const [refining, setRefining] = useState(false);
   /** The card being changed from its own "Change this look" box. */
@@ -298,12 +302,6 @@ export function HomePage() {
     } catch {
       // Storage may be blocked; nothing to clean.
     }
-  }, []);
-
-  useEffect(() => {
-    cursorStatus()
-      .then((status) => setCursorApi(Boolean(status?.api)))
-      .catch(() => setCursorApi(false));
   }, []);
 
   useEffect(() => {
@@ -503,7 +501,7 @@ export function HomePage() {
       }).catch(() => undefined);
       // Email Bot's instant reply: the server posts to its webhook (key stays server-side). Not awaited — the
       // visitor's "check your email" never waits on it; retries reuse the same submission id.
-      void notifyReplyWebhook({
+      const hook = notifyReplyWebhook({
         data: {
           id: look.id,
           leadId,
@@ -535,8 +533,20 @@ export function HomePage() {
         }
         pending.sent = true;
         void logSubmit({ data: { id: look.id, mode: leadMode, look: lookName, event: "sent", status: 200, leadId } }).catch(() => undefined);
+        // Round 13: wait briefly for the Email Bot webhook so the message is true. Slow or failed → "We'll email you shortly"
+        // (and it upgrades itself if the webhook answers later).
+        const replied = await Promise.race([hook.then((r) => Boolean(r?.ok)), new Promise<"slow">((resolve) => setTimeout(() => resolve("slow"), 6000))]);
+        const hasPicture = Boolean(picture.file);
         setLeadSent(true);
-        setMailed(picture.file ? THANKS : THANKS_NO_PICTURE);
+        setReplyOk(replied === true);
+        setMailed(thanksFor(hasPicture, replied === true));
+        if (replied !== true) {
+          void hook.then((r) => {
+            if (!r?.ok) return;
+            setReplyOk(true);
+            setMailed((current) => (current === LATER ? thanksFor(hasPicture, true) : current));
+          });
+        }
       } catch (err) {
         // Round 10: never show "Sent" when Formcarry didn't accept it; the look can be chosen again to resend.
         pending.sentIds = pending.sentIds.filter((id) => id !== look.id);
@@ -575,29 +585,45 @@ export function HomePage() {
       setError("Agree to the terms before we fetch the site.");
       return;
     }
+    setRecovery(null);
+    setDetails("");
+    await runReimagine(site, "normal", "");
+  }
+
+  /**
+   * Reimagine's long run. Round 13: `mode` "allow-thin" builds from the site's photos/colors when it has no readable text,
+   * "note-only" skips reading the site ("Build from your note instead"); `details` is what the visitor typed about the business.
+   */
+  async function runReimagine(site: string, mode: "normal" | "allow-thin" | "note-only", aboutText: string) {
+    setError("");
+    setRecovery(null);
     setWorking(true);
     setMailed("");
-    setHandoff("");
     setLeadSent(false);
     setFeedback([]);
     setEditedName("");
     seenIds.current = [];
     lead.current = null;
-    const gotcha = new FormData(event.currentTarget).get("_gotcha");
+    const gotcha = document.querySelector<HTMLInputElement>('input[name="_gotcha"]')?.value ?? "";
     const signal = beginRun("round1");
     let ok = false;
     try {
       // Round 10: a quick (≈3 s) check that the domain exists before the long work starts.
-      setStage("check");
-      const reach = await checkSiteReachable({ data: { url: site }, signal }).catch(() => undefined);
-      if (reach && !reach.ok) {
-        setError(reach.error);
-        return;
+      if (mode !== "note-only") {
+        setStage("check");
+        const reach = await checkSiteReachable({ data: { url: site }, signal }).catch(() => undefined);
+        if (reach && !reach.ok) {
+          setError(reach.error);
+          setRecovery({ kind: "unreachable" });
+          return;
+        }
       }
       setStage("read");
-      const read = await previewRead({ data: { url: site, notes: notes.trim() }, signal });
+      const read = await previewRead({ data: { url: site, notes: notes.trim(), details: aboutText, mode }, signal });
       if (!read.ok) {
         setError(read.error);
+        if (read.needsDetails) setRecovery({ kind: "thin" });
+        else if (read.canBuildFromNote) setRecovery({ kind: "unreadable" });
         return;
       }
       const made = await makeLooks(read.facts, 0, signal);
@@ -608,7 +634,7 @@ export function HomePage() {
       showLooks(made.looks, [read.facts.note, made.note].filter(Boolean).join(" "));
       // Nothing is sent yet: the form goes to Formcarry once, when the visitor chooses a look.
       lead.current = {
-        form: { kind: "reimagine", email: email.trim(), website: site, note: notes.trim(), gotcha: typeof gotcha === "string" ? gotcha : "" },
+        form: { kind: "reimagine", email: email.trim(), website: site, note: [notes.trim(), aboutText && `About the business: ${aboutText}`].filter(Boolean).join(" · "), gotcha },
         sent: false,
         sentIds: [],
         visitId: newLeadId(),
@@ -644,7 +670,6 @@ export function HomePage() {
     }
     setWorking(true);
     setMailed("");
-    setHandoff("");
     setLeadSent(false);
     setFeedback([]);
     setEditedName("");
@@ -824,75 +849,6 @@ export function HomePage() {
     const box = document.getElementById("refine-looks");
     box?.scrollIntoView({ behavior: "smooth", block: "center" });
     window.setTimeout(() => document.getElementById("refine-text")?.focus({ preventScroll: true }), 400);
-  }
-
-  function downloadBlob(blob: Blob, name: string) {
-    const href = URL.createObjectURL(blob);
-    const link = document.createElement("a");
-    link.href = href;
-    link.download = name;
-    link.click();
-    URL.revokeObjectURL(href);
-  }
-
-  async function handOff() {
-    const previewUrl = result?.preview?.url ?? result?.pageUrl;
-    if (!result || !previewUrl) return;
-    const submitted = url.trim() || result.layout?.submitted || result.finalUrl;
-    const layout = {
-      submitted,
-      url: result.layout?.url || result.finalUrl,
-      title: result.layout?.title || result.foundTitle,
-      description: result.layout?.description || result.foundDescription,
-      nav: result.layout?.nav?.length ? result.layout.nav : result.draft.nav,
-      headings: result.layout?.headings ?? [],
-      text: result.layout?.text || result.diagnosis,
-    };
-    const pages = result.preview?.pages.map((page) => `${page.title}: ${page.url}`) ?? [previewUrl];
-    const domain = bareDomain(submitted || result.host);
-    setHanding(true);
-    setHandoff("");
-    try {
-      if (cursorApi) {
-        const sent = await handOffToCursor({
-          data: { host: result.host, ...layout, notes: notes.trim(), previewUrl, pages },
-        });
-        if (sent.ok) {
-          setHandoff(`Cursor started building it: ${sent.url}`);
-          return;
-        }
-        setHandoff(`${sent.error} Downloading the brief instead.`);
-      }
-      const brief = [
-        "# Cursor handoff",
-        "",
-        "Open this folder in the Cursor you already use. Do not sign out of that account.",
-        "",
-        `Rebuild the website from the form: ${submitted}`,
-        `Start from the live preview: ${previewUrl}`,
-        "Open every preview page below and match its layout, colors, type, copy, and navigation.",
-        pages.map((page) => `- ${page}`).join("\n"),
-        "Never invent phone numbers, emails, or addresses. Do not change the live site.",
-        "",
-        `Fetched page: ${layout.url}`,
-        layout.title ? `Title: ${layout.title}` : "",
-        layout.description ? `Description: ${layout.description}` : "",
-        layout.nav.length ? `Navigation: ${layout.nav.join(" · ")}` : "",
-        layout.headings.length ? `Headings:\n${layout.headings.map((heading) => `- ${heading}`).join("\n")}` : "",
-        notes.trim() ? `Customer note: ${notes.trim()}` : "",
-        layout.text ? `Page text:\n${layout.text}` : "",
-      ]
-        .filter(Boolean)
-        .join("\n\n");
-      downloadBlob(new Blob([brief], { type: "text/markdown" }), `${domain}-cursor.md`);
-      setHandoff((current) =>
-        `${current ? `${current} ` : ""}Saved ${domain}-cursor.md with the preview links. Open it in the Cursor you already use.`,
-      );
-    } catch (err) {
-      setHandoff(err instanceof Error ? err.message : "The handoff could not be saved.");
-    } finally {
-      setHanding(false);
-    }
   }
 
   async function copyBrief() {
@@ -1097,6 +1053,52 @@ export function HomePage() {
                     {error}
                   </p>
                 ) : null}
+                {recovery && !working ? (
+                  <div data-recovery={recovery.kind} className="space-y-3 rounded-xl border-2 border-accent bg-surface p-4">
+                    <label htmlFor="site-details" className="block text-sm font-semibold text-fg">
+                      {recovery.kind === "thin" ? "Tell us a bit about the business" : "Or build it from your note instead"}
+                    </label>
+                    <p className="text-xs text-muted">
+                      {recovery.kind === "thin"
+                        ? "A sentence or two is plenty. We'll build from this plus the site's photos, colors and logo."
+                        : "We'll skip reading the site and build from what you tell us (and your “What should change?” note)."}
+                    </p>
+                    <textarea
+                      id="site-details"
+                      rows={3}
+                      value={details}
+                      onChange={(event) => setDetails(event.target.value.slice(0, 600))}
+                      placeholder="e.g. Family-owned Italian restaurant in Tulsa, known for wood-fired pizza and a big patio."
+                      className="w-full rounded-md border border-border bg-bg px-3 py-2 text-base text-fg outline-none"
+                    />
+                    <div className="flex flex-col gap-2 sm:flex-row">
+                      <button
+                        type="button"
+                        data-recovery-build
+                        onClick={() => {
+                          if (recovery.kind !== "thin" && (details + notes).trim().length < 10) {
+                            setError("Tell us a bit about the business (a sentence is plenty) and we'll build from that.");
+                            return;
+                          }
+                          void runReimagine(url.trim(), recovery.kind === "thin" ? "allow-thin" : "note-only", details.trim());
+                        }}
+                        className="inline-flex h-11 items-center justify-center rounded-md bg-accent px-5 text-sm font-semibold text-ink hover:bg-accent/90"
+                      >
+                        {recovery.kind === "thin" ? "Build it from this" : "Build from your note instead"}
+                      </button>
+                      {recovery.kind === "thin" ? (
+                        <button
+                          type="button"
+                          data-recovery-skip
+                          onClick={() => void runReimagine(url.trim(), "allow-thin", "")}
+                          className="inline-flex h-11 items-center justify-center rounded-md border border-border bg-bg px-5 text-sm font-medium text-fg hover:bg-surface"
+                        >
+                          Skip: just use the site's photos and colors
+                        </button>
+                      ) : null}
+                    </div>
+                  </div>
+                ) : null}
                 {stopped && !working ? <p className="text-sm text-muted" data-stopped role="status">{stopped}</p> : null}
                 {mailed ? <p className="text-sm text-muted">{mailed}</p> : null}
                   </>
@@ -1133,6 +1135,7 @@ export function HomePage() {
                   onRetry={(look) => void retryAi(look)}
                   retryingId={retryingId}
                   sent={leadSent}
+                  replyOk={replyOk}
                   feedback={feedback}
                   maxFeedback={MAX_FEEDBACK}
                   refining={refining}
@@ -1217,18 +1220,7 @@ export function HomePage() {
                 >
                   {retrying && stage !== "finish" ? "Dreaming up new looks…" : "Try Again: new looks"}
                 </button>
-                {result ? (
-                  <button
-                    type="button"
-                    onClick={() => void handOff()}
-                    disabled={handing || !result.preview}
-                    className="inline-flex h-12 items-center justify-center rounded-md bg-ink px-6 text-sm font-medium text-white disabled:opacity-40"
-                  >
-                    {handing ? "Handing off…" : cursorApi ? "Send to Cursor" : "Hand off to Cursor"}
-                  </button>
-                ) : null}
               </div>
-              {handoff ? <p className="mt-3 text-sm text-muted">{handoff}</p> : null}
             </div>
             {result ? (
             <div className="mx-auto grid max-w-6xl gap-8 px-4 py-16 sm:px-6 lg:grid-cols-[16rem_1fr]">

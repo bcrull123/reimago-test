@@ -106,7 +106,7 @@ await page.locator("[data-choose-bar] button").click({ force: true, timeout: 100
 await page.waitForTimeout(700);
 await page.screenshot({ path: join(outDir, "03-choosing-overlay.png") });
 const overlayText = (await page.locator('[role="status"]').first().textContent().catch(() => "")) ?? "";
-await page.locator("text=Sent! Check your email.").first().waitFor({ timeout: 300_000 });
+await page.locator("text=/Sent! Check your email|email you shortly/").first().waitFor({ timeout: 300_000 });
 slowMade = false;
 await page.waitForTimeout(1500);
 await page.locator("[data-choose-banner]").scrollIntoViewIfNeeded();

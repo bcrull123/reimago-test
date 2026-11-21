@@ -33,6 +33,7 @@ import { BODY_FONTS, HEADING_FONTS, readablePalette, safeFont } from "./design.t
 import { heroBrief } from "./hero-brief.ts";
 import { realServices } from "./image-prompts.ts";
 import { latestRequest } from "./owner-request.ts";
+import { withEra } from "./era-style.ts";
 import { signatureSubject } from "./signature-hero.server.ts";
 import type { StoredSite } from "./render.ts";
 import type { DesignDirection, SiteFacts, SitePalette } from "./types.ts";
@@ -62,7 +63,7 @@ export async function creativeBrief(facts: SiteFacts, palette: SitePalette, dead
       retry: false,
       messages: [
         { role: "system", content: "You are the creative director of a top web design agency. Answer only JSON." },
-        { role: "user", content: briefPrompt({ name: facts.name, tagline: facts.tagline, description: facts.description, services: realServices(facts), category: hb.category, kind: hb.kind, request: latestRequest(facts) }) },
+        { role: "user", content: briefPrompt({ name: facts.name, tagline: facts.tagline, description: facts.description, services: realServices(facts), category: hb.category, kind: hb.kind, request: withEra(latestRequest(facts), facts) }) },
       ],
     });
     const brief = cleanBrief(raw, fallback);
@@ -196,7 +197,7 @@ export function customContext(site: StoredSite): CustomContext {
     cta: { label: site.cta.label || "Contact us", slug: site.pages.some((p) => p.slug === site.cta.slug) ? site.cta.slug : site.pages.at(-1)!.slug },
     images,
     keep: hero?.kept ? hero.alt || "the owner's picture" : undefined,
-    request: facts ? latestRequest(facts) || undefined : undefined,
+    request: facts ? withEra(latestRequest(facts), facts) || undefined : undefined,
     category: hb?.category ?? "general",
     kind: hb?.kind ?? site.industry ?? "",
     hasLogo: Boolean(site.logo) && !site.logoMeta?.wordmark,
