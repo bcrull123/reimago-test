@@ -15,8 +15,10 @@ import { Route as PrivacyRouteImport } from './routes/privacy'
 import { Route as SaveRouteImport } from './routes/save'
 import { Route as TermsRouteImport } from './routes/terms'
 import { Route as ThanksRouteImport } from './routes/thanks'
+import { Route as CpIndexRouteImport } from './routes/$cp.index'
 import { Route as ApiPhotoSearchRouteImport } from './routes/api.photo-search'
 import { Route as MadeIdRouteImport } from './routes/made.$id'
+import { Route as CpApiSplatRouteImport } from './routes/$cp.api.$'
 import { Route as MadeIdSlugRouteImport } from './routes/made.$id.$slug'
 import { Route as MadeIdImgNameRouteImport } from './routes/made.$id.img.$name'
 
@@ -50,6 +52,11 @@ const ThanksRoute = ThanksRouteImport.update({
   path: '/thanks',
   getParentRoute: () => rootRouteImport,
 } as any)
+const CpIndexRoute = CpIndexRouteImport.update({
+  id: '/$cp/',
+  path: '/$cp/',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ApiPhotoSearchRoute = ApiPhotoSearchRouteImport.update({
   id: '/api/photo-search',
   path: '/api/photo-search',
@@ -58,6 +65,11 @@ const ApiPhotoSearchRoute = ApiPhotoSearchRouteImport.update({
 const MadeIdRoute = MadeIdRouteImport.update({
   id: '/made/$id',
   path: '/made/$id',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const CpApiSplatRoute = CpApiSplatRouteImport.update({
+  id: '/$cp/api/$',
+  path: '/$cp/api/$',
   getParentRoute: () => rootRouteImport,
 } as any)
 const MadeIdSlugRoute = MadeIdSlugRouteImport.update({
@@ -80,6 +92,8 @@ export interface FileRoutesByFullPath {
   '/thanks': typeof ThanksRoute
   '/api/photo-search': typeof ApiPhotoSearchRoute
   '/made/$id': typeof MadeIdRouteWithChildren
+  '/$cp/': typeof CpIndexRoute
+  '/$cp/api/$': typeof CpApiSplatRoute
   '/made/$id/$slug': typeof MadeIdSlugRoute
   '/made/$id/img/$name': typeof MadeIdImgNameRoute
 }
@@ -92,6 +106,8 @@ export interface FileRoutesByTo {
   '/thanks': typeof ThanksRoute
   '/api/photo-search': typeof ApiPhotoSearchRoute
   '/made/$id': typeof MadeIdRouteWithChildren
+  '/$cp': typeof CpIndexRoute
+  '/$cp/api/$': typeof CpApiSplatRoute
   '/made/$id/$slug': typeof MadeIdSlugRoute
   '/made/$id/img/$name': typeof MadeIdImgNameRoute
 }
@@ -105,6 +121,8 @@ export interface FileRoutesById {
   '/thanks': typeof ThanksRoute
   '/api/photo-search': typeof ApiPhotoSearchRoute
   '/made/$id': typeof MadeIdRouteWithChildren
+  '/$cp/': typeof CpIndexRoute
+  '/$cp/api/$': typeof CpApiSplatRoute
   '/made/$id/$slug': typeof MadeIdSlugRoute
   '/made/$id/img/$name': typeof MadeIdImgNameRoute
 }
@@ -119,6 +137,8 @@ export interface FileRouteTypes {
     | '/thanks'
     | '/api/photo-search'
     | '/made/$id'
+    | '/$cp/'
+    | '/$cp/api/$'
     | '/made/$id/$slug'
     | '/made/$id/img/$name'
   fileRoutesByTo: FileRoutesByTo
@@ -131,6 +151,8 @@ export interface FileRouteTypes {
     | '/thanks'
     | '/api/photo-search'
     | '/made/$id'
+    | '/$cp'
+    | '/$cp/api/$'
     | '/made/$id/$slug'
     | '/made/$id/img/$name'
   id:
@@ -143,6 +165,8 @@ export interface FileRouteTypes {
     | '/thanks'
     | '/api/photo-search'
     | '/made/$id'
+    | '/$cp/'
+    | '/$cp/api/$'
     | '/made/$id/$slug'
     | '/made/$id/img/$name'
   fileRoutesById: FileRoutesById
@@ -156,6 +180,8 @@ export interface RootRouteChildren {
   ThanksRoute: typeof ThanksRoute
   ApiPhotoSearchRoute: typeof ApiPhotoSearchRoute
   MadeIdRoute: typeof MadeIdRouteWithChildren
+  CpIndexRoute: typeof CpIndexRoute
+  CpApiSplatRoute: typeof CpApiSplatRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -202,6 +228,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ThanksRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/$cp/': {
+      id: '/$cp/'
+      path: '/$cp'
+      fullPath: '/$cp/'
+      preLoaderRoute: typeof CpIndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/api/photo-search': {
       id: '/api/photo-search'
       path: '/api/photo-search'
@@ -214,6 +247,13 @@ declare module '@tanstack/react-router' {
       path: '/made/$id'
       fullPath: '/made/$id'
       preLoaderRoute: typeof MadeIdRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/$cp/api/$': {
+      id: '/$cp/api/$'
+      path: '/$cp/api/$'
+      fullPath: '/$cp/api/$'
+      preLoaderRoute: typeof CpApiSplatRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/made/$id/$slug': {
@@ -255,6 +295,8 @@ const rootRouteChildren: RootRouteChildren = {
   ThanksRoute: ThanksRoute,
   ApiPhotoSearchRoute: ApiPhotoSearchRoute,
   MadeIdRoute: MadeIdRouteWithChildren,
+  CpIndexRoute: CpIndexRoute,
+  CpApiSplatRoute: CpApiSplatRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

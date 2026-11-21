@@ -384,7 +384,7 @@ Bob on aceee96: "It still doesn't have the what would you change box in the rend
 - **Custom Design card:** the two thumbnails ("Design · Grok Imagine" and "Built page · Grok") and their captions are gone. The box takes their place, as on the other cards. `design_mockup_url` still goes to Formcarry and the webhook (`look.custom.mockupUrl`), and the `[imagine]` / `[design]` logs are unchanged.
 - **Full-size rendering:** the look being previewed gets the same box (`data-preview-edit`) between its "Choose this look" bar and the live page. It edits only that look, like the card's own box. The preview pages themselves (`/made/<id>`, "Open full site") ship no JavaScript, so they have no box.
 - **Phone:** under 420 px wide, the field and the Change button stack. The button is primary-colored, at least 6.5rem wide and 44 px tall, with `whitespace-nowrap`, so its label always shows (the e2e checks the label text and size at 390 px).
-- **Build stamp:** the site footer shows `Build <short commit> · <build time> UTC` (`data-build-stamp`). It comes from `BUILD_COMMIT`, `VERCEL_GIT_COMMIT_SHA` or `GITHUB_SHA`, else `git rev-parse --short HEAD`, else the first line of `RELEASE.txt` (currently `r11`) when the host builds without `.git` or a commit env var, read at build time (`vite.config.ts` `define: __BUILD_STAMP__`). With `npm run dev`, it is read when the server starts.
+- **Build stamp:** the site footer shows `Build <short commit> · <build time> UTC` (`data-build-stamp`). It comes from `BUILD_COMMIT`, `VERCEL_GIT_COMMIT_SHA` or `GITHUB_SHA`, else `git rev-parse --short HEAD`, else the first line of `RELEASE.txt` (currently `r12`) when the host builds without `.git` or a commit env var, read at build time (`vite.config.ts` `define: __BUILD_STAMP__`). With `npm run dev`, it is read when the server starts.
 
 ### Round 9b: photo changes never "change" to the same photo; keys, timings, Google optional
 
@@ -799,6 +799,24 @@ When the owner chose **Get me a domain, email & hosting**, a **Pick your domain*
 
 **Tests:** `src/lib/domain-ideas.test.ts`. E2E: `scripts/domain-pick-e2e.mjs` (screenshots in `/workspace/live-preview-shots/round11/`). Footer stamp `r11`.
 
+### Round 12: back-end control panel, first section: Leads (secret admin path)
+
+**How leads flowed before:** the browser posted the form straight to Formcarry (`postFormcarry`) and, in parallel, a server function sent the Email Bot reply webhook (`notifyReplyWebhook`, `REPLY_WEBHOOK_URL`/`KEY`). Nothing was stored on our side except log lines, so the only copies lived in Formcarry and Email Bot.
+
+**Now:** every "Choose this look" first calls `saveLead` (`src/lib/leads.functions.ts`) and stores the lead server-side **before** Formcarry is posted, so a Formcarry or webhook failure never loses a lead. Then the Formcarry outcome (`logSubmit` with the lead id) and the reply-webhook outcome (`notifyReplyWebhook` with the lead id) are written back per pick. One visit = one lead (client-made visit id `lead.current.visitId`); every look chosen in that visit is another pick on the same lead (a re-send of the same look replaces its pick and keeps its delivery statuses). Stored: id, created_at, mode, name (business name for new sites; the form has no person-name field), email, phone (the optional business phone), site address or business, what / area / style, domain choice + picked domain + `domain_status` (`selected_not_registered` / `owned` / `not_selected`), logo source + url, change requests, all looks shown (name + url), picks (look, preview url, pages, time, Formcarry status, webhook status), every "Add more details" extra, utm_* / ref / gclid / fbclid / referrer / landing page (kept for the tab session, `src/lib/attribution.ts`), user agent, country (`x-vercel-ip-country`; the IP itself is not stored), lead status (new / contacted / won / lost) and notes. Spam: the honeypot stores nothing; `saveLead` is rate limited per IP.
+
+**Storage (no new service):** the app's own Postgres through `getSql()` (`src/lib/leads.server.ts`, table `leads`, created on first use like `preview_sites`). On the published app `DATABASE_URL` is injected by the platform, so leads survive republishes and restarts. Without it (workspace preview, local) the embedded PGLite keeps them in memory only and the panel shows a warning. `[env]` shows `LEADS_STORE=postgres(DATABASE_URL)` or `memory(no DATABASE_URL)`.
+
+**The control panel is secret and separate from customer login:**
+- It lives only at `/<ADMIN_PATH>` (env `ADMIN_PATH`, 8-80 letters/digits/`-`/`_`, e.g. `cp-` + a long random string). `/admin`, any other path, and any sub-path are the site's normal 404 (the page loader throws `notFound()` before anything admin-shaped renders; the title/meta are only set after the gate passes). If `ADMIN_PATH` or `ADMIN_PASSWORD` is unset or unusable the admin does not exist at all. There is no link to it anywhere, and it is not in a sitemap or `robots.txt` (the site has neither). Pages and the API send `noindex`, `no-store`.
+- Auth is its own module: `src/lib/admin-auth.server.ts`. Password = env `ADMIN_PASSWORD` (constant-time compare). Session = HMAC-signed, httpOnly, SameSite=Strict, `Secure` on https cookie **`rmg_admin`**, scoped to `Path=/<ADMIN_PATH>`, 12 hours, signed with `ADMIN_SESSION_SECRET` (16+ chars; if unset, derived from the password + path, so changing either signs everyone out). Login: 5 wrong passwords per client per 15 minutes then 429. POSTs need the `x-rmg-admin: 1` header. The admin API is under the same secret prefix (`/<ADMIN_PATH>/api/...`, `src/routes/$cp.api.$.ts` -> `src/lib/admin-api.server.ts`) and needs the session.
+- Customers: `src/lib/customer-auth.server.ts` is only a documented stub (cookie `rmg_customer`, public `/login` and `/account`, its own secret). Nothing is built; the two logins never share a cookie, a secret or a module, and the Better Auth stack in `src/lib/auth/*` is left for customers.
+- Panel: left nav (Leads; Orders, Domains, Settings greyed "soon"), leads newest first (America/Chicago), search, mode/status/date filters, row -> detail drawer (thumbnails, preview links, status, notes), CSV export (spreadsheet-formula safe), brand color via `--brand`, phone layout (cards instead of a table).
+- Logs (never a value): `[lead] saved <id> mode=… picks=n store=…`, `[lead] <id> formcarry=sent 200` / `webhook=sent 200`, `[admin] enabled at the secret path` or `[admin] disabled: <reason>`, `[admin] login ok|FAILED (client <hash>)`, `[admin] logout`, `[admin] lead <id>: status … -> …`, `[admin] csv export: n leads`. `[env]` also lists `ADMIN_PATH`, `ADMIN_PASSWORD`, `ADMIN_SESSION_SECRET`, `FORMCARRY_API_KEY` true/false.
+- **Backfill of older leads (not built):** Formcarry's API can list past submissions (`GET https://api.formcarry.com/v1/forms/NipZS0fF4w4/submissions`, `Authorization: Bearer <key with submissions:read>`, cursor paging). It needs an API key named `FORMCARRY_API_KEY` that Bob would add himself; the import button is not built until that key exists to test against.
+
+**Tests:** `src/lib/leads.test.ts`, `src/lib/admin-auth.test.ts`. E2E: `scripts/admin-e2e.mjs` (start a fresh server with `PREVIEW_MOCK=1`, `ADMIN_PATH`, `ADMIN_PASSWORD`, the mock reply webhook; screenshots in `/workspace/live-preview-shots/round12/`). Footer stamp `r12`.
+
 ## Create a New Site: domain first
 
 (Round 10: the home page no longer shows this wizard; "Build a New Site" replaced it. Kept for reference.)
@@ -846,7 +864,7 @@ The old domain step (step 12) is gone. Wizard answers are kept in memory only (s
 | **`CHROME_PATH`** | no | Headless Chrome/Chromium for the screenshot. Standard Linux paths are checked automatically; Vercel has none, so the critique there is text-only. |
 | **`PREVIEW_STEP_BUDGET_MS`** | no | Time budget per step (default `85000`). |
 | `PREVIEW_MOCK` | no | `1` = no AI calls; looks are composed from the facts with three preset directions, labeled MOCK PREVIEW. |
-| `DATABASE_URL` | recommended in production | Stores preview sites (`preview_sites`) and their images (`preview_images`) in Postgres, created on first use. Without it, files go to `PREVIEW_STORE_DIR` and disappear on serverless restarts. |
+| `DATABASE_URL` | recommended in production (needed for leads to survive restarts) | Also stores every lead (`leads`, Round 12). Stores preview sites (`preview_sites`) and their images (`preview_images`) in Postgres, created on first use. Without it, files go to `PREVIEW_STORE_DIR` and disappear on serverless restarts. |
 | **`REPLY_WEBHOOK_URL`** | no | Email Bot's instant-reply webhook URL (routine "Instant reply to reimago.ai submissions"). The server posts each "Choose this look" submission there as JSON. Unset: not sent. |
 | **`REPLY_WEBHOOK_KEY`** | no | That webhook's key; sent as `Authorization: Bearer <key>` (as-is if it already starts with `Bearer `/`Basic `). Server-only secret: set it in the host's environment settings, never in code or chat. Unset: not sent. |
 | **`PREVIEW_VISION_MODEL`** | no | Model for the "keep" vision fallback (which of the site's pictures shows the subject). Defaults to the main AI model. |
@@ -867,11 +885,16 @@ The old domain step (step 12) is gone. Wizard answers are kept in memory only (s
 | `PREVIEW_VISION_MODEL` | no | Model for the vision build (default `AI_MODEL`). |
 | `PREVIEW_IMAGINE_REFS` | no | `0` sends no site assets to Imagine as reference images (default: logo, signature graphic and own photos, ≤5). |
 | `PREVIEW_FIDELITY_MIN` | no | Custom Design fidelity score (0-100) under which the build gets one repair pass with the differences (default 60). |
+| **`ADMIN_PATH`** | for the control panel | The secret URL path of the admin, e.g. `cp-` + a long random string (no slashes needed). Unset: the admin does not exist and every path is a normal 404. |
+| **`ADMIN_PASSWORD`** | for the control panel | The admin sign-in password. Unset: the admin is disabled. Server-only secret. |
+| `ADMIN_SESSION_SECRET` | recommended | 16+ random characters that sign the `rmg_admin` session. If unset it is derived from `ADMIN_PASSWORD` + `ADMIN_PATH`. Never shared with customer sessions. |
+| `FORMCARRY_API_KEY` | no (future) | Only for a future backfill of old Formcarry submissions into the Leads list. Not used yet. |
 | `PREVIEW_STORE_DIR` | no | File storage folder when there is no `DATABASE_URL` (default: OS temp dir). |
 | `CURSOR_API_KEY` | no | When set, "Send to Cursor" starts a Cursor agent with the preview links; otherwise the button downloads a brief. |
 
 ## Code map
 
+- Round 12 leads + control panel: `src/lib/leads.ts` (shapes, cleaning, merge, filters, CSV), `src/lib/leads.server.ts` (Postgres), `src/lib/leads.functions.ts` (`saveLead`), `src/lib/attribution.ts`, `src/lib/admin-auth.server.ts` (admin cookie/password/rate limit), `src/lib/admin-api.server.ts` + `src/routes/$cp.api.$.ts` (API), `src/routes/$cp.index.tsx` (gate + page), `src/components/admin/admin-app.tsx` (UI), `src/lib/customer-auth.server.ts` (stub only).
 - `src/lib/ai-provider.server.ts`: every AI call: text (`chatJson`, with image parts for vision) and `generateImage`. `src/lib/ai-json.ts`: JSON extraction and error types.
 - `src/lib/preview/logo.ts` / `logo.server.ts`: logo background detection, trimming, reversed copies, and per-surface treatment.
 - `src/lib/preview/ai-logo.ts` / `ai-logo-standin.ts` / `ai-logo.server.ts`: Build a New Site “Have AI make one” — prompts, and storing the Imagine (or stand-in) options. `previewMakeLogos` in `preview.functions.ts`.

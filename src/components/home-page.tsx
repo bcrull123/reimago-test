@@ -14,6 +14,9 @@ import { statusLines } from "@/lib/status-copy";
 import { cursorStatus, previewCustom, previewDirections, previewImagine, previewFinish, previewFromBrief, previewLook, previewRead, previewRefine, previewRetryAi, previewUploadLogo, previewUploadPhotos, savePreviewPicture } from "@/lib/preview.functions";
 import { capturePreviewPicture, pictureFileName } from "@/lib/preview-picture";
 import { logSubmit, notifyReplyWebhook } from "@/lib/reply-webhook.functions";
+import { saveLead } from "@/lib/leads.functions";
+import { newLeadId } from "@/lib/leads";
+import { captureAttribution } from "@/lib/attribution";
 import { LivePreview } from "@/components/live-preview";
 import { CardEditBox, LooksPicker } from "@/components/looks-picker";
 import type { LookInfo, PreviewInfo, SiteFacts } from "@/lib/preview/types";
@@ -274,7 +277,7 @@ export function HomePage() {
   /** Every look id shown this session (oldest first). */
   const seenIds = useRef<string[]>([]);
   const [choosingSend, setChoosingSend] = useState(false);
-  const lead = useRef<{ form: PendingLead; sent: boolean; sentIds: string[] } | null>(null);
+  const lead = useRef<{ form: PendingLead; sent: boolean; sentIds: string[]; visitId: string; attribution: Record<string, string> } | null>(null);
   /** Round 10: the render in progress (for the ring, the status copy and Stop). */
   const [run, setRun] = useState<{ kind: "round1" | "edit" | "newsite"; start: number; avg: number } | null>(null);
   const runAbort = useRef<AbortController | null>(null);
@@ -470,11 +473,40 @@ export function HomePage() {
       const previewPages = built?.preview?.pages.map((page) => `${page.title}: ${page.url}`) ?? [`${look.name} · Home: ${look.url}`];
       // One name per look (its style), plus the edit variant: "Dark Premium · lighter".
       const chosenLookName = `${look.name}${look.edit ? ` · ${look.edit.variant}` : ""}`;
+      // Round 12: store the lead on the server FIRST (every pick of this visit merges into one lead), so it is never
+      // lost if Formcarry or the Email Bot webhook fails. Fast, never throws, never blocks the visitor's flow.
+      const leadId = pending.visitId;
+      const extras = form.kind === "new_site" ? extraLeadFields(form.brief, form.photoUrls) : {};
+      await saveLead({
+        data: {
+          id: leadId,
+          gotcha: form.gotcha,
+          mode: form.kind === "new_site" ? "new_site" : "reimagine",
+          name: form.kind === "new_site" ? form.brief.business_name : "",
+          email: form.email,
+          phone: extras.phone ?? "",
+          source: form.kind === "reimagine" ? form.website : form.brief.business_name,
+          what: form.kind === "reimagine" ? form.note : form.brief.what,
+          location: form.kind === "new_site" ? form.brief.location : "",
+          style: form.kind === "new_site" ? form.brief.style : "",
+          domain_choice: form.kind === "new_site" ? form.brief.domain_choice : "",
+          chosen_domain: form.kind === "new_site" && form.brief.domain_choice === "get" ? pickedDomainRef.current : form.kind === "new_site" ? bareHost(form.brief.domain) : "",
+          domain_status: form.kind === "new_site" ? (form.brief.domain_choice === "get" ? (pickedDomainRef.current ? SELECTED_NOT_REGISTERED : "not_selected") : "owned") : "",
+          logo_source: form.kind === "new_site" ? (form.logoUrl || form.logo ? form.logoSource : "") : "",
+          logo_url: form.kind === "new_site" ? form.logoUrl : "",
+          change_requests: feedback,
+          looks: (looks ?? []).map((l) => ({ look_id: l.id, name: `${l.name}${l.edit ? ` · ${l.edit.variant}` : ""}`, url: l.url })),
+          extras,
+          attribution: pending.attribution,
+          pick: { look_id: look.id, look: chosenLookName, preview_url: previewUrl, pages: previewPages },
+        },
+      }).catch(() => undefined);
       // Email Bot's instant reply: the server posts to its webhook (key stays server-side). Not awaited — the
       // visitor's "check your email" never waits on it; retries reuse the same submission id.
       void notifyReplyWebhook({
         data: {
           id: look.id,
+          leadId,
           email: form.email,
           website: domain,
           note: form.kind === "reimagine" ? form.note : form.brief.style,
@@ -502,14 +534,14 @@ export function HomePage() {
           await submitNewSite(form.email, form.gotcha, form.brief, form.logo, form.logoUrl, form.logoSource, form.photos, form.photoUrls, { previewUrl, previewPages, chosenLook: chosenLookName, changeRequests: feedback, picture }, pickedDomainRef.current);
         }
         pending.sent = true;
-        void logSubmit({ data: { id: look.id, mode: leadMode, look: lookName, event: "sent", status: 200 } }).catch(() => undefined);
+        void logSubmit({ data: { id: look.id, mode: leadMode, look: lookName, event: "sent", status: 200, leadId } }).catch(() => undefined);
         setLeadSent(true);
         setMailed(picture.file ? THANKS : THANKS_NO_PICTURE);
       } catch (err) {
         // Round 10: never show "Sent" when Formcarry didn't accept it; the look can be chosen again to resend.
         pending.sentIds = pending.sentIds.filter((id) => id !== look.id);
         const status = err instanceof SubmitError ? err.status : 0;
-        void logSubmit({ data: { id: look.id, mode: leadMode, look: lookName, event: "failed", status, reason: err instanceof Error ? err.message.slice(0, 150) : "network error" } }).catch(() => undefined);
+        void logSubmit({ data: { id: look.id, mode: leadMode, look: lookName, event: "failed", status, leadId, reason: err instanceof Error ? err.message.slice(0, 150) : "network error" } }).catch(() => undefined);
         setLeadSent(false);
         setMailed("");
         setError(`Your site is built, but the form could not be sent${status ? ` (status ${status})` : ""}: ${err instanceof Error ? err.message : "try again"}. Press Choose this look again to resend.`);
@@ -579,6 +611,8 @@ export function HomePage() {
         form: { kind: "reimagine", email: email.trim(), website: site, note: notes.trim(), gotcha: typeof gotcha === "string" ? gotcha : "" },
         sent: false,
         sentIds: [],
+        visitId: newLeadId(),
+        attribution: captureAttribution(),
       };
       setMailed(CHOOSE_PROMPT);
     } catch (err) {
@@ -668,7 +702,7 @@ export function HomePage() {
       setFacts(start.facts);
       setVariation(0);
       // Looks were built: hold the brief until the visitor chooses one (sent with its picture).
-      lead.current = { form: { kind: "new_site", email: email.trim(), gotcha, brief, logo, logoUrl, logoSource, photos: newPhotos, photoUrls: photosStored }, sent: false, sentIds: [] };
+      lead.current = { form: { kind: "new_site", email: email.trim(), gotcha, brief, logo, logoUrl, logoSource, photos: newPhotos, photoUrls: photosStored }, sent: false, sentIds: [], visitId: newLeadId(), attribution: captureAttribution() };
       setMailed(CHOOSE_PROMPT);
       scrollOnResult.current = true;
       showLooks(made.looks, made.note);

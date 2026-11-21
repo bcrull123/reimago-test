@@ -19,6 +19,15 @@ const clampDetails = (value: unknown): Record<string, string> => {
   return out;
 };
 
+/** Round 12: remember on the stored lead how the Email Bot webhook answered. Never throws. */
+async function noteWebhook(leadId: string, lookId: string, status: string) {
+  if (!leadId) return;
+  try {
+    await (await import("./leads.server")).recordDelivery(leadId, lookId, "webhook", status);
+  } catch {
+    /* the lead list is a convenience; the webhook result is already logged */
+  }
+}
 
 export const notifyReplyWebhook = createServerFn({ method: "POST" })
   .validator((input: Record<string, unknown>) => {
@@ -28,6 +37,7 @@ export const notifyReplyWebhook = createServerFn({ method: "POST" })
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new Error("Enter an email.");
     return {
       id,
+      leadId: /^[a-f0-9]{24}$/.test(str(input?.leadId, 40)) ? str(input?.leadId, 40) : "",
       email,
       website: str(input?.website, 300),
       note: str(input?.note, 800),
@@ -54,17 +64,20 @@ export const notifyReplyWebhook = createServerFn({ method: "POST" })
     const problem = replyWebhookProblem();
     if (problem || !replyWebhookConfig()) {
       console.warn(`[reply-webhook] skipped look ${data.id} (${data.mode}): ${problem ?? "not configured"}`);
+      await noteWebhook(data.leadId, data.id, "skipped (not configured)");
       return { ok: false, skipped: true };
     }
     const { rateLimited, requestIp } = await import("./reimagine.server");
     if (rateLimited(`reply:${requestIp()}`, 20)) {
       console.warn(`[reply-webhook] skipped look ${data.id} (${data.mode}): rate limited`);
+      await noteWebhook(data.leadId, data.id, "skipped (rate limited)");
       return { ok: false };
     }
     const { readSite, readImage } = await import("./pages.server");
     const site = await readSite(data.id);
     if (!site) {
       console.warn(`[reply-webhook] skipped look ${data.id} (${data.mode}): that look is not stored on this server`);
+      await noteWebhook(data.leadId, data.id, "skipped (look not stored)");
       return { ok: false };
     }
     const { publicBase } = await import("./publish.server");
@@ -87,6 +100,7 @@ export const notifyReplyWebhook = createServerFn({ method: "POST" })
       submitted_at: new Date().toISOString(),
     });
     if (!result.sent) console.warn(`[reply-webhook] look ${data.id} (${data.mode}): not delivered (${result.status ?? result.error ?? "no answer"}, ${result.attempts} attempt${result.attempts === 1 ? "" : "s"})`);
+    await noteWebhook(data.leadId, data.id, result.sent ? `sent${result.status ? ` ${result.status}` : ""}` : `failed ${result.status ?? result.error ?? "no answer"}`.slice(0, 60));
     return { ok: result.sent, status: result.status };
   });
 
@@ -98,6 +112,7 @@ export const notifyReplyWebhook = createServerFn({ method: "POST" })
 export const logSubmit = createServerFn({ method: "POST" })
   .validator((input: Record<string, unknown>) => ({
     id: /^[a-f0-9]{16}$/.test(str(input?.id, 40)) ? str(input?.id, 40) : "unknown",
+    leadId: /^[a-f0-9]{24}$/.test(str(input?.leadId, 40)) ? str(input?.leadId, 40) : "",
     mode: input?.mode === "new_site" ? "new_site" : "reimagine",
     look: str(input?.look, 80).replace(/[^\w ·&'()-]/g, ""),
     event: ["choose", "sent", "failed", "not-resent"].includes(str(input?.event, 20)) ? str(input?.event, 20) : "choose",
@@ -111,5 +126,12 @@ export const logSubmit = createServerFn({ method: "POST" })
     else if (data.event === "sent") console.info(`[submit] Formcarry ${what}: ${data.status || 200} sent`);
     else if (data.event === "not-resent") console.info(`[submit] Choose this look: ${what} → already sent for this look; not resent`);
     else console.warn(`[submit] Formcarry ${what}: FAILED ${data.status || "no status"}${data.reason ? ` (${data.reason})` : ""}`);
+    if (data.leadId && (data.event === "sent" || data.event === "failed")) {
+      try {
+        await (await import("./leads.server")).recordDelivery(data.leadId, data.id, "formcarry", data.event === "sent" ? `sent ${data.status || 200}` : `failed ${data.status || "no answer"}`);
+      } catch {
+        /* never blocks the visitor */
+      }
+    }
     return { ok: true };
   });
