@@ -11,6 +11,11 @@
  * Order: the request's own host when it is a real public host; otherwise PUBLIC_BASE_URL
  * or VITE_PUBLIC_HOSTNAME (the published app's canonical host). A foreign Referer is
  * ignored (round 10f). https is never downgraded to http.
+ *
+ * Absolute links that go in email (preview_url, picture_url, preview_pages) must never be
+ * root-relative: mail clients have no app origin, and some will prefix a stored or inferred
+ * host (including a *.vercel.app deployment URL). If no public host is found, we default to
+ * https://reimago.ai.
  */
 import { previewPathPrefix } from "./preview-path-prefix.ts";
 
@@ -20,6 +25,9 @@ export type PublicRequest = {
   host: string;
   pathname: string;
 };
+
+/** Fallback origin for absolute customer links (email, webhook, Formcarry) when no public host is known. */
+export const DEFAULT_PUBLIC_ORIGIN = "https://reimago.ai";
 
 export type PublicBaseEnv = {
   /** Absolute origin, or a hostname. e.g. https://reimago.ai */
@@ -127,6 +135,11 @@ export function publicBaseFrom(request: PublicRequest, refererHeader?: string, e
   return "";
 }
 
+/** Like publicBaseFrom, but never empty: email and other absolute links fall back to reimago.ai. */
+export function publicAbsoluteBaseFrom(request: PublicRequest, refererHeader?: string, env: PublicBaseEnv = {}): string {
+  return publicBaseFrom(request, refererHeader, env) || DEFAULT_PUBLIC_ORIGIN;
+}
+
 /** Path prefix for this request (Referer first, then the request URL) so rendered /made links stay correct on path-based preview hosts. */
 export function requestPathPrefixFrom(request: PublicRequest, refererHeader?: string): string {
   if (refererHeader) {
@@ -149,4 +162,46 @@ export function publicLookUrlFrom(base: string, id: string, rest = ""): string {
   const suffix = `/made/${id}${rest}`;
   const origin = base.replace(/\/$/, "");
   return origin ? `${origin}${suffix}` : suffix;
+}
+
+const MADE_PATH = /^\/made\/([a-f0-9]{16})(\/.*)?$/i;
+
+/**
+ * Turn a maybe-bad /made link (*.vercel.app, root-relative, missing) into an absolute public URL.
+ * Other URLs are left alone. Used so Email Bot and Formcarry never receive a login-walled or relative link.
+ */
+export function rewriteCustomerLookUrl(url: string, id: string, base: string, rest = ""): string {
+  const origin = (base || DEFAULT_PUBLIC_ORIGIN).replace(/\/$/, "");
+  const canonical = publicLookUrlFrom(origin, id, rest);
+  const raw = url.trim();
+  if (!raw) return canonical;
+  try {
+    const absolute = raw.startsWith("/") ? new URL(raw, DEFAULT_PUBLIC_ORIGIN) : new URL(raw);
+    const match = absolute.pathname.match(MADE_PATH);
+    if (!match) return raw;
+    const lookId = match[1]!.toLowerCase();
+    const tail = match[2] ?? rest;
+    // Relative /made links and Vercel system hosts must be rewritten; a real public host is kept.
+    if (raw.startsWith("/") || isVercelSystemHost(absolute.host) || !isPublicAppHost(absolute.host)) {
+      return publicLookUrlFrom(origin, lookId, tail);
+    }
+    return `${absolute.protocol}//${absolute.host}/made/${lookId}${tail}`;
+  } catch {
+    return canonical;
+  }
+}
+
+/** Rewrite each "Title: URL" (or bare URL) line in preview_pages the same way. */
+export function rewritePreviewPages(text: string, id: string, base: string): string {
+  return text
+    .split("\n")
+    .map((line) => {
+      const trimmed = line.trim();
+      if (!trimmed) return line;
+      const named = /^(.*?):\s*(\S+)\s*$/.exec(trimmed);
+      if (named) return `${named[1]}: ${rewriteCustomerLookUrl(named[2]!, id, base)}`;
+      if (/\/made\/[a-f0-9]{16}/i.test(trimmed)) return rewriteCustomerLookUrl(trimmed, id, base);
+      return line;
+    })
+    .join("\n");
 }

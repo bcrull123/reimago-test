@@ -384,7 +384,7 @@ Bob on aceee96: "It still doesn't have the what would you change box in the rend
 - **Custom Design card:** the two thumbnails ("Design · Grok Imagine" and "Built page · Grok") and their captions are gone. The box takes their place, as on the other cards. `design_mockup_url` still goes to Formcarry and the webhook (`look.custom.mockupUrl`), and the `[imagine]` / `[design]` logs are unchanged.
 - **Full-size rendering:** the look being previewed gets the same box (`data-preview-edit`) between its "Choose this look" bar and the live page. It edits only that look, like the card's own box. The preview pages themselves (`/made/<id>`, "Open full site") ship no JavaScript, so they have no box.
 - **Phone:** under 420 px wide, the field and the Change button stack. The button is primary-colored, at least 6.5rem wide and 44 px tall, with `whitespace-nowrap`, so its label always shows (the e2e checks the label text and size at 390 px).
-- **Build stamp:** the site footer shows `Build <short commit> · <build time> UTC` (`data-build-stamp`). It comes from `BUILD_COMMIT`, `VERCEL_GIT_COMMIT_SHA` or `GITHUB_SHA`, else `git rev-parse --short HEAD`, else the first line of `RELEASE.txt` (currently `r14`) when the host builds without `.git` or a commit env var, read at build time (`vite.config.ts` `define: __BUILD_STAMP__`). With `npm run dev`, it is read when the server starts.
+- **Build stamp:** the site footer shows `Build <short commit> · <build time> UTC` (`data-build-stamp`). It comes from `BUILD_COMMIT`, `VERCEL_GIT_COMMIT_SHA` or `GITHUB_SHA`, else `git rev-parse --short HEAD`, else the first line of `RELEASE.txt` (currently `r14b`) when the host builds without `.git` or a commit env var, read at build time (`vite.config.ts` `define: __BUILD_STAMP__`). With `npm run dev`, it is read when the server starts.
 
 ### Round 9b: photo changes never "change" to the same photo; keys, timings, Google optional
 
@@ -639,9 +639,9 @@ The payload is one JSON object; every value is a string:
 |---|---|
 | `submission_id` | `reimago-<made id>-<look archetype>`, e.g. `reimago-9fbd8da257ef404c-editorial`. Set by the server from the chosen look and the same on every retry, including when the visitor presses Choose again after a Formcarry failure, so Email Bot can dedupe. Also sent as the `Idempotency-Key` header. |
 | `email`, `website`, `note` | The form's values; `website` is the bare domain, as in Formcarry. Create mode sends the brief's domain and its "anything else" text. |
-| `preview_url`, `preview_pages` | Same text as the Formcarry fields: one `Title: URL` per line. |
+| `preview_url`, `preview_pages` | Same text as the Formcarry fields: one `Title: URL` per line. The server rewrites each `/made/<id>` URL to an absolute public host (never `*.vercel.app`, never root-relative). If no public host is known, that host is `https://reimago.ai`. Email Bot should use these URLs as-is and must not prefix them with Origin, Referer, or a Vercel deployment host. |
 | `chosen_look`, `change_requests` | Same text as the Formcarry fields: change requests are numbered rounds, `""` when none. |
-| `picture_url` | `<app>/made/<id>/img/capture`, only when the server has the stored picture. |
+| `picture_url` | `https://<public host>/made/<id>/img/capture` (or `https://reimago.ai/…` if no public host is known), only when the server has the stored picture. |
 | `picture_error` | Set when no picture was stored. |
 | `submitted_at` | ISO time, set by the server. |
 
@@ -872,6 +872,17 @@ Bob built a New Site for "freak show resturant" in Liversworth TN, "We serve eye
 **4. `/made/<id>` sites are stored in Postgres when `DATABASE_URL` is set** (`preview_sites` + `preview_images`, already the path in `pages.server.ts`). The file/temp fallback is only for local dev; on a published app without `DATABASE_URL` the pages die on redeploy and will not follow the visitor to another instance. We now log `[store] preview sites: Postgres|files…`, validate the record version on the Postgres read, and show an admin banner when the preview store is not durable. Set `DATABASE_URL` on the published app (same database as leads).
 
 **Tests:** `src/lib/public-base.test.ts` (Vercel host refused, PUBLIC_BASE_URL, white-label request host wins), `src/lib/preview/theme-lean.test.ts`, `hasEditWork` in `look-edit.test.ts`. Screenshots: `/workspace/live-preview-shots/round14/`. Footer stamp `r14`.
+
+### Round 14b: Reply-email links default to https://reimago.ai
+
+Bob clicked a link in the reply email and still landed on a Vercel login (unclear whether that email was sent before r14 was published). Tracing the path: Formcarry and the Email Bot webhook both receive `preview_url` / `preview_pages` from the browser (`look.url` or the finish result). In r14, `picture_url` and `design_mockup_url` were already rebuilt with `publicLookUrl()`, but `preview_url` was forwarded as-is. If `PUBLIC_BASE_URL` / `VITE_PUBLIC_HOSTNAME` were unset and the request host was `*.vercel.app`, `publicBase()` returned empty and `publicLookUrl` was a root-relative `/made/<id>` path — unusable in email, and a client that absolutizes it against a stored Vercel host would recreate the login-walled URL.
+
+Fixes:
+- `publicLookUrl()` is always absolute. When no public host is found, it uses `https://reimago.ai` (`publicAbsoluteBaseFrom`, `DEFAULT_PUBLIC_ORIGIN`). Localhost and a real custom domain are unchanged; `PUBLIC_BASE_URL` still wins over the default when the request is a Vercel host.
+- The reply webhook rewrites `preview_url` and `preview_pages` on the server (`rewriteCustomerLookUrl`): a `*.vercel.app` or relative `/made/<id>` link is replaced; a real public host is kept. `picture_url` and `design_mockup_url` already went through `publicLookUrl()`.
+- Card iframes and admin thumbs stay same-origin (`/made/…`). Email Bot should paste `preview_url` / `picture_url` into the message as given, and should not invent a base from Origin, Referer, or `VERCEL_URL`. Old emails already sent still contain the old URL; only new submissions after this publish are rewritten. Set `PUBLIC_BASE_URL=https://reimago.ai` on the published env so every instance agrees (optional once this fallback is live).
+
+**Tests:** `src/lib/public-base.test.ts` (r14b: empty public host → `https://reimago.ai`, rewrite of vercel.app and relative `/made` links). Footer stamp `r14b`.
 
 ## Create a New Site: domain first
 

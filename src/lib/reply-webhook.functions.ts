@@ -80,15 +80,18 @@ export const notifyReplyWebhook = createServerFn({ method: "POST" })
       await noteWebhook(data.leadId, data.id, "skipped (look not stored)");
       return { ok: false };
     }
-    const { publicLookUrl } = await import("./publish.server");
+    const { publicLookUrl, publicAbsoluteBase } = await import("./publish.server");
+    const { rewriteCustomerLookUrl, rewritePreviewPages } = await import("./public-base");
+    const publicHost = publicAbsoluteBase();
     const picture = await readImage(data.id, "capture").catch(() => undefined);
     const result = await sendReplyWebhook({
       submission_id: submissionId(data.id, site.design?.archetype ?? "look"),
       email: data.email,
       website: data.website,
       note: data.note,
-      preview_url: data.previewUrl,
-      preview_pages: data.previewPages.join("\n"),
+      // Never trust a browser-supplied vercel.app or relative /made link in the email payload.
+      preview_url: rewriteCustomerLookUrl(data.previewUrl, data.id, publicHost),
+      preview_pages: rewritePreviewPages(data.previewPages.join("\n"), data.id, publicHost),
       chosen_look: data.chosenLook,
       change_requests: data.changeRequests.map((text, i) => `${i + 1}. ${text}`).join("\n"),
       picture_url: picture ? publicLookUrl(data.id, "/img/capture") : "",
