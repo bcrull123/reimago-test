@@ -80,7 +80,7 @@ export const notifyReplyWebhook = createServerFn({ method: "POST" })
       await noteWebhook(data.leadId, data.id, "skipped (look not stored)");
       return { ok: false };
     }
-    const { publicBase } = await import("./publish.server");
+    const { publicLookUrl } = await import("./publish.server");
     const picture = await readImage(data.id, "capture").catch(() => undefined);
     const result = await sendReplyWebhook({
       submission_id: submissionId(data.id, site.design?.archetype ?? "look"),
@@ -91,10 +91,10 @@ export const notifyReplyWebhook = createServerFn({ method: "POST" })
       preview_pages: data.previewPages.join("\n"),
       chosen_look: data.chosenLook,
       change_requests: data.changeRequests.map((text, i) => `${i + 1}. ${text}`).join("\n"),
-      picture_url: picture ? `${publicBase()}/made/${data.id}/img/capture` : "",
+      picture_url: picture ? publicLookUrl(data.id, "/img/capture") : "",
       picture_error: picture ? "" : data.pictureError || "No picture was stored for this look.",
       // The Custom Design look: the Grok Imagine mockup it was built from (empty for template looks).
-      design_mockup_url: site.custom?.mockup && !site.design?.custom?.failed ? `${publicBase()}/made/${data.id}/img/mockup` : "",
+      design_mockup_url: site.custom?.mockup && !site.design?.custom?.failed ? publicLookUrl(data.id, "/img/mockup") : "",
       mode: data.mode,
       ...(data.mode === "new_site" ? { business_name: data.businessName, domain_choice: data.domainChoice, domain: data.domain, ...(data.domainStatus ? { chosen_domain: data.chosenDomain, domain_status: data.domainStatus } : {}), ...data.details } : {}),
       submitted_at: new Date().toISOString(),

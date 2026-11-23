@@ -17,6 +17,7 @@ import {
   variationScales,
   type LookRef,
   type LookTune,
+  hasEditWork,
 } from "./look-edit.ts";
 import { editByWording, heroLuma, scrimFloor } from "./look-edit.server.ts";
 import { cleanImageQueries, defaultImageQueries } from "./photo-queries.ts";
@@ -235,5 +236,16 @@ describe("round 1 with no note: the planner's subject is not the owner's request
   it("an owner note about it still counts", () => {
     const facts = { ...town, notes: "keep the welcome sign", photoSubject: "pauls valley welcome sign", photoIntent: "keep" as const };
     assert.equal(requestedPhoto(facts).intent, "keep");
+  });
+});
+
+
+describe("hasEditWork (round 14: free-form notes must not error)", () => {
+  it("is false for a named look with no change verb (e.g. prefilled 'show ey')", () => {
+    assert.equal(hasEditWork({ adjustments: [], copy: undefined, photo: undefined, borrow: undefined, restyle: undefined }), false);
+  });
+  it("is true when a concrete tweak is present", () => {
+    assert.equal(hasEditWork({ adjustments: [{ type: "lighten", amount: "slight" }] }), true);
+    assert.equal(hasEditWork({ adjustments: [], photo: "eyeballs in jars" }), true);
   });
 });

@@ -203,6 +203,8 @@ export default defineConfig(({ command, isPreview }) => ({
             // manifest + head-tag middleware). Nitro v3 defaults serverDir to
             // false, so removing this silently unwires /?install=1 on deploys.
             serverDir: "./server",
+            // Custom Design + Imagine need a long budget; the host must allow at least this.
+            vercel: { functions: { maxDuration: 300 } },
           }),
         ]
       : []),

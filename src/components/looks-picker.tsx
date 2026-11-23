@@ -154,10 +154,17 @@ export function CardEditBox({ look, disabled, working, onSubmit, where = "card" 
       <div className="mt-2 flex flex-col gap-2 min-[420px]:flex-row">
         <input
           id={inputId}
+          name={`rmg-change-${look.id}`}
           type="text"
           value={text}
           maxLength={400}
           disabled={disabled}
+          autoComplete="off"
+          autoCorrect="off"
+          autoCapitalize="off"
+          spellCheck={false}
+          readOnly
+          onFocus={(event) => event.currentTarget.removeAttribute("readOnly")}
           onChange={(event) => setText(event.target.value.slice(0, 400))}
           placeholder="e.g. make the photo daylight, more contrast"
           aria-label={`Change the ${look.name} look`}

@@ -374,9 +374,18 @@ export function HomePage() {
         // Grok Imagine designs it first (the mockup), then Grok builds the page to match (or from the text brief).
         await previewImagine({ data: { id: built.look.id }, signal }).catch(() => undefined);
         stop();
-        const custom = await previewCustom({ data: { id: built.look.id }, signal }).catch(() => undefined);
+        let custom = await previewCustom({ data: { id: built.look.id }, signal }).catch(() => undefined);
         stop();
-        if (!custom?.ok) return { ...built, look: { ...built.look, custom: { concept: direction.custom.brief.concept, status: "fallback" as const, note: "The from-scratch design could not be built this time, so this card shows a template look." } } };
+        // Round 14: retry once (text-brief only) before falling back to the template — timeouts and
+        // host kills on the published app were leaving Bob with a bland third card.
+        if (!custom?.ok) {
+          custom = await previewCustom({ data: { id: built.look.id, retry: true }, signal }).catch(() => undefined);
+          stop();
+        }
+        if (!custom?.ok) {
+          const reason = custom && "error" in custom && custom.error ? ` (${String(custom.error).slice(0, 140)})` : "";
+          return { ...built, look: { ...built.look, custom: { concept: direction.custom.brief.concept, status: "fallback" as const, note: `The from-scratch design could not be built this time${reason}, so this card shows a template look.` } } };
+        }
         // The custom page's own picture line (Imagine art / the site's signature graphic) replaces the template step's.
         return { ...built, look: { ...built.look, name: custom.name, layout: custom.layout ?? built.look.layout, photos: custom.custom.photoLine ?? built.look.photos, custom: custom.custom, rev: (built.look.rev ?? 0) + 1 } };
       }),
@@ -798,12 +807,12 @@ export function HomePage() {
         signal,
       }).catch(() => undefined);
       if (signal.aborted) return;
+      // Round 14: a named look with no change verb (or a prefilled change box) is applied as a
+      // free-form note to all three looks, never as a red "couldn't tell what to change" error.
       if (routed?.ok && routed.mode === "none") {
-        setError(routed.note);
-        return;
-      }
-      if (card && !(routed?.ok && routed.mode === "edit" && routed.looks.length)) {
-        // A per-card request never turns into three new looks.
+        // kept for older servers; treat like "new"
+      } else if (card && !(routed?.ok && (routed.mode === "edit" && routed.looks.length || routed.mode === "new"))) {
+        // A per-card request that failed (not a free-form fallback) stays on that card.
         setError(routed && !routed.ok ? routed.error : `That change to ${card.name} could not be made. Try again.`);
         return;
       }

@@ -31,6 +31,7 @@ import type { Archetype, ImageTrace, PreviewTrace, PreviousRound } from "@/lib/p
 import { fromOklch, oklch, toOklab } from "@/lib/preview/look-edit";
 import { isFilenameLike, photoCaption } from "@/lib/preview/site-photos";
 import { applyEra } from "@/lib/preview/era-style";
+import { applyTheme, detectTheme, THEME_HEADING_FONTS } from "@/lib/preview/theme-lean";
 
 /** The owner's note + feedback rounds as a high-priority block at the end of a system prompt. */
 function requestBlock(facts: SiteFacts): string {
@@ -309,6 +310,8 @@ export async function directionsFor(
   // One name per look: its style ("Dark Premium"), the same on the card, the banner and in refine requests.
   directions = directions.map((d) => ({ ...d, name: lookName(d.archetype) }));
   directions = diversifyDirections(directions, opts.seed ?? 0, prev?.heroStyles ?? []);
+  // Round 14: a vivid theme (scarry + eyeballs, etc.) leans palettes, fonts and mood before any period override.
+  directions = applyTheme(directions, facts);
   // Round 13: "make it look late 90s / Y2K / brutalist" is forced onto every look (a different variant each), AI or not.
   directions = applyEra(directions, facts);
   console.info(`[looks] round${prev?.names.length ? " (regenerated)" : ""}: ${directions.map((d) => `“${d.name}” ${d.archetype}/${d.heroStyle}`).join(" · ")}${prev?.names.length ? ` · previous round: ${prev.names.map((n, i) => `“${n}” ${prev.archetypes[i] ?? ""}/${prev.heroStyles[i] ?? ""}`).join(" · ")}` : ""}`);
@@ -369,7 +372,7 @@ Return ONLY JSON: {"looks": [{
  "rationale": 1 sentence on why it fits this business and its customers,
  "archetype": one of ${JSON.stringify(ARCHETYPES)},
  "palette": {"primary": "#hex", "accent": "#hex", "background": "#hex", "surface": "#hex", "text": "#hex", "muted": "#hex"},
- "fonts": {"heading": one of ${JSON.stringify(DISPLAY_FONTS)}, "body": one of ${JSON.stringify(TEXT_FONTS)}},
+ "fonts": {"heading": one of ${JSON.stringify(detectTheme(facts) ? [...DISPLAY_FONTS, ...THEME_HEADING_FONTS] : DISPLAY_FONTS)}, "body": one of ${JSON.stringify(TEXT_FONTS)}},
  "imagery": art direction for photography (light, lens, color grade, subjects) in one sentence,
  "heroSubject": what the hero photograph shows, concretely (no text, signage, logos or brand names in the scene),
  "featureScene": what a second, supporting photograph shows, concretely (same rules),
@@ -387,7 +390,7 @@ Rules:
 - Headlines must not invent facts: no years, awards, prices, guarantees, statistics, or claims not in the facts.
 - Photos: if the owner's request names a scene, subject or place (e.g. "use the brick streets"), EVERY look's "heroSubject" must depict exactly that as the main subject (styled for the look), not generic tools or equipment of the trade. Use "featureScene" for a second, related scene.
 - The three looks must differ in layout, not just wording and colors: different "heroStyle", "header", "buttons" and "footer" for each look. When the owner asks for a photo or background, honor it in each look in a different way (e.g. editorial split with a captioned photo, cinematic full-bleed, playful framed collage), and vary the camera angle / framing in "heroSubject".
-- Respect the owner's requested changes and style notes when present: requested colors go into the palettes, requested moods/styles shape the archetypes and fonts, and feedback on earlier looks means these three must be clearly different from what they rejected.${variation ? `\n- This is attempt ${variation + 1}: go somewhere new compared with an obvious first attempt.` : ""}${previousBlock}${requestBlock(facts)}`,
+- Respect the owner's requested changes and style notes when present: requested colors go into the palettes, requested moods/styles shape the archetypes and fonts, and feedback on earlier looks means these three must be clearly different from what they rejected. If they give a vivid theme or unusual offer (a typo still counts: "scarry" means scary), lean all the way in on every look — palettes, type, imagery, headlines and mood should be unmistakable for that theme, and the three looks must still be clearly different from each other. Do not sand it down into a generic template.${variation ? `\n- This is attempt ${variation + 1}: go somewhere new compared with an obvious first attempt.` : ""}${previousBlock}${requestBlock(facts)}`,
         },
         { role: "user", content: JSON.stringify(factsForPrompt(facts)) },
       ],

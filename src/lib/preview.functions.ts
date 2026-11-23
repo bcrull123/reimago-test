@@ -176,7 +176,7 @@ export const previewLook = createServerFn({ method: "POST" })
       const { normalizePlan, buildLook } = await import("./preview/builder.server");
       const { normalizeDirection } = await import("./preview/design");
       const { newPageId, saveSite } = await import("./pages.server");
-      const { publicBase } = await import("./publish.server");
+      const { publicLookUrl } = await import("./publish.server");
       const rawPlan = data.plan as SitePlan | null;
       const plan = normalizePlan(rawPlan, data.facts, data.variation);
       if (rawPlan && typeof rawPlan === "object" && rawPlan.mock) plan.mock = true;
@@ -188,7 +188,7 @@ export const previewLook = createServerFn({ method: "POST" })
       await saveSite(site);
       const look: LookInfo = {
         id,
-        url: `${publicBase()}/made/${id}`,
+        url: publicLookUrl(id),
         index: data.index,
         name: direction.name,
         mood: direction.mood,
@@ -249,8 +249,8 @@ export const previewImagine = createServerFn({ method: "POST" })
       if (!made.mockup) return { ok: true, note: made.reason };
       site.customMockup = made.mockup;
       await saveSite(site);
-      const { publicBase } = await import("./publish.server");
-      return { ok: true, mockupUrl: `${publicBase()}/made/${data.id}/img/mockup` };
+      const { publicLookUrl } = await import("./publish.server");
+      return { ok: true, mockupUrl: publicLookUrl(data.id, "/img/mockup") };
     } catch (error) {
       console.error("[imagine] step failed", error instanceof Error ? error.message : error);
       return { ok: true, note: "Grok Imagine failed this time" };
@@ -263,10 +263,10 @@ export const previewImagine = createServerFn({ method: "POST" })
  * design (when time is left) -> the template homepage.
  */
 export const previewCustom = createServerFn({ method: "POST" })
-  .validator((input: { id?: string }) => {
+  .validator((input: { id?: string; retry?: unknown }) => {
     const id = typeof input?.id === "string" ? input.id.trim() : "";
     if (!/^[a-f0-9]{16}$/.test(id)) throw new Error("That look was not found. Run the site again.");
-    return { id };
+    return { id, retry: Boolean(input?.retry) };
   })
   .handler(async ({ data }): Promise<PreviewStepResult<{ custom: NonNullable<LookInfo["custom"]>; name: string; layout?: string }>> => {
     (await import("./abort.server")).watchStop("custom design");
@@ -281,21 +281,27 @@ export const previewCustom = createServerFn({ method: "POST" })
       const { lookName } = await import("./preview/archetype-label");
       const { layoutLine } = await import("./preview/look-variety");
       const { customLayoutLine } = await import("./preview/custom-design");
-      const { publicBase } = await import("./publish.server");
+      const { publicLookUrl } = await import("./publish.server");
       const brief = site.design.custom.brief;
+      const started = Date.now();
       const deadline = Date.now() + customStepBudgetMs();
-      const stored = site.customMockup ? await readImage(data.id, "mockup").catch(() => undefined) : undefined;
-      const mockupUrl = stored ? `${publicBase()}/made/${data.id}/img/mockup` : undefined;
-      let made = await designCustom(site, deadline, stored && site.customMockup ? { mockup: site.customMockup, bytes: stored.bytes } : undefined);
+      console.info(`[scratch] custom design “${brief.concept}” for ${data.id}${data.retry ? " (retry, text-brief only)" : ""} · budget ${Math.round(customStepBudgetMs() / 1000)}s`);
+      const stored = data.retry ? undefined : site.customMockup ? await readImage(data.id, "mockup").catch(() => undefined) : undefined;
+      const mockupUrl = stored ? publicLookUrl(data.id, "/img/mockup") : undefined;
+      const useMockup = Boolean(stored && site.customMockup);
+      let made = await designCustom(site, deadline, useMockup ? { mockup: site.customMockup!, bytes: stored!.bytes } : undefined);
       let imagineNote: string | undefined;
-      if (!made.design && stored) {
-        // The mockup build broke: the text-brief design next, when there is time; else the template.
-        imagineNote = `the build from the Imagine mockup failed (${(made.reason ?? "").slice(0, 120)})`;
-        if (deadline - Date.now() > 60_000) {
-          console.info(`[design] ${imagineNote}; trying the text-brief design`);
-          made = await designCustom(site, deadline);
-        } else console.info(`[design] ${imagineNote}; no time left for the text-brief design`);
-      } else if (!site.customMockup) imagineNote = "no Imagine mockup this time; designed from the text brief";
+      if (!made.design && deadline - Date.now() > 20_000) {
+        imagineNote = useMockup
+          ? `the build from the Imagine mockup failed (${(made.reason ?? "").slice(0, 120)})`
+          : `the first build failed (${(made.reason ?? "").slice(0, 120)})`;
+        console.info(`[scratch] ${imagineNote}; retrying the text-brief design (${Math.round((deadline - Date.now()) / 1000)}s left)`);
+        made = await designCustom(site, deadline);
+      } else if (!made.design) {
+        console.info(`[scratch] “${brief.concept}” failed (${made.reason}); no time left to retry`);
+      } else if (!useMockup) imagineNote = data.retry ? "retry: designed from the text brief" : "no Imagine mockup this time; designed from the text brief";
+      if (made.design) console.info(`[scratch] custom design “${brief.concept}” ok in ${Date.now() - started}ms (${made.design.source}, ${made.design.status})`);
+      else console.info(`[scratch] custom design “${brief.concept}” failed in ${Date.now() - started}ms: ${made.reason ?? "unknown"}`);
       if (made.design) {
         site.custom = made.design;
         await saveSite(site);
@@ -324,10 +330,10 @@ export const previewCustom = createServerFn({ method: "POST" })
       const shortReason = reason.length > 140 ? `${reason.slice(0, 137).replace(/\s+\S*$/, "")}…` : reason;
       site.design = { ...site.design, name, custom: { ...site.design.custom, failed: made.reason ?? "failed" } };
       await saveSite(site);
-      console.info(`[design] fallback: look ${(site.lookIndex ?? 2) + 1} shows its template homepage as “${name}” (${made.reason})`);
+      console.info(`[scratch] fallback: look ${(site.lookIndex ?? 2) + 1} shows its template homepage as “${name}” (${made.reason})`);
       return { ok: true, name, layout: layoutLine(site.design, site.trace?.layout?.hero), custom: { concept: brief.concept, status: "fallback", mockupUrl, note: `The from-scratch design (“${brief.concept}”) had a structural problem our checks couldn't fix (${shortReason}), so this card shows the ${name} template look.` } };
     } catch (error) {
-      console.error("[design] custom step failed", error instanceof Error ? error.message : error);
+      console.error("[scratch] custom step failed", error instanceof Error ? error.message : error);
       return { ok: false, error: error instanceof Error ? error.message : "The custom design could not be built." };
     }
   });
@@ -374,17 +380,17 @@ export const previewRefine = createServerFn({ method: "POST" })
       const target = sites.find((s) => s.id === edit.targetId)!;
       const lender = edit.borrow ? sites.find((s) => s.id === edit.borrow!.fromId) : undefined;
       const name = nameOf(edit.targetId)!;
-      if (!edit.adjustments.length && !edit.copy && !edit.photo && !lender && !edit.restyle) {
-        return {
-          ok: true,
-          mode: "none",
-          note: `We read that as about “${name}”, but couldn't tell what to change. Try e.g. “${name}, a little lighter”, “…more contrast”, “…bigger text”, “…less busy”, “…warmer”, or name a different photo. This didn't use up a round.`,
-        };
+      // Round 14: a free-form note ("scarry", "show eyeballs") must never become a dead-end error.
+      // If we can't read a concrete tweak, apply the text as a direction for all three looks.
+      const { hasEditWork } = await import("./preview/look-edit");
+      if (!hasEditWork({ ...edit, borrow: edit.borrow ?? (lender ? edit.borrow : undefined) }) && !lender && !edit.restyle) {
+        console.info(`[refine] no change verb in "${data.text.slice(0, 80)}"; applying as a free-form note to all looks`);
+        return { ok: true, mode: "new" };
       }
       const feedback = [...data.feedback, data.text].slice(-5);
       const edits = await buildEdits(target, edit, feedback, lender, sites);
       const targetIndex = refs.find((r) => r.id === edit.targetId)?.index ?? 0;
-      const { publicBase } = await import("./publish.server");
+      const { publicLookUrl } = await import("./publish.server");
       const { photosLine } = await import("./preview/image-prompts");
       const { layoutLine } = await import("./preview/look-variety");
       const { customLayoutLine } = await import("./preview/custom-design");
@@ -395,7 +401,7 @@ export const previewRefine = createServerFn({ method: "POST" })
         const photos = images.filter((img) => img.name.startsWith("photo-")).length;
         return {
           id: site.id,
-          url: `${publicBase()}/made/${site.id}`,
+          url: publicLookUrl(site.id),
           // Same card, same place, same name: only this look changes on screen.
           index: targetIndex,
           // The style name stays; only an explicit style switch from the card's box renames it.
@@ -416,7 +422,7 @@ export const previewRefine = createServerFn({ method: "POST" })
                   concept: site.custom.brief.concept,
                   status: site.custom.status,
                   source: site.custom.source,
-                  mockupUrl: site.custom.source === "imagine" && site.customMockup ? `${publicBase()}/made/${site.id}/img/mockup` : undefined,
+                  mockupUrl: site.custom.source === "imagine" && site.customMockup ? publicLookUrl(site.id, "/img/mockup") : undefined,
                   mockupStale: Boolean(site.custom.mockup?.stale) || undefined,
                 }
               : undefined,
@@ -448,7 +454,7 @@ export const previewRetryAi = createServerFn({ method: "POST" })
     if (await limited("retry", 20)) return { ok: false, error: "Too many retries from this network in the last hour. Try again shortly." };
     try {
       const { readSite, saveSite } = await import("./pages.server");
-      const { publicBase } = await import("./publish.server");
+      const { publicLookUrl } = await import("./publish.server");
       const { retryAiPages } = await import("./preview/builder.server");
       const stored = await readSite(data.id);
       if (!stored || stored.version !== 3) return { ok: false, error: "That look was not found on this server. Run the site again." };
@@ -457,7 +463,7 @@ export const previewRetryAi = createServerFn({ method: "POST" })
       const first = Object.entries(errors)[0];
       const note = first ? `The AI still failed for ${first[0] === "home" ? "the homepage" : `the "${first[0]}" page`}: ${first[1]}` : undefined;
       const { resultFor } = await import("./preview/result");
-      return { ok: true, fixed, errors, note, result: site.finished ? resultFor(site, `${publicBase()}/made/${site.id}`, note) : undefined };
+      return { ok: true, fixed, errors, note, result: site.finished ? resultFor(site, publicLookUrl(site.id), note) : undefined };
     } catch (error) {
       console.error("[preview] retry failed", error instanceof Error ? error.message : error);
       return { ok: false, error: error instanceof Error ? error.message : "The AI retry failed." };
@@ -475,7 +481,7 @@ export const previewFinish = createServerFn({ method: "POST" })
     (await import("./env.server")).logKeyPresenceOnce();
     try {
       const { readSite, saveSite } = await import("./pages.server");
-      const { publicBase } = await import("./publish.server");
+      const { publicLookUrl } = await import("./publish.server");
       const stored = await readSite(data.id);
       if (!stored || stored.version !== 3) return { ok: false, error: "That look was not found on this server. Run the site again." };
       let site = stored;
@@ -489,7 +495,7 @@ export const previewFinish = createServerFn({ method: "POST" })
         await saveSite(site);
       }
       const { resultFor } = await import("./preview/result");
-      return { ok: true, result: resultFor(site, `${publicBase()}/made/${site.id}`, note) };
+      return { ok: true, result: resultFor(site, publicLookUrl(site.id), note) };
     } catch (error) {
       console.error("[preview] finish failed", error instanceof Error ? error.message : error);
       return { ok: false, error: error instanceof Error ? error.message : "The preview could not be built." };
@@ -516,14 +522,14 @@ export const savePreviewPicture = createServerFn({ method: "POST" })
       if (await limited("picture", 30)) return { ok: false, error: "Too many pictures from this network in the last hour." };
       const { readSite, saveImage } = await import("./pages.server");
       const { imageSize } = await import("./preview/images.server");
-      const { publicBase } = await import("./publish.server");
+      const { publicLookUrl } = await import("./publish.server");
       const site = await readSite(data.id);
       if (!site) return { ok: false, error: "That look was not found on this server." };
       const bytes = Buffer.from(data.png, "base64");
       const size = bytes.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])) ? imageSize(bytes) : undefined;
       if (!size || size.width < 200 || size.width > 2600 || size.height < 100 || size.height > 5000) return { ok: false, error: "That is not a preview picture." };
       await saveImage(data.id, "capture", "image/png", bytes);
-      return { ok: true, url: `${publicBase()}/made/${data.id}/img/capture` };
+      return { ok: true, url: publicLookUrl(data.id, "/img/capture") };
     } catch (error) {
       return { ok: false, error: error instanceof Error ? error.message : "The picture could not be stored." };
     }
@@ -547,14 +553,14 @@ export const previewUploadLogo = createServerFn({ method: "POST" })
       if (await limited("logo", 20)) return { ok: false, error: "Too many uploads from this network in the last hour." };
       const { newPageId, saveImage } = await import("./pages.server");
       const { imageSize } = await import("./preview/images.server");
-      const { publicBase } = await import("./publish.server");
+      const { publicLookUrl } = await import("./publish.server");
       const bytes = Buffer.from(data.b64, "base64");
       const size = imageSize(bytes);
       if (!size || size.width < 16 || size.height < 16 || size.width > 6000 || size.height > 6000) return { ok: false, error: "That file isn't a readable PNG or JPG." };
       const id = newPageId();
       await saveImage(id, "upload-logo", data.type, bytes);
       console.info(`[new-site] logo uploaded: ${data.type} ${size.width}x${size.height} (${Math.round(bytes.length / 1024)} KB)`);
-      return { ok: true, url: `${publicBase()}/made/${id}/img/upload-logo` };
+      return { ok: true, url: publicLookUrl(id, "/img/upload-logo") };
     } catch (error) {
       return { ok: false, error: error instanceof Error ? error.message : "The logo could not be stored." };
     }
@@ -584,7 +590,7 @@ export const previewUploadPhotos = createServerFn({ method: "POST" })
       if (await limited("photos", 20)) return { ok: false, error: "Too many uploads from this network in the last hour." };
       const { newPageId, saveImage } = await import("./pages.server");
       const { imageSize } = await import("./preview/images.server");
-      const { publicBase } = await import("./publish.server");
+      const { publicLookUrl } = await import("./publish.server");
       const id = newPageId();
       const urls: string[] = [];
       for (let i = 0; i < data.images.length; i++) {
@@ -597,7 +603,7 @@ export const previewUploadPhotos = createServerFn({ method: "POST" })
         }
         const name = `upload-photo-${i + 1}`;
         await saveImage(id, name, item.type, bytes);
-        urls.push(`${publicBase()}/made/${id}/img/${name}`);
+        urls.push(publicLookUrl(id, `/img/${name}`));
         console.info(`[new-site] photo ${i + 1} uploaded: ${item.type} ${size.width}x${size.height} (${Math.round(bytes.length / 1024)} KB)`);
       }
       if (!urls.length) return { ok: false, error: "Those files could not be read as photos. Try PNG or JPG." };

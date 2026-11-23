@@ -145,7 +145,8 @@ export async function handleAdminApi(request: Request, cp: string, splat: string
   try {
     if (route === "leads" && method === "GET") {
       const rows = await leads.listLeads(query);
-      return json({ leads: rows, total: await leads.countLeads(), store: leads.hasDurableStore() ? "postgres" : "memory", published: !isWorkspacePreview(), reply_webhook: await webhookState(), formcarry_backfill: Boolean(env("FORMCARRY_API_KEY")) });
+      const { previewStoreInfo } = await import("@/lib/pages.server");
+      return json({ leads: rows, total: await leads.countLeads(), store: leads.hasDurableStore() ? "postgres" : "memory", published: !isWorkspacePreview(), reply_webhook: await webhookState(), formcarry_backfill: Boolean(env("FORMCARRY_API_KEY")), preview_store: previewStoreInfo() });
     }
     if (route === "leads.csv" && method === "GET") {
       const rows = await leads.listLeads({ ...query, limit: 2000 });

@@ -37,6 +37,15 @@ export const FONT_SPECS: Record<string, string> = {
   Archivo: "wght@400;600;700;800",
   "Work Sans": "wght@400;500;600;700;800",
   Inter: "wght@400;500;600;700;800",
+  // Theme / display faces (Round 14: horror and other strong themes; allowed by the renderer,
+  // offered to the AI only when a theme is detected so a plumber does not come back in Creepster)
+  Creepster: "",
+  Eater: "",
+  Nosifer: "",
+  "Pirata One": "",
+  "New Rocker": "",
+  Griffy: "",
+  "Special Elite": "",
   // Body faces
   "DM Sans": "wght@400;500;700",
   "Source Sans 3": "wght@400;500;700",
@@ -98,8 +107,14 @@ export const BODY_FONTS = [
   "Lora",
 ];
 
+/** Extra heading faces used when a strong theme is detected (see theme-lean.ts). Not in the default AI list. */
+export const EXTRA_HEADING_FONTS = ["Creepster", "Eater", "Nosifer", "Pirata One", "New Rocker", "Griffy"];
+export const EXTRA_BODY_FONTS = ["Special Elite"];
+export const ALL_HEADING_FONTS = [...HEADING_FONTS, ...EXTRA_HEADING_FONTS];
+export const ALL_BODY_FONTS = [...BODY_FONTS, ...EXTRA_BODY_FONTS];
+
 /** Single-weight display faces: never use them for long text and never fake-bold them. */
-export const SINGLE_WEIGHT = new Set(["DM Serif Display", "Instrument Serif", "Libre Caslon Display", "Archivo Black", "Anton"]);
+export const SINGLE_WEIGHT = new Set(["DM Serif Display", "Instrument Serif", "Libre Caslon Display", "Archivo Black", "Anton", "Creepster", "Eater", "Nosifer", "Pirata One", "New Rocker", "Griffy", "Special Elite"]);
 
 type Preset = Omit<DesignDirection, "id" | "name" | "mood" | "imagery" | "heroSubject" | "headline" | "rationale">;
 
@@ -269,8 +284,8 @@ export function normalizeDirection(raw: unknown, index: number, facts: Pick<Site
   const preset = PRESETS[archetype];
   const fallbackPalette = brandPalette(preset.palette, facts.colors, archetype);
   const fonts = (r.fonts && typeof r.fonts === "object" ? r.fonts : {}) as Record<string, unknown>;
-  let heading = safeFont(fonts.heading, HEADING_FONTS, preset.fonts.heading);
-  let body = safeFont(fonts.body, BODY_FONTS, preset.fonts.body);
+  let heading = safeFont(fonts.heading, ALL_HEADING_FONTS, preset.fonts.heading);
+  let body = safeFont(fonts.body, ALL_BODY_FONTS, preset.fonts.body);
   if (SINGLE_WEIGHT.has(body)) body = preset.fonts.body;
   if (heading === body && !SINGLE_WEIGHT.has(heading)) heading = preset.fonts.heading;
   const motifs = (Array.isArray(r.motifs) ? r.motifs : [])

@@ -55,6 +55,11 @@ export type LookEdit = {
 
 export type BorrowAsset = "photo" | "palette" | "fonts";
 
+/** True when the parser found a concrete tweak (color, type, copy, photo, borrow, restyle). */
+export function hasEditWork(edit: Pick<LookEdit, "adjustments" | "copy" | "photo" | "borrow" | "restyle">): boolean {
+  return Boolean((edit.adjustments && edit.adjustments.length) || edit.copy || edit.photo || edit.borrow || edit.restyle);
+}
+
 /** Cumulative numeric levels per adjustment (slight = 1, medium = 2, strong = 3), stored on the edited look. */
 export type TuneLevels = Partial<Record<AdjustType, number>>;
 

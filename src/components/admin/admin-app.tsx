@@ -9,7 +9,7 @@ import { MIN_PASSWORD } from "@/lib/admin-constants";
  * `/<ADMIN_PATH>/api/...` with the `rmg_admin` cookie. Sections other than Leads are greyed placeholders.
  * Colors come from the site's `--brand` variable (BRAND.color), so a clone's brand carries over.
  */
-type Store = { store: "postgres" | "memory"; published: boolean; total: number; formcarry_backfill: boolean; reply_webhook?: { configured: boolean; problem?: string } };
+type Store = { store: "postgres" | "memory"; published: boolean; total: number; formcarry_backfill: boolean; reply_webhook?: { configured: boolean; problem?: string }; preview_store?: { durable: boolean; kind: "postgres" | "files"; problem?: string } };
 type Filters = { q: string; mode: string; status: string; from: string; to: string };
 const EMPTY: Filters = { q: "", mode: "", status: "", from: "", to: "" };
 
@@ -212,6 +212,11 @@ function Panel({ cp, onSignedOut }: { cp: string; onSignedOut: () => void }) {
             Customer reply emails are OFF: the Email Bot webhook is not set up ({meta.reply_webhook.problem || "REPLY_WEBHOOK_URL / REPLY_WEBHOOK_KEY missing"}). Leads still arrive here and in Formcarry, but nobody is emailed back automatically. Add both secrets in the published environment and republish.
           </p>
         ) : null}
+        {meta?.preview_store && !meta.preview_store.durable ? (
+          <p role="alert" data-admin-preview-store-warning className="mt-4 rounded-md border border-danger/40 bg-red-50 px-3 py-2 text-sm text-red-900">
+            {meta.preview_store.problem || "Preview sites (/made links) are not stored in the database, so they will disappear on the next deploy. Add DATABASE_URL to the published environment."}
+          </p>
+        ) : null}
         {meta && !meta.published && meta.store === "memory" ? <p className="mt-4 rounded-md border border-border bg-bg px-3 py-2 text-sm text-muted">Workspace preview: leads are kept in memory and reset when the preview restarts.</p> : null}
 
         <section aria-label="Filters" className="mt-4 grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-6" data-admin-filters>
@@ -344,8 +349,9 @@ function lookPath(url: string): string {
 }
 function Thumb({ url, label }: { url: string; label: string }) {
   const path = lookPath(url);
+  // Same-origin /made path: never send the owner to a protected *.vercel.app deployment URL.
   return (
-    <a href={url} target="_blank" rel="noreferrer" className="block w-[220px] shrink-0" data-look-thumb>
+    <a href={path || url} target="_blank" rel="noreferrer" className="block w-[220px] shrink-0" data-look-thumb>
       <span className="relative block h-[138px] w-[220px] overflow-hidden rounded-md border border-border bg-surface">
         {path ? <iframe src={path} title={label} loading="lazy" tabIndex={-1} sandbox="" aria-hidden="true" className="pointer-events-none absolute left-0 top-0 origin-top-left border-0" style={{ width: 1280, height: 800, transform: "scale(0.171875)" }} /> : null}
       </span>
@@ -369,7 +375,7 @@ const Row = ({ k, children }: { k: string; children: ReactNode }) => (
   </p>
 );
 const Link = ({ href, children }: { href: string; children: ReactNode }) => (
-  <a href={href} target="_blank" rel="noreferrer" className="text-primary underline-offset-2 hover:underline">
+  <a href={lookPath(href) || href} target="_blank" rel="noreferrer" className="text-primary underline-offset-2 hover:underline">
     {children}
   </a>
 );

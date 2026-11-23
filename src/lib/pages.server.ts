@@ -23,6 +23,31 @@ function hasDatabase(): boolean {
   return Boolean(process.env.DATABASE_URL?.trim());
 }
 
+export type PreviewStoreInfo = { durable: boolean; kind: "postgres" | "files"; dir?: string; problem?: string };
+
+/** Where /made/<id> sites and their images actually live. Postgres survives redeploys and is shared across instances. */
+export function previewStoreInfo(): PreviewStoreInfo {
+  if (hasDatabase()) return { durable: true, kind: "postgres" };
+  const published = Boolean(process.env.VERCEL || process.env.VITE_PUBLIC_HOSTNAME || process.env.PUBLIC_BASE_URL);
+  return {
+    durable: false,
+    kind: "files",
+    dir: DIR,
+    problem: published
+      ? "DATABASE_URL is not set, so preview sites are saved on this instance's filesystem and will disappear on the next deploy (and /made links will 404). Add DATABASE_URL to the published environment."
+      : "No DATABASE_URL: preview sites are saved as files on this machine (fine for local dev).",
+  };
+}
+
+let storeLogged = false;
+function logStoreOnce(): void {
+  if (storeLogged) return;
+  storeLogged = true;
+  const info = previewStoreInfo();
+  if (info.durable) console.info("[store] preview sites: Postgres (DATABASE_URL) — /made links survive redeploys");
+  else console.warn(`[store] preview sites: files in ${info.dir}${info.problem ? ` — ${info.problem}` : ""}`);
+}
+
 let tableReady: Promise<void> | null = null;
 
 /**
@@ -67,6 +92,7 @@ export async function readPage(id: string): Promise<string | undefined> {
 
 export async function saveSite(site: StoredSite): Promise<void> {
   if (!ID.test(site.id)) throw new Error("Bad preview id.");
+  logStoreOnce();
   if (hasDatabase()) {
     const sql = await previewTable();
     await sql`insert into preview_sites (id, host, data) values (${site.id}, ${site.host}, ${JSON.stringify(site)}::jsonb)
@@ -80,12 +106,14 @@ export async function saveSite(site: StoredSite): Promise<void> {
 export async function readSite(id: string): Promise<StoredSite | undefined> {
   if (!ID.test(id)) return undefined;
   try {
+    logStoreOnce();
     if (hasDatabase()) {
       const sql = await previewTable();
       const rows = await sql<{ data: StoredSite | string }>`select data from preview_sites where id = ${id}`;
       const data = rows[0]?.data;
       if (!data) return undefined;
-      return typeof data === "string" ? (JSON.parse(data) as StoredSite) : data;
+      const site = typeof data === "string" ? (JSON.parse(data) as StoredSite) : data;
+      return site?.version === 2 || site?.version === 3 ? site : undefined;
     }
     const raw = await readFile(join(DIR, `${id}.json`), "utf8");
     const site = JSON.parse(raw) as StoredSite;
@@ -118,6 +146,7 @@ async function imageTable() {
 export async function saveImage(siteId: string, name: string, type: string, bytes: Buffer): Promise<void> {
   if (!ID.test(siteId) || !IMAGE_NAME.test(name)) throw new Error("Bad image name.");
   if (bytes.length > 6_000_000) throw new Error("Image too large.");
+  logStoreOnce();
   if (hasDatabase()) {
     const sql = await imageTable();
     await sql`insert into preview_images (site_id, name, type, data) values (${siteId}, ${name}, ${type}, ${bytes})

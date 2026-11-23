@@ -103,8 +103,21 @@ async function ownStoredImage(url: string): Promise<{ bytes: Buffer; type: strin
   const parsed = parseOwnStoredImage(url);
   if (!parsed) return undefined;
   try {
-    const { publicBase } = await import("@/lib/publish.server");
-    if (new URL(publicBase()).host !== parsed.host) return undefined;
+    const { isVercelSystemHost, envPublicOrigin, readPublicBaseEnv } = await import("@/lib/public-base");
+    // Legacy customer links may still carry a *.vercel.app host we mistakenly minted.
+    if (!isVercelSystemHost(parsed.host)) {
+      const known: string[] = [];
+      const envHost = envPublicOrigin(readPublicBaseEnv())?.host;
+      if (envHost) known.push(envHost.toLowerCase());
+      try {
+        const { publicBase } = await import("@/lib/publish.server");
+        const base = publicBase();
+        if (base) known.push(new URL(base).host.toLowerCase());
+      } catch {
+        // No request context.
+      }
+      if (known.length && !known.includes(parsed.host.toLowerCase())) return undefined;
+    }
   } catch {
     // No request context (tests): the store is local to this process.
   }

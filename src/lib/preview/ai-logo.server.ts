@@ -4,18 +4,10 @@
 import { throwIfStopped } from "@/lib/abort.server";
 import { generateImage, isMockMode, sniffImageType } from "@/lib/ai-provider.server";
 import { newPageId, saveImage } from "@/lib/pages.server";
-import { publicBase } from "@/lib/publish.server";
+import { publicLookUrl } from "@/lib/publish.server";
 import { logoSpecs, logoWord, type LogoBrief, type LogoOption } from "./ai-logo";
 import { standInLogoPng } from "./ai-logo-standin";
 import { imageSize } from "./images.server";
-
-function baseUrl(): string {
-  try {
-    return publicBase();
-  } catch {
-    return "";
-  }
-}
 
 /** Store up to three logos and return the ones that succeeded (empty if Imagine produced nothing). */
 export async function makeAiLogos(brief: LogoBrief, variation = 0): Promise<LogoOption[]> {
@@ -25,7 +17,6 @@ export async function makeAiLogos(brief: LogoBrief, variation = 0): Promise<Logo
   const t0 = Date.now();
   console.info(`[logo] making ${specs.length} options for "${word}" (${specs.map((s) => s.kind).join(", ")})${standIn ? " [stand-in]" : ""}`);
   const batchId = newPageId();
-  const base = baseUrl();
   const delay = Number(process.env.PREVIEW_LOGO_DELAY_MS);
   if (delay > 0) {
     await new Promise((resolve) => setTimeout(resolve, Math.min(delay, 20_000)));
@@ -55,7 +46,7 @@ export async function makeAiLogos(brief: LogoBrief, variation = 0): Promise<Logo
         const name = `ai-logo-${i + 1}`;
         await saveImage(batchId, name, type, bytes);
         console.info(`[logo] option ${i + 1} ${spec.kind}: ${size ? `${size.width}x${size.height}` : "?"} ${type} ${Math.round(bytes.length / 1024)} KB ${((Date.now() - t) / 1000).toFixed(1)}s`);
-        return { id: `${batchId}/${name}`, url: `${base}/made/${batchId}/img/${name}`, kind: spec.kind, label: spec.label } satisfies LogoOption;
+        return { id: `${batchId}/${name}`, url: publicLookUrl(batchId, `/img/${name}`), kind: spec.kind, label: spec.label } satisfies LogoOption;
       } catch (error) {
         if (error instanceof Error && error.name === "StoppedError") throw error;
         const reason = error instanceof Error ? error.message.replace(/\s+/g, " ").slice(0, 160) : "error";
