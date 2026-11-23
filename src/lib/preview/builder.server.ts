@@ -1282,7 +1282,7 @@ export function skippedNote(debug: AiDebug): string {
  */
 export async function retryAiPages(site: StoredSite): Promise<{ site: StoredSite; fixed: string[]; errors: Record<string, string> }> {
   if (!site.facts || !site.plan || !site.design) throw new Error("This preview was made by an older version. Run the site again.");
-  if (isMockMode() || !aiAvailable()) throw new Error(isMockMode() ? "AI is off (PREVIEW_MOCK=1)." : "AI is not configured on this server (XAI_API_KEY is missing).");
+  if (isMockMode() || !aiAvailable()) throw new Error(isMockMode() ? "AI is off (PREVIEW_MOCK=1)." : "AI is not configured on this server (XAI_API_KEY or REIMAGO_GROK_API_KEY is missing).");
   const facts = site.facts;
   const plan = site.plan;
   const design = site.design;

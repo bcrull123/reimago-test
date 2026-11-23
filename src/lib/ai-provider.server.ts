@@ -7,7 +7,8 @@
  *   AI_BASE_URL = optional OpenAI-compatible base URL override (e.g. https://api.together.xyz/v1)
  *   AI_REASONING_EFFORT = low (default) | medium | high | none — sent to reasoning models (Grok 4.5+), which otherwise think at "high" and are slow
  *   AI_FALLBACK_MODEL = faster model for one retry after a timeout/failure (default grok-4.20-0309-non-reasoning for xai; "none" disables)
- *   XAI_API_KEY / OPENAI_API_KEY = the key for the chosen provider
+ *   XAI_API_KEY / REIMAGO_GROK_API_KEY / OPENAI_API_KEY = the key for the chosen provider
+ *     (REIMAGO_GROK_API_KEY is an alias used when XAI_API_KEY is unset)
  *   PREVIEW_MOCK=1 forces mock mode (no network AI calls; deterministic output for testing)
  *
  * Images (only for in-site photos — hero, section, service cards; never logos or text):
@@ -20,7 +21,7 @@
  *   CRITIQUE_MODEL = optional model for the critique call (default: AI_MODEL / provider default)
  */
 import { stopOrTimeout } from "@/lib/abort.server";
-import { env } from "@/lib/env.server";
+import { env, getXaiKey } from "@/lib/env.server";
 import { AiError, parseJsonObject, redact } from "@/lib/ai-json";
 
 export { AiError, parseJsonObject };
@@ -52,6 +53,15 @@ const ENDPOINTS: Record<Exclude<AiProvider, "mock">, { url: string; key: string;
   openai: { url: "https://api.openai.com/v1/chat/completions", key: "OPENAI_API_KEY", model: "gpt-4.1-mini" },
 };
 
+/** Resolve a provider key env name; XAI_API_KEY also accepts REIMAGO_GROK_API_KEY. */
+function providerApiKey(name: string): string | undefined {
+  return name === "XAI_API_KEY" ? getXaiKey() : env(name);
+}
+
+function missingKeyMessage(name: string): string {
+  return name === "XAI_API_KEY" ? "XAI_API_KEY or REIMAGO_GROK_API_KEY is not set" : `${name} is not set`;
+}
+
 export function isMockMode(): boolean {
   const flag = (env("PREVIEW_MOCK") ?? "").toLowerCase();
   return flag === "1" || flag === "true" || flag === "yes";
@@ -68,7 +78,7 @@ export function aiProvider(): AiProvider {
 export function aiAvailable(): boolean {
   const provider = aiProvider();
   if (provider === "mock") return false;
-  return Boolean(env(ENDPOINTS[provider].key));
+  return Boolean(providerApiKey(ENDPOINTS[provider].key));
 }
 
 /** The text model used by default (AI_MODEL or the provider default). */
@@ -111,8 +121,8 @@ export async function chatText(options: ChatOptions): Promise<string> {
   const provider = aiProvider();
   if (provider === "mock") throw new AiError("AI is in mock mode (PREVIEW_MOCK=1).");
   const config = ENDPOINTS[provider];
-  const apiKey = env(config.key);
-  if (!apiKey) throw new AiError(`AI is not available (${config.key} is not set).`);
+  const apiKey = providerApiKey(config.key);
+  if (!apiKey) throw new AiError(`AI is not available (${missingKeyMessage(config.key)}).`);
   const model = options.model ?? env("AI_MODEL") ?? config.model;
   const baseUrl = env("AI_BASE_URL");
   const endpoint = baseUrl ? `${baseUrl.replace(/\/+$/, "")}/chat/completions` : config.url;
@@ -198,7 +208,7 @@ export function imageProvider(): ImageProvider {
   const raw = (env("IMAGE_PROVIDER") ?? "xai").toLowerCase();
   if (raw === "none" || raw === "off" || raw === "0") return "none";
   if (raw === "openai") return env("OPENAI_API_KEY") ? "openai" : "none";
-  return env("XAI_API_KEY") ? "xai" : "none";
+  return getXaiKey() ? "xai" : "none";
 }
 
 export type GeneratedImage = { bytes: Buffer; type: string };
@@ -237,7 +247,7 @@ export async function generateImage(options: {
   const provider = imageProvider();
   if (provider === "none" || !options.prompt.trim()) return undefined;
   const config = IMAGE_ENDPOINTS[provider];
-  const apiKey = env(config.key);
+  const apiKey = providerApiKey(config.key);
   if (!apiKey) return undefined;
   const base = env("IMAGE_BASE_URL");
   const sources = [...(options.sourceImageUrl ? [options.sourceImageUrl] : []), ...(options.sourceImages ?? [])]
