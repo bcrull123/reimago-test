@@ -384,7 +384,7 @@ Bob on aceee96: "It still doesn't have the what would you change box in the rend
 - **Custom Design card:** the two thumbnails ("Design · Grok Imagine" and "Built page · Grok") and their captions are gone. The box takes their place, as on the other cards. `design_mockup_url` still goes to Formcarry and the webhook (`look.custom.mockupUrl`), and the `[imagine]` / `[design]` logs are unchanged.
 - **Full-size rendering:** the look being previewed gets the same box (`data-preview-edit`) between its "Choose this look" bar and the live page. It edits only that look, like the card's own box. The preview pages themselves (`/made/<id>`, "Open full site") ship no JavaScript, so they have no box.
 - **Phone:** under 420 px wide, the field and the Change button stack. The button is primary-colored, at least 6.5rem wide and 44 px tall, with `whitespace-nowrap`, so its label always shows (the e2e checks the label text and size at 390 px).
-- **Build stamp:** the site footer shows `Build <short commit> · <build time> UTC` (`data-build-stamp`). It comes from `BUILD_COMMIT`, `VERCEL_GIT_COMMIT_SHA` or `GITHUB_SHA`, else `git rev-parse --short HEAD`, else the first line of `RELEASE.txt` (currently `r14c`) when the host builds without `.git` or a commit env var, read at build time (`vite.config.ts` `define: __BUILD_STAMP__`). With `npm run dev`, it is read when the server starts.
+- **Build stamp:** the site footer shows `Build <short commit> · <build time> UTC` (`data-build-stamp`). It comes from `BUILD_COMMIT`, `VERCEL_GIT_COMMIT_SHA` or `GITHUB_SHA`, else `git rev-parse --short HEAD`, else the first line of `RELEASE.txt` (currently `r14d`) when the host builds without `.git` or a commit env var, read at build time (`vite.config.ts` `define: __BUILD_STAMP__`). With `npm run dev`, it is read when the server starts.
 
 ### Round 9b: photo changes never "change" to the same photo; keys, timings, Google optional
 
@@ -639,9 +639,9 @@ The payload is one JSON object; every value is a string:
 |---|---|
 | `submission_id` | `reimago-<made id>-<look archetype>`, e.g. `reimago-9fbd8da257ef404c-editorial`. Set by the server from the chosen look and the same on every retry, including when the visitor presses Choose again after a Formcarry failure, so Email Bot can dedupe. Also sent as the `Idempotency-Key` header. |
 | `email`, `website`, `note` | The form's values; `website` is the bare domain, as in Formcarry. Create mode sends the brief's domain and its "anything else" text. |
-| `preview_url`, `preview_pages` | Same text as the Formcarry fields: one `Title: URL` per line. The server rewrites each `/made/<id>` URL to an absolute public host (never `*.vercel.app`, never root-relative). If no public host is known, that host is `https://reimago.ai`. Email Bot should use these URLs as-is and must not prefix them with Origin, Referer, or a Vercel deployment host. |
+| `preview_url`, `preview_pages` | Same text as the Formcarry fields: one `Title: URL` per line. The server rewrites each `/made/<id>` URL to an absolute public host (never `*.vercel.app`, never root-relative). If no public host is known, that host is `DEFAULT_PUBLIC_ORIGIN` (currently `https://reimago-test.grok.me`; change the constant to move to `https://reimago.ai` later). Email Bot should use these URLs as-is and must not prefix them with Origin, Referer, or a Vercel deployment host. |
 | `chosen_look`, `change_requests` | Same text as the Formcarry fields: change requests are numbered rounds, `""` when none. |
-| `picture_url` | `https://<public host>/made/<id>/img/capture` (or `https://reimago.ai/…` if no public host is known), only when the server has the stored picture. |
+| `picture_url` | `https://<public host>/made/<id>/img/capture` (or `DEFAULT_PUBLIC_ORIGIN/…`, currently `https://reimago-test.grok.me/…`, if no public host is known), only when the server has the stored picture. |
 | `picture_error` | Set when no picture was stored. |
 | `submitted_at` | ISO time, set by the server. |
 
@@ -890,6 +890,12 @@ The reimago.ai project has the xAI key stored as `REIMAGO_GROK_API_KEY` rather t
 
 **Tests:** `src/lib/env.server.test.ts`. Footer stamp `r14c`.
 
+### Round 14d: absolute-link fallback is TestReimago
+
+Bob is staying on TestReimago (`https://reimago-test.grok.me`) for now and cannot add or change secrets, so `PUBLIC_BASE_URL` may stay unset. The hardcoded fallback in `DEFAULT_PUBLIC_ORIGIN` (`src/lib/public-base.ts`) is now `https://reimago-test.grok.me` instead of `https://reimago.ai`. That is the one constant to flip back to `https://reimago.ai` later. `publicLookUrl()` / `publicAbsoluteBase()` still never use a `*.vercel.app` host; the request's own public host and `PUBLIC_BASE_URL` still win over the default.
+
+**Tests:** `src/lib/public-base.test.ts` (r14d: empty public host → `https://reimago-test.grok.me`; PUBLIC_BASE_URL and a real request host still win). Footer stamp `r14d`.
+
 ## Create a New Site: domain first
 
 (Round 10: the home page no longer shows this wizard; "Build a New Site" replaced it. Kept for reference.)
@@ -924,7 +930,7 @@ The old domain step (step 12) is gone. Wizard answers are kept in memory only (s
 | `LOGICBOXES_PROXY_URL` | no | Webhero proxy URL (default `https://secure.webhero.com/api/logicboxes.php`). |
 | `DOMAIN_TLDS` | no | Comma list of the domain endings the pop-up may offer (default `com,net,org,co`; see `src/lib/domain-config.ts`). |
 | **`DOMAIN_CHECKOUT_URL`** | no | Unused by default. A future hook for the Webhero cart (alpha.webhero.com) that will register a domain the visitor selected in the wizard. See `src/lib/domain-checkout.server.ts`. Nothing is ever registered today. |
-| **`PUBLIC_BASE_URL`** | no (recommended on the published app) | Canonical public origin for customer links (Preview, email, thank-you, webhook, admin). Example: `https://reimago.ai` or the app's grok.me / custom host. Used when the request host is a protected `*.vercel.app` deployment URL. Never set this to a vercel.app host. `VITE_PUBLIC_HOSTNAME` is used if this is unset. |
+| **`PUBLIC_BASE_URL`** | no (recommended on the published app) | Canonical public origin for customer links (Preview, email, thank-you, webhook, admin). Example: `https://reimago-test.grok.me` or `https://reimago.ai`. Used when the request host is a protected `*.vercel.app` deployment URL. Never set this to a vercel.app host. If unset, `VITE_PUBLIC_HOSTNAME` is used, else the `DEFAULT_PUBLIC_ORIGIN` constant (currently TestReimago). |
 | `CURSOR_API_KEY` | no | Leave unset. Only the admin-only `POST /<ADMIN_PATH>/api/cursor-handoff` can use it (Round 13); there is no public hand-off. |
 | `AI_PROVIDER` | no | `xai` (default), `openai`, or `mock`. |
 | `AI_MODEL` | no | Override the text model (default `grok-4.5`; `gpt-4.1-mini` for openai). |

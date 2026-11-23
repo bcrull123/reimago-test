@@ -15,7 +15,8 @@
  * Absolute links that go in email (preview_url, picture_url, preview_pages) must never be
  * root-relative: mail clients have no app origin, and some will prefix a stored or inferred
  * host (including a *.vercel.app deployment URL). If no public host is found, we default to
- * https://reimago.ai.
+ * DEFAULT_PUBLIC_ORIGIN (TestReimago: https://reimago-test.grok.me; switch this constant to
+ * https://reimago.ai when the production site becomes the customer-facing host).
  */
 import { previewPathPrefix } from "./preview-path-prefix.ts";
 
@@ -26,8 +27,12 @@ export type PublicRequest = {
   pathname: string;
 };
 
-/** Fallback origin for absolute customer links (email, webhook, Formcarry) when no public host is known. */
-export const DEFAULT_PUBLIC_ORIGIN = "https://reimago.ai";
+/**
+ * Fallback origin for absolute customer links (email, webhook, Formcarry) when no public host is known.
+ * One place to switch later: Bob is on TestReimago for now. Flip this to https://reimago.ai when that host is live.
+ * Never a *.vercel.app host. The request's own public host and PUBLIC_BASE_URL still win over this default.
+ */
+export const DEFAULT_PUBLIC_ORIGIN = "https://reimago-test.grok.me";
 
 export type PublicBaseEnv = {
   /** Absolute origin, or a hostname. e.g. https://reimago.ai */
@@ -135,7 +140,7 @@ export function publicBaseFrom(request: PublicRequest, refererHeader?: string, e
   return "";
 }
 
-/** Like publicBaseFrom, but never empty: email and other absolute links fall back to reimago.ai. */
+/** Like publicBaseFrom, but never empty: email and other absolute links fall back to DEFAULT_PUBLIC_ORIGIN. */
 export function publicAbsoluteBaseFrom(request: PublicRequest, refererHeader?: string, env: PublicBaseEnv = {}): string {
   return publicBaseFrom(request, refererHeader, env) || DEFAULT_PUBLIC_ORIGIN;
 }

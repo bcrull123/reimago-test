@@ -68,16 +68,16 @@ describe("round 14: never hand back a Vercel SSO host", () => {
   });
 });
 
-describe("round 14b: absolute email links default to reimago.ai", () => {
-  it("falls back to https://reimago.ai when the request is a Vercel host and PUBLIC_BASE_URL is unset", () => {
+describe("round 14d: absolute email links default to DEFAULT_PUBLIC_ORIGIN", () => {
+  it("falls back to https://reimago-test.grok.me when the request is a Vercel host and PUBLIC_BASE_URL is unset", () => {
+    assert.equal(DEFAULT_PUBLIC_ORIGIN, "https://reimago-test.grok.me");
     assert.equal(publicBaseFrom(vercel), "");
     assert.equal(publicAbsoluteBaseFrom(vercel), DEFAULT_PUBLIC_ORIGIN);
-    assert.equal(publicAbsoluteBaseFrom(vercel), "https://reimago.ai");
-    assert.equal(publicLookUrlFrom(publicAbsoluteBaseFrom(vercel), "bea06de169ccd871"), "https://reimago.ai/made/bea06de169ccd871");
+    assert.equal(publicLookUrlFrom(publicAbsoluteBaseFrom(vercel), "bea06de169ccd871"), `${DEFAULT_PUBLIC_ORIGIN}/made/bea06de169ccd871`);
   });
 
-  it("still prefers PUBLIC_BASE_URL or a real request host over the reimago.ai default", () => {
-    assert.equal(publicAbsoluteBaseFrom(vercel, undefined, { publicBaseUrl: "https://testreimago.grok.me" }), "https://testreimago.grok.me");
+  it("still prefers PUBLIC_BASE_URL or a real request host over the default", () => {
+    assert.equal(publicAbsoluteBaseFrom(vercel, undefined, { publicBaseUrl: "https://reimago.ai" }), "https://reimago.ai");
     const local = { protocol: "http:", hostname: "localhost", host: "localhost:8090", pathname: "/" };
     assert.equal(publicAbsoluteBaseFrom(local), "http://localhost:8090");
     assert.equal(publicAbsoluteBaseFrom(app), "https://app.example");
@@ -85,20 +85,21 @@ describe("round 14b: absolute email links default to reimago.ai", () => {
 
   it("rewrites vercel.app and relative /made links for the email payload, and leaves a public host alone", () => {
     const id = "bea06de169ccd871";
-    const base = "https://reimago.ai";
-    assert.equal(rewriteCustomerLookUrl("", id, base), "https://reimago.ai/made/bea06de169ccd871");
-    assert.equal(rewriteCustomerLookUrl("/made/bea06de169ccd871", id, base), "https://reimago.ai/made/bea06de169ccd871");
+    const base = DEFAULT_PUBLIC_ORIGIN;
+    assert.equal(rewriteCustomerLookUrl("", id, base), `${DEFAULT_PUBLIC_ORIGIN}/made/bea06de169ccd871`);
+    assert.equal(rewriteCustomerLookUrl("/made/bea06de169ccd871", id, base), `${DEFAULT_PUBLIC_ORIGIN}/made/bea06de169ccd871`);
     assert.equal(
       rewriteCustomerLookUrl("https://01a1d5b9-bacc-7401-815d-3546c91d678a-ct1efse89.vercel.app/made/bea06de169ccd871", id, base),
-      "https://reimago.ai/made/bea06de169ccd871",
+      `${DEFAULT_PUBLIC_ORIGIN}/made/bea06de169ccd871`,
     );
     assert.equal(
       rewriteCustomerLookUrl("https://01a1d5b9-bacc-7401-815d-3546c91d678a-ct1efse89.vercel.app/made/bea06de169ccd871/img/capture", id, base),
-      "https://reimago.ai/made/bea06de169ccd871/img/capture",
+      `${DEFAULT_PUBLIC_ORIGIN}/made/bea06de169ccd871/img/capture`,
     );
+    // A real public host already on the URL is kept, even when the fallback is TestReimago.
     assert.equal(rewriteCustomerLookUrl("https://reimago.ai/made/bea06de169ccd871", id, base), "https://reimago.ai/made/bea06de169ccd871");
-    assert.equal(rewriteCustomerLookUrl("https://testreimago.grok.me/made/bea06de169ccd871", id, base), "https://testreimago.grok.me/made/bea06de169ccd871");
+    assert.equal(rewriteCustomerLookUrl(`${DEFAULT_PUBLIC_ORIGIN}/made/bea06de169ccd871`, id, base), `${DEFAULT_PUBLIC_ORIGIN}/made/bea06de169ccd871`);
     const pages = rewritePreviewPages("Home: https://foo.vercel.app/made/bea06de169ccd871\nAbout: /made/bea06de169ccd871/about", id, base);
-    assert.equal(pages, "Home: https://reimago.ai/made/bea06de169ccd871\nAbout: https://reimago.ai/made/bea06de169ccd871/about");
+    assert.equal(pages, `Home: ${DEFAULT_PUBLIC_ORIGIN}/made/bea06de169ccd871\nAbout: ${DEFAULT_PUBLIC_ORIGIN}/made/bea06de169ccd871/about`);
   });
 });
