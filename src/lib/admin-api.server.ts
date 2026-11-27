@@ -140,6 +140,15 @@ export async function handleAdminApi(request: Request, cp: string, splat: string
     }
   }
 
+  // Round 15: QA score for a stored look (admin-only).
+  if (route === "look-qa" && method === "GET") {
+    const id = String(new URL(request.url).searchParams.get("id") ?? "");
+    if (!/^[a-f0-9]{16}$/.test(id)) return json({ error: "Bad look id." }, 400);
+    const { readSite } = await import("@/lib/pages.server");
+    const site = await readSite(id);
+    return json({ id, qa: site?.polish?.qa ?? null, name: site?.design?.name ?? site?.name ?? "" });
+  }
+
   const leads = await import("@/lib/leads.server");
   const query = Object.fromEntries(new URL(request.url).searchParams);
   try {

@@ -96,6 +96,7 @@ export async function planEdit(text: string, looks: LookRef[], focusedId: string
       maxTokens: 600,
       timeoutMs: 20_000,
       retry: false,
+      reasoningEffort: "low",
       messages: [
         {
           role: "system",

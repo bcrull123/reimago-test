@@ -304,6 +304,25 @@ export const previewCustom = createServerFn({ method: "POST" })
       else console.info(`[scratch] custom design “${brief.concept}” failed in ${Date.now() - started}ms: ${made.reason ?? "unknown"}`);
       if (made.design) {
         site.custom = made.design;
+        try {
+          const { polishAndQa } = await import("./preview/qa.server");
+          if (site.facts && site.plan) {
+            const homeCtx = {
+              slugs: site.plan.pages.map((p) => p.slug),
+              phone: site.facts.phone,
+              email: site.facts.email,
+              images: Object.keys(site.images ?? {}).filter((n) => !n.startsWith("logo")),
+              testimonials: site.facts.testimonials,
+              corpus: `${site.facts.name} ${site.facts.description ?? ""}`,
+              page: "home",
+            };
+            const left = Math.max(1_000, deadline - Date.now() - 1_000);
+            const polished = await polishAndQa(site, homeCtx, left, { rewrite: false });
+            site.polish = polished.polish;
+          }
+        } catch (error) {
+          console.error("[qa] custom score failed", error instanceof Error ? error.message : error);
+        }
         await saveSite(site);
         const d = made.design;
         return {

@@ -21,7 +21,13 @@ export type StoredPage = {
   pending?: boolean;
 };
 
-export type PolishInfo = { method: "vision" | "html" | "skipped"; notes: string[]; reason?: string };
+export type PolishInfo = {
+  method: "vision" | "html" | "skipped";
+  notes: string[];
+  reason?: string;
+  /** Round 15: bounded self-check score (admin-only display). */
+  qa?: import("./qa.ts").QaReport;
+};
 
 export type StoredSite = {
   version: 2 | 3;

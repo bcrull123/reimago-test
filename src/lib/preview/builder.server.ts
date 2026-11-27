@@ -11,6 +11,9 @@
  * renders — and they never invent contact details.
  */
 import { aiAvailable, aiFallbackModel, aiModel, chatJson, isMockMode } from "@/lib/ai-provider.server";
+import { briefFromDirection } from "@/lib/preview/stage-brief";
+import { REIMAGO_SYSTEM } from "@/lib/preview/system-prompt";
+
 import { BODY_FONTS, HEADING_FONTS, defaultPalette, hashString, safeFont, safePalette } from "@/lib/preview/theme";
 import { ARCHETYPES, type DesignDirection, type PlanPage, type PlanSection, type Section, type SiteFacts, type SitePlan, type StoredImage, type AiDebug } from "@/lib/preview/types";
 import { lookName } from "@/lib/preview/archetype-label";
@@ -34,6 +37,14 @@ import { applyEra } from "@/lib/preview/era-style";
 import { applyTheme, detectTheme, THEME_HEADING_FONTS } from "@/lib/preview/theme-lean";
 
 /** The owner's note + feedback rounds as a high-priority block at the end of a system prompt. */
+function briefJsonSafe(design: DesignDirection, facts: SiteFacts): string {
+  try {
+    return JSON.stringify(briefFromDirection(design, facts));
+  } catch {
+    return JSON.stringify({ name: design.name, mood: design.mood, archetype: design.archetype, hero: design.hero, headline: design.headline });
+  }
+}
+
 function requestBlock(facts: SiteFacts): string {
   const rule = ownerRequestRule(facts);
   return rule ? `\n\n${rule}` : "";
@@ -315,6 +326,7 @@ export async function directionsFor(
   // Round 13: "make it look late 90s / Y2K / brutalist" is forced onto every look (a different variant each), AI or not.
   directions = applyEra(directions, facts);
   console.info(`[looks] round${prev?.names.length ? " (regenerated)" : ""}: ${directions.map((d) => `“${d.name}” ${d.archetype}/${d.heroStyle}`).join(" · ")}${prev?.names.length ? ` · previous round: ${prev.names.map((n, i) => `“${n}” ${prev.archetypes[i] ?? ""}/${prev.heroStyles[i] ?? ""}`).join(" · ")}` : ""}`);
+  console.info(`[stage] art-direction ${directions.length} looks: ${directions.map((d, i) => `“${d.name}” ${d.archetype}/${d.heroStyle ?? d.hero}${d.era ? ` era=${d.era}` : ""}`).join(" · ")}`);
   return { ...result, directions };
 }
 
@@ -480,19 +492,15 @@ async function aiSections(
     timeoutMs,
     model,
     retry: false,
+    reasoningEffort: "low",
     messages: [
       {
         role: "system",
-        content: `You are a senior web designer and conversion copywriter at a top agency, composing ONE page of a small-business website from a library of beautifully pre-designed sections. You choose sections, order them for rhythm and persuasion, choose tones and variants that express the design direction, and write sharp, specific, warm copy.
+        content: `${REIMAGO_SYSTEM}
+
+You are the layout and sections specialist. Compose ONE page from the section library using only the art-direction brief and the facts below — not any other step's reasoning.
 Return ONLY JSON: {"sections": [ ... ]}
-Design direction (follow it on every section — mood, boldness, headline voice): ${JSON.stringify({
-          name: design.name,
-          mood: design.mood,
-          archetype: design.archetype,
-          hero: design.hero,
-          motifs: design.motifs,
-          headline_idea: design.headline,
-        })}
+Art-direction brief: ${briefJsonSafe(design, facts)}
 ${SECTION_GUIDE.replace("{IMAGES}", images.length ? images.map((i) => `"${i.name}" (${i.describe})`).join("; ") : "(none — omit image fields; tasteful placeholders are used)")}
 Page links: use only these page slugs: ${slugs}.
 Content rules:
@@ -549,7 +557,10 @@ export async function sectionsFor(
   const names = list.map((i) => i.name);
   const ctx = normalizeContext(facts, plan, page.slug, names);
   const fallback = () => composeMockPage(page, facts, plan, design, composeImages(names));
-  if (!useAi) return { sections: fallback(), ai: false };
+  if (!useAi) {
+    console.info(`[stage] layout ${page.slug} “${design.name}” 0ms ai=no (mock or unconfigured)`);
+    return { sections: fallback(), ai: false };
+  }
   // The OWNER'S REQUEST block is in this page's system prompt (see aiSections → requestBlock).
   const ownerRequest = Boolean(requestBlock(facts));
   const started = Date.now();
@@ -583,6 +594,7 @@ export async function sectionsFor(
       const min = home ? 3 : 2;
       if (sections.length >= min) {
         if (page.slug === "contact" && !sections.some((s) => s.type === "contact-block")) sections.push({ type: "contact-block", tone: "light", heading: "Get in touch" });
+        console.info(`[stage] layout ${page.slug} “${design.name}” ${Date.now() - started}ms ai=yes model=${attempt.model}`);
         return { sections, ai: true, model: attempt.model, seconds: Math.round((Date.now() - started) / 1000), debug, ownerRequest };
       }
       const why = check.rejected.slice(0, 3).join("; ");
@@ -594,6 +606,7 @@ export async function sectionsFor(
     console.error(`[preview] page ${page.slug}: ${errors.at(-1)}`);
   }
   if (!errors.length) errors.push(`no time left in the ${Math.round(budgetMs / 1000)}s step budget`);
+  console.info(`[stage] layout ${page.slug} “${design.name}” ${Date.now() - started}ms ai=no`);
   return { sections: fallback(), ai: false, error: errors.join("; then "), debug, ownerRequest };
 }
 
@@ -1182,14 +1195,38 @@ export async function buildLook(
   };
   const generated = Object.values(images).filter((i) => i.source === "generated").length;
   const aiWarning = result.ai && result.debug ? skippedNote(result.debug) : undefined;
-  return { site, ai: result.ai, aiError: result.error, aiWarning, generated, photos: photos.length };
+  // Round 15: score (and, if time remains, lightly revise) the homepage. Custom Design HTML is applied later and scored there.
+  const { polishAndQa } = await import("@/lib/preview/qa.server");
+  const { copySeoPass } = await import("@/lib/preview/copy-seo.server");
+  const homeCtx = normalizeContext(facts, plan, "home", available.filter((n) => !n.startsWith("logo")));
+  const willBeCustom = Boolean(design.custom);
+  let working = site;
+  const leftMs = budget - (Date.now() - stepStart);
+  if (!willBeCustom && leftMs >= 12_000) {
+    const copied = await copySeoPass(working, homeCtx, Math.min(15_000, leftMs - 8_000));
+    if (copied.ran) {
+      working = { ...working, pages: working.pages.map((p) => (p.slug === "home" ? { ...p, sections: copied.sections } : p)) };
+    }
+  }
+  const qaBudget = willBeCustom ? Math.min(4_000, Math.max(500, leftMs)) : Math.max(1_000, leftMs - 1_000);
+  const polished = await polishAndQa(working, homeCtx, qaBudget, {
+    rewrite: !willBeCustom && leftMs >= 12_000,
+  });
+  working = {
+    ...working,
+    pages: working.pages.map((p) => (p.slug === "home" ? { ...p, sections: resolveImages(polished.sections, available) } : p)),
+    polish: polished.polish,
+  };
+  trace.steps.push({ step: "homepage QA", ai: polished.polish.method !== "skipped", ownerRequest: false });
+  return { site: working, ai: result.ai, aiError: result.error, aiWarning, generated, photos: photos.length };
 }
 
 /** Build every remaining page for the chosen look, add service images, and critique/revise the homepage. */
 export async function finishSite(site: StoredSite): Promise<{ site: StoredSite; failed: number; note?: string }> {
   if (!site.facts || !site.plan || !site.design) throw new Error("This preview was made by an older version. Run the site again.");
   const { imagesEnabled, generateAndStore } = await import("@/lib/preview/images.server");
-  const { polishHome } = await import("@/lib/preview/critique.server");
+  const { polishAndQa } = await import("@/lib/preview/qa.server");
+  const { copySeoPass } = await import("@/lib/preview/copy-seo.server");
   const facts = site.facts;
   const plan = site.plan;
   const design = site.design;
@@ -1241,10 +1278,19 @@ export async function finishSite(site: StoredSite): Promise<{ site: StoredSite; 
   );
   const homeCtx = normalizeContext(facts, plan, "home", Object.keys(images).filter((n) => !n.startsWith("logo")));
   // The from-scratch homepage is Grok's own design (already validated): no critique pass on its template fallback.
-  const polishJob =
-    site.custom && !site.design?.custom?.failed
-      ? Promise.resolve({ sections: site.pages.find((p) => p.slug === "home")?.sections ?? [], polish: { method: "skipped" as const, notes: [], reason: "Designed from scratch (custom look)." } })
-      : polishHome(site, homeCtx, budget - 5_000);
+  const polishJob = (async () => {
+    const custom = Boolean(site.custom && !site.design?.custom?.failed);
+    let working = site;
+    const copyBudget = Math.min(18_000, budget - (Date.now() - stepStart) - 20_000);
+    if (!custom && copyBudget >= 12_000) {
+      const copied = await copySeoPass(working, homeCtx, copyBudget);
+      if (copied.ran) {
+        working = { ...working, pages: working.pages.map((p) => (p.slug === "home" ? { ...p, sections: copied.sections } : p)) };
+      }
+    }
+    const qaBudget = Math.max(8_000, budget - (Date.now() - stepStart) - 4_000);
+    return polishAndQa(working, homeCtx, qaBudget, { rewrite: !custom });
+  })();
   const [built, polished] = await Promise.all([pagesJob, polishJob, ...jobs]);
   const available = Object.keys(images);
   const pages = site.pages.map((page) => {

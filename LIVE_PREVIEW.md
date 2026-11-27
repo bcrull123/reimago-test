@@ -384,7 +384,7 @@ Bob on aceee96: "It still doesn't have the what would you change box in the rend
 - **Custom Design card:** the two thumbnails ("Design · Grok Imagine" and "Built page · Grok") and their captions are gone. The box takes their place, as on the other cards. `design_mockup_url` still goes to Formcarry and the webhook (`look.custom.mockupUrl`), and the `[imagine]` / `[design]` logs are unchanged.
 - **Full-size rendering:** the look being previewed gets the same box (`data-preview-edit`) between its "Choose this look" bar and the live page. It edits only that look, like the card's own box. The preview pages themselves (`/made/<id>`, "Open full site") ship no JavaScript, so they have no box.
 - **Phone:** under 420 px wide, the field and the Change button stack. The button is primary-colored, at least 6.5rem wide and 44 px tall, with `whitespace-nowrap`, so its label always shows (the e2e checks the label text and size at 390 px).
-- **Build stamp:** the site footer shows `Build <short commit> · <build time> UTC` (`data-build-stamp`). It comes from `BUILD_COMMIT`, `VERCEL_GIT_COMMIT_SHA` or `GITHUB_SHA`, else `git rev-parse --short HEAD`, else the first line of `RELEASE.txt` (currently `r14d`) when the host builds without `.git` or a commit env var, read at build time (`vite.config.ts` `define: __BUILD_STAMP__`). With `npm run dev`, it is read when the server starts.
+- **Build stamp:** the site footer shows `Build <short commit> · <build time> UTC` (`data-build-stamp`). It comes from `BUILD_COMMIT`, `VERCEL_GIT_COMMIT_SHA` or `GITHUB_SHA`, else `git rev-parse --short HEAD`, else the first line of `RELEASE.txt` (currently `r15`) when the host builds without `.git` or a commit env var, read at build time (`vite.config.ts` `define: __BUILD_STAMP__`). With `npm run dev`, it is read when the server starts.
 
 ### Round 9b: photo changes never "change" to the same photo; keys, timings, Google optional
 
@@ -896,6 +896,27 @@ Bob is staying on TestReimago (`https://reimago-test.grok.me`) for now and canno
 
 **Tests:** `src/lib/public-base.test.ts` (r14d: empty public host → `https://reimago-test.grok.me`; PUBLIC_BASE_URL and a real request host still win). Footer stamp `r14d`.
 
+### Revert point: r14d-stable
+
+Before Round 15, `live-preview` HEAD `dc9f343de127f4a903d28a9a5bd1ec606160fbc5` was tagged `r14d-stable` (annotated) and branched as `backup/r14d`, both pushed to origin. To roll TestReimago back: republish from tag `r14d-stable` or that exact SHA. To move the `live-preview` branch back to it, only with Bob's OK (never force-push without it). Email/webhook, `getXaiKey()`, and `DEFAULT_PUBLIC_ORIGIN` (`https://reimago-test.grok.me`) are unchanged in r15.
+
+### Round 15: staged specialists, self-check loop, shared system prompt
+
+From the xAI cookbook pattern (screenshot-to-component and product-video-ad): instead of one generalist prompt per look, generation is staged, and a bounded QA loop critiques and (when needed) fixes only misses.
+
+1. **Art-direction brief** — `src/lib/preview/stage-brief.ts` builds a small structured JSON brief from the existing direction (`theme.ts` / `theme-lean.ts` / `look-variety.ts` / era). Typo style words ("scarry" → horror) and how this look must differ from the other two travel with the brief. Logged as `[stage] art-direction`.
+2. **Layout and sections** — `aiSections` gets the stable `REIMAGO_SYSTEM` prefix (prompt-cache friendly; do not casually rewrite it) plus the brief, not the previous step's reasoning. Logged as `[stage] layout`.
+3. **Copy / SEO / conversion** — `src/lib/preview/copy-seo.server.ts` revises the homepage for a unique H1, a short meta description, a clear CTA, and mobile-length headings. Low reasoning effort. Skipped in mock mode, when time is short, and for successful Custom Design HTML. Logged as `[stage] copy`.
+4. **Checker** — `src/lib/preview/qa.ts` + `qa.server.ts`. After a look is built (including `/made` pages produced by `finishSite`), score hierarchy, type scale, spacing, contrast, style match to the brief and the owner's style words, mobile layout, and blandness. Up to `PREVIEW_QA_ROUNDS` rounds (default 2, cap 0–3). Keep the best-scoring version. If less than 12s remains or the checker fails, ship the best so far. Custom Design is scored but not rewritten.
+
+**QA mode:** prefer a real rendered screenshot plus Grok vision when Chrome is available and time remains (`PREVIEW_CRITIQUE=auto|vision`). On Vercel / Grok Build, Chrome is usually missing, so the default path is an HTML/CSS structural critique by the model (and a pure structural score in mock mode). The `[qa]` log names the mode (`vision` / `html` / `structural` / `skipped`), scores, rounds, `kept`, and milliseconds. An admin-only `GET /<ADMIN_PATH>/api/look-qa?id=` plus a small "QA 74 · structural · 2r" line under look thumbnails (session required; not shown on public `/made`).
+
+Reasoning effort: **low** on copy, QA, layout, and look-edit refine; **high** only on from-scratch Custom Design chat calls.
+
+Time: extra ~15–30s of model work when AI is on, with hard cutoffs so looks still return well before `maxDuration` 300s. Do not set `PREVIEW_MOCK` or `RATE_LIMIT_SCALE` on the published app.
+
+**Tests:** `src/lib/preview/stage-brief.test.ts`, `src/lib/preview/qa.test.ts`. Footer stamp `r15`.
+
 ## Create a New Site: domain first
 
 (Round 10: the home page no longer shows this wizard; "Build a New Site" replaced it. Kept for reference.)
@@ -935,7 +956,8 @@ The old domain step (step 12) is gone. Wizard answers are kept in memory only (s
 | `AI_PROVIDER` | no | `xai` (default), `openai`, or `mock`. |
 | `AI_MODEL` | no | Override the text model (default `grok-4.5`; `gpt-4.1-mini` for openai). |
 | `OPENAI_API_KEY` | only for openai text or images | |
-| **`AI_REASONING_EFFORT`** | no | `low` (default), `medium`, `high`, or `none` (don't send). Sent to reasoning models (Grok 4.5+). |
+| **`AI_REASONING_EFFORT`** | no | `low` (default), `medium`, `high`, or `none` (don't send). Sent to reasoning models (Grok 4.5+). Per-call overrides: Custom Design uses `high`; copy, QA, layout, and look-edit use `low`. |
+| **`PREVIEW_QA_ROUNDS`** | no | Bounded self-check rounds after a look is built (default `2`, cap 0–3). `0` scores only. If time runs out, the best version so far is shipped. |
 | **`AI_FALLBACK_MODEL`** | no | Faster model for one retry when the main model fails or times out (default `grok-4.20-0309-non-reasoning` for xAI; `none` disables). |
 | `AI_BASE_URL` | no | Any OpenAI-compatible text endpoint. |
 | **`IMAGE_PROVIDER`** | no | `xai` (default, `grok-imagine-image-2.0`), `openai` (`gpt-image-1`, needs `OPENAI_API_KEY`), or `none` (real photos + placeholders only). Turns into `none` automatically when the key is missing or `PREVIEW_MOCK=1`. |
@@ -988,8 +1010,9 @@ The old domain step (step 12) is gone. Wizard answers are kept in memory only (s
 - `src/lib/preview/images.server.ts`: real-photo selection/storage and generated images. `own-image.ts` recognizes `/made/<id>/img/<name>` URLs this app stored (logos and owner photos) so they are read from the store.
 - `src/lib/preview/look-variety.ts`: makes the three looks different (hero treatment, header, buttons, footer, section recipe), plus the distinctness check.
 - `src/lib/preview/image-prompts.ts`: image prompts (the owner's scene first) and the card's photo line. `web-photo.ts` handles place, scene words, search words, matching, licenses, ranking and hero suitability of scraped photos (pure). `web-photo.server.ts` runs the Openverse and Commons search and the download. `google-photo.ts` (pure: queries, filters, scoring, the temporary-photo metadata) and `google-photo.server.ts` (Serper or proxy search, cache, download, vision pick) handle Google Images; `photo-search-endpoint.server.ts` + `src/routes/api.photo-search.ts` are the master's endpoint for clones. `site-art.ts` collects and matches all of a site's imagery and sanitizes inline SVG (pure). `keep-art.server.ts` finds the owner's own picture to keep (words, then AI vision) and checks whether it is a cutout.
-- `src/lib/preview/critique.server.ts`: screenshot + critique-and-revise.
-- `src/lib/preview/builder.server.ts`: plan, directions, `buildLook`, `finishSite`.
+- `src/lib/preview/critique.server.ts`: screenshot helper + legacy one-shot critique. Round 15 finish uses `qa.server.ts` instead of `polishHome`.
+- `src/lib/preview/system-prompt.ts`: stable shared `REIMAGO_SYSTEM` prefix (prompt cache). `stage-brief.ts`: art-direction JSON. `copy-seo.server.ts`: copy/SEO/conversion pass. `qa.ts` / `qa.server.ts`: scored self-check loop (`[stage]` / `[qa]` logs).
+- `src/lib/preview/builder.server.ts`: plan, directions, `buildLook`, `finishSite` (copy pass then `polishAndQa`).
 - `src/lib/preview.functions.ts`: server functions `previewRead`, `previewFromBrief`, `previewDirections`, `previewLook`, `previewFinish`, `previewUploadLogo`, `previewUploadPhotos`, `previewMakeLogos`.
 - `src/lib/preview/photo-queries.ts`: the planner's proactive Google Images queries (clean + no-AI defaults). `hero-brief.ts` (pure: business type -> what a good hero is, off-topic words, search scenes, the generic low-quality list). `hero-pick.ts` (pure: quality bar, pixel stats, perceptual hash, sign/subject words, hero score, mood fit, the three-look assignment) and `hero-pick.server.ts` (decoding photos, the site's photos as candidates).
 - `src/lib/preview/look-edit.ts` (pure: which look, which tweaks, OKLCH palette tuning with AA, CSS, labels) and `look-edit.server.ts` (Grok edit planner, photo luma, building the edited looks).

@@ -46,6 +46,8 @@ export type ChatOptions = {
   model?: string;
   /** Ask the API for a JSON object (response_format json_object); dropped automatically if the API rejects it. */
   json?: boolean;
+  /** Override AI_REASONING_EFFORT for this call (QA/refine stay low; Custom Design uses high). */
+  reasoningEffort?: "low" | "medium" | "high" | "none";
 };
 
 const ENDPOINTS: Record<Exclude<AiProvider, "mock">, { url: string; key: string; model: string; fallback?: string }> = {
@@ -97,8 +99,8 @@ export function aiFallbackModel(): string | undefined {
 }
 
 /** Grok 4.5+ always reason; reasoning_effort "low" keeps page writing fast (AI_REASONING_EFFORT overrides). */
-function reasoningEffort(provider: AiProvider, model: string): string | undefined {
-  const raw = (env("AI_REASONING_EFFORT") ?? "low").toLowerCase();
+function reasoningEffort(provider: AiProvider, model: string, override?: "low" | "medium" | "high" | "none"): string | undefined {
+  const raw = (override ?? env("AI_REASONING_EFFORT") ?? "low").toLowerCase();
   if (raw === "none" || raw === "off" || raw === "default") return undefined;
   if (provider === "xai" && /^grok-(4\.(5|6|7|8|9)|[5-9])/i.test(model) && !/non-reasoning/i.test(model)) return raw;
   if (provider === "openai" && /^(o\d|gpt-5)/i.test(model)) return raw;
@@ -126,7 +128,7 @@ export async function chatText(options: ChatOptions): Promise<string> {
   const model = options.model ?? env("AI_MODEL") ?? config.model;
   const baseUrl = env("AI_BASE_URL");
   const endpoint = baseUrl ? `${baseUrl.replace(/\/+$/, "")}/chat/completions` : config.url;
-  let effort = reasoningEffort(provider, model);
+  let effort = reasoningEffort(provider, model, options.reasoningEffort);
   let json = options.json === true;
 
   const call = async (): Promise<string> => {

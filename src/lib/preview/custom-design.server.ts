@@ -62,6 +62,7 @@ export async function creativeBrief(facts: SiteFacts, palette: SitePalette, dead
       timeoutMs: Math.max(5000, Math.min(30_000, deadline - Date.now())),
       deadline,
       retry: false,
+      reasoningEffort: "high",
       messages: [
         { role: "system", content: "You are the creative director of a top web design agency. Answer only JSON." },
         { role: "user", content: briefPrompt({ name: facts.name, tagline: facts.tagline, description: facts.description, services: realServices(facts), category: hb.category, kind: hb.kind, request: withTheme(withEra(latestRequest(facts), facts), facts) }) },
@@ -524,6 +525,7 @@ export async function designCustom(site: StoredSite, deadline: number, mockup?: 
         timeoutMs: Math.min(fromMockup ? BUILD_MS() : 75_000, left - 4000),
         deadline,
         retry: false,
+        reasoningEffort: "high",
         messages: [
           { role: "system", content: prompt.system },
           { role: "user", content: mockupPart ? [{ type: "text", text: prompt.user }, mockupPart] : prompt.user },
@@ -675,6 +677,7 @@ export async function editCustom(site: StoredSite, palette: SitePalette, request
       timeoutMs: 75_000,
       deadline,
       retry: false,
+      reasoningEffort: "high",
       messages: (() => {
         const p = editPrompt(ctx, base, request, adjustments);
         return [

@@ -347,8 +347,20 @@ function lookPath(url: string): string {
     return "";
   }
 }
-function Thumb({ url, label }: { url: string; label: string }) {
+function Thumb({ url, label, cp }: { url: string; label: string; cp?: string }) {
   const path = lookPath(url);
+  const lookId = /\/made\/([a-f0-9]{16})/.exec(path || url)?.[1];
+  const { call } = useApi(cp ?? "x");
+  const [qa, setQa] = useState("");
+  useEffect(() => {
+    if (!cp || !lookId) return;
+    void call<{ qa?: { scores?: { total?: number }; mode?: string; rounds?: number } }>(`look-qa?id=${lookId}`).then((res) => {
+      const q = res.ok ? res.data.qa : undefined;
+      if (q?.scores && typeof q.scores.total === "number") {
+        setQa(`QA ${q.scores.total} · ${q.mode ?? "structural"}${q.rounds ? ` · ${q.rounds}r` : ""}`);
+      }
+    });
+  }, [call, cp, lookId]);
   // Same-origin /made path: never send the owner to a protected *.vercel.app deployment URL.
   return (
     <a href={path || url} target="_blank" rel="noreferrer" className="block w-[220px] shrink-0" data-look-thumb>
@@ -356,6 +368,7 @@ function Thumb({ url, label }: { url: string; label: string }) {
         {path ? <iframe src={path} title={label} loading="lazy" tabIndex={-1} sandbox="" aria-hidden="true" className="pointer-events-none absolute left-0 top-0 origin-top-left border-0" style={{ width: 1280, height: 800, transform: "scale(0.171875)" }} /> : null}
       </span>
       <span className="mt-1 block truncate text-xs text-primary">{label}</span>
+      {qa ? <span className="mt-0.5 block font-mono text-[10px] text-faint" data-look-qa>{qa}</span> : null}
     </a>
   );
 }
@@ -483,7 +496,7 @@ function Drawer({ cp, lead, onClose, onChanged }: { cp: string; lead: Lead; onCl
                 <p className="font-medium text-ink">{p.look || "Look"}</p>
                 <p className="text-xs text-muted">{chicagoTime(p.picked_at)} · Formcarry: {delivery(p.formcarry_status)} · Reply webhook: {delivery(p.webhook_status)}</p>
                 <div className="mt-2 flex flex-wrap gap-3">
-                  {p.preview_url ? <Thumb url={p.preview_url} label="Open preview" /> : null}
+                  {p.preview_url ? <Thumb url={p.preview_url} label="Open preview" cp={cp} /> : null}
                   {p.look_id && lookPath(p.preview_url) ? (
                     <a href={`/made/${p.look_id}/img/capture`} target="_blank" rel="noreferrer" className="block w-[220px] shrink-0" title="The picture sent with the lead">
                       <img src={`/made/${p.look_id}/img/capture`} alt="Picture sent with the lead" loading="lazy" onError={(e) => (e.currentTarget.parentElement!.style.display = "none")} className="h-[138px] w-[220px] rounded-md border border-border object-cover object-top" />
@@ -510,7 +523,7 @@ function Drawer({ cp, lead, onClose, onChanged }: { cp: string; lead: Lead; onCl
           <Section title="All three looks shown">
             <div className="flex gap-3 overflow-x-auto pb-1">
               {lead.looks.map((l) => (
-                <Thumb key={l.look_id || l.name} url={l.url} label={l.name} />
+                <Thumb key={l.look_id || l.name} url={l.url} label={l.name} cp={cp} />
               ))}
             </div>
           </Section>
