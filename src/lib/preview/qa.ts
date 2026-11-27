@@ -5,9 +5,10 @@
  */
 import { contrast } from "./design.ts";
 import { detectTheme, type ThemeId } from "./theme-lean.ts";
+import { distinctnessScore } from "./look-diversity.ts";
 import type { DesignDirection, Section, SitePalette } from "./types.ts";
 
-export const QA_DIMENSIONS = ["hierarchy", "typeScale", "spacing", "contrast", "styleMatch", "mobile", "blandness"] as const;
+export const QA_DIMENSIONS = ["hierarchy", "typeScale", "spacing", "contrast", "styleMatch", "mobile", "blandness", "distinctness"] as const;
 export type QaDimension = (typeof QA_DIMENSIONS)[number];
 
 export type QaScores = { [K in QaDimension]: number } & { total: number };
@@ -51,7 +52,7 @@ function hasCta(sections: Section[]): boolean {
 }
 
 export function emptyScores(): QaScores {
-  return { hierarchy: 0, typeScale: 0, spacing: 0, contrast: 0, styleMatch: 0, mobile: 0, blandness: 0, total: 0 };
+  return { hierarchy: 0, typeScale: 0, spacing: 0, contrast: 0, styleMatch: 0, mobile: 0, blandness: 0, distinctness: 0, total: 0 };
 }
 
 export function withTotal(s: Omit<QaScores, "total">): QaScores {
@@ -64,6 +65,7 @@ export function structuralScore(input: {
   design: DesignDirection;
   sections: Section[];
   facts?: { notes?: string; feedback?: string[]; description?: string; name?: string; tagline?: string; brief?: string; about?: string };
+  siblings?: DesignDirection[];
 }): QaScores {
   const { design, sections, facts } = input;
   const p: SitePalette = design.palette;
@@ -98,7 +100,9 @@ export function structuralScore(input: {
   const blandHits = text.match(new RegExp(BLAND.source, "gi"))?.length ?? 0;
   const blandness = clamp(90 - blandHits * 22 + (heading.length >= 12 ? 10 : 0));
 
-  return withTotal({ hierarchy, typeScale, spacing, contrast: contrastScore, styleMatch, mobile, blandness });
+  const distinctness = distinctnessScore(design, input.siblings);
+
+  return withTotal({ hierarchy, typeScale, spacing, contrast: contrastScore, styleMatch, mobile, blandness, distinctness });
 }
 
 function styleMatchScore(design: DesignDirection, theme: ThemeId | undefined, p: SitePalette): number {

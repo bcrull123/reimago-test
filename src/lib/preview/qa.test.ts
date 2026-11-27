@@ -90,7 +90,7 @@ describe("structuralScore", () => {
 
 describe("score helpers", () => {
   it("parses and merges AI scores without letting them hide a contrast miss", () => {
-    const structural = withTotal({ hierarchy: 80, typeScale: 80, spacing: 80, contrast: 20, styleMatch: 80, mobile: 80, blandness: 80 });
+    const structural = withTotal({ hierarchy: 80, typeScale: 80, spacing: 80, contrast: 20, styleMatch: 80, mobile: 80, blandness: 80, distinctness: 80 });
     const ai = parseAiScores({ hierarchy: 99, contrast: 99, junk: "no" });
     assert.equal(ai?.hierarchy, 99);
     assert.ok(ai && !("junk" in ai));
@@ -101,12 +101,35 @@ describe("score helpers", () => {
   });
 
   it("isBetter prefers the higher total, then contrast + style + hierarchy", () => {
-    const a = withTotal({ hierarchy: 70, typeScale: 70, spacing: 70, contrast: 70, styleMatch: 70, mobile: 70, blandness: 70 });
+    const a = withTotal({ hierarchy: 70, typeScale: 70, spacing: 70, contrast: 70, styleMatch: 70, mobile: 70, blandness: 70, distinctness: 70 });
     const b = { ...a, total: a.total + 1 };
     assert.equal(isBetter(b, a), true);
     assert.equal(isBetter(a, b), false);
     const sameTotalBetterContrast = { ...a, contrast: 90, hierarchy: 50, styleMatch: 90 };
     // totals are equal; contrast+style+hierarchy 90+90+50=230 vs 70*3=210
     assert.equal(isBetter(sameTotalBetterContrast, a), true);
+  });
+});
+
+
+describe("sibling sameness", () => {
+  it("lowers distinctness when a look shares its palette, serif and layout with a sibling", () => {
+    const one = dir({ fonts: { heading: "DM Serif Display", body: "Libre Franklin" } });
+    const two = dir({ name: "Also Editorial", fonts: { heading: "Fraunces", body: "Source Sans 3" } });
+    const low = structuralScore({ design: one, sections: sections(), siblings: [two] });
+    const high = structuralScore({
+      design: dir({
+        name: "Night",
+        palette: dark,
+        fonts: { heading: "Space Grotesk", body: "Manrope" },
+        hero: "photo",
+        heroStyle: "cinematic",
+      }),
+      sections: sections(),
+      siblings: [one],
+    });
+    assert.ok(low.distinctness < 70, `alike distinctness ${low.distinctness}`);
+    assert.ok(high.distinctness >= 80, `different distinctness ${high.distinctness}`);
+    assert.ok(high.total !== low.total || high.distinctness !== low.distinctness);
   });
 });

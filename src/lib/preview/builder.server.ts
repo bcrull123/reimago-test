@@ -12,6 +12,7 @@
  */
 import { aiAvailable, aiFallbackModel, aiModel, chatJson, isMockMode } from "@/lib/ai-provider.server";
 import { briefFromDirection } from "@/lib/preview/stage-brief";
+import { enforceDiversity } from "@/lib/preview/look-diversity";
 import { REIMAGO_SYSTEM } from "@/lib/preview/system-prompt";
 
 import { BODY_FONTS, HEADING_FONTS, defaultPalette, hashString, safeFont, safePalette } from "@/lib/preview/theme";
@@ -325,6 +326,10 @@ export async function directionsFor(
   directions = applyTheme(directions, facts);
   // Round 13: "make it look late 90s / Y2K / brutalist" is forced onto every look (a different variant each), AI or not.
   directions = applyEra(directions, facts);
+  // Round 15b: hard axis constraints (base, font category, layout, accent, voice). Theme/era skins stay.
+  const diverse = enforceDiversity(directions, facts, { seed: opts.seed ?? 0 });
+  directions = diverse.directions;
+  for (const line of diverse.log) console.info(`[diversity] ${line}`);
   console.info(`[looks] round${prev?.names.length ? " (regenerated)" : ""}: ${directions.map((d) => `“${d.name}” ${d.archetype}/${d.heroStyle}`).join(" · ")}${prev?.names.length ? ` · previous round: ${prev.names.map((n, i) => `“${n}” ${prev.archetypes[i] ?? ""}/${prev.heroStyles[i] ?? ""}`).join(" · ")}` : ""}`);
   console.info(`[stage] art-direction ${directions.length} looks: ${directions.map((d, i) => `“${d.name}” ${d.archetype}/${d.heroStyle ?? d.hero}${d.era ? ` era=${d.era}` : ""}`).join(" · ")}`);
   return { ...result, directions };
@@ -694,6 +699,7 @@ export async function buildLook(
   plan: SitePlan,
   design: DesignDirection,
   index: number,
+  opts: { siblings?: DesignDirection[] } = {},
 ): Promise<{ site: StoredSite; ai: boolean; aiError?: string; aiWarning?: string; generated: number; photos: number }> {
   // The AI planner's reading of the photo subject (if any) wins over the regex reading of the note.
   const facts = withPlanSubject(rawFacts, plan);
@@ -1211,6 +1217,7 @@ export async function buildLook(
   const qaBudget = willBeCustom ? Math.min(4_000, Math.max(500, leftMs)) : Math.max(1_000, leftMs - 1_000);
   const polished = await polishAndQa(working, homeCtx, qaBudget, {
     rewrite: !willBeCustom && leftMs >= 12_000,
+    siblings: opts.siblings,
   });
   working = {
     ...working,

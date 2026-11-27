@@ -41,7 +41,7 @@ type Attempt = { sections: Section[]; scores: QaScores; notes: string[]; misses:
 function logQa(name: string, report: QaReport): void {
   const s = report.scores;
   console.info(
-    `[qa] “${name}” mode=${report.mode} rounds=${report.rounds} score=${s.total} hierarchy=${s.hierarchy} typeScale=${s.typeScale} spacing=${s.spacing} contrast=${s.contrast} styleMatch=${s.styleMatch} mobile=${s.mobile} blandness=${s.blandness} kept=${report.kept} ${report.ms}ms`,
+    `[qa] “${name}” mode=${report.mode} rounds=${report.rounds} score=${s.total} hierarchy=${s.hierarchy} typeScale=${s.typeScale} spacing=${s.spacing} contrast=${s.contrast} styleMatch=${s.styleMatch} mobile=${s.mobile} blandness=${s.blandness} distinctness=${s.distinctness} kept=${report.kept} ${report.ms}ms`,
   );
 }
 
@@ -53,7 +53,7 @@ export async function polishAndQa(
   site: StoredSite,
   ctx: NormalizeContext,
   budgetMs: number,
-  opts: { rewrite?: boolean } = {},
+  opts: { rewrite?: boolean; siblings?: import("./types.ts").DesignDirection[] } = {},
 ): Promise<{ sections: Section[]; polish: PolishInfo }> {
   const home = site.pages.find((p) => p.slug === "home");
   const original = home?.sections ?? [];
@@ -65,8 +65,8 @@ export async function polishAndQa(
   const name = design?.name ?? site.name ?? "look";
 
   const structural = design
-    ? structuralScore({ design, sections: original, facts: site.facts })
-    : { hierarchy: 50, typeScale: 50, spacing: 50, contrast: 50, styleMatch: 50, mobile: 50, blandness: 50, total: 50 };
+    ? structuralScore({ design, sections: original, facts: site.facts, siblings: opts.siblings })
+    : { hierarchy: 50, typeScale: 50, spacing: 50, contrast: 50, styleMatch: 50, mobile: 50, blandness: 50, distinctness: 50, total: 50 };
   const startMisses = design ? structuralMisses({ design, sections: original, scores: structural }) : [];
 
   if (!home || !original.length || !design) {
@@ -158,7 +158,7 @@ export async function polishAndQa(
       const heroOk = revised[0] && revised[0].type === original[0]?.type;
       if (revised.length >= 3 && heroOk) nextSections = revised;
     }
-    const struct = structuralScore({ design, sections: nextSections, facts: site.facts });
+    const struct = structuralScore({ design, sections: nextSections, facts: site.facts, siblings: opts.siblings });
     const scores = mergeScores(struct, parseAiScores(json.scores));
     const nextMisses = listed.length ? listed : structuralMisses({ design, sections: nextSections, scores });
     return { sections: nextSections, scores, notes: notes.length ? notes : nextMisses, misses: nextMisses, method };

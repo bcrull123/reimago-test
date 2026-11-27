@@ -384,7 +384,7 @@ Bob on aceee96: "It still doesn't have the what would you change box in the rend
 - **Custom Design card:** the two thumbnails ("Design · Grok Imagine" and "Built page · Grok") and their captions are gone. The box takes their place, as on the other cards. `design_mockup_url` still goes to Formcarry and the webhook (`look.custom.mockupUrl`), and the `[imagine]` / `[design]` logs are unchanged.
 - **Full-size rendering:** the look being previewed gets the same box (`data-preview-edit`) between its "Choose this look" bar and the live page. It edits only that look, like the card's own box. The preview pages themselves (`/made/<id>`, "Open full site") ship no JavaScript, so they have no box.
 - **Phone:** under 420 px wide, the field and the Change button stack. The button is primary-colored, at least 6.5rem wide and 44 px tall, with `whitespace-nowrap`, so its label always shows (the e2e checks the label text and size at 390 px).
-- **Build stamp:** the site footer shows `Build <short commit> · <build time> UTC` (`data-build-stamp`). It comes from `BUILD_COMMIT`, `VERCEL_GIT_COMMIT_SHA` or `GITHUB_SHA`, else `git rev-parse --short HEAD`, else the first line of `RELEASE.txt` (currently `r15`) when the host builds without `.git` or a commit env var, read at build time (`vite.config.ts` `define: __BUILD_STAMP__`). With `npm run dev`, it is read when the server starts.
+- **Build stamp:** the site footer shows `Build <short commit> · <build time> UTC` (`data-build-stamp`). It comes from `BUILD_COMMIT`, `VERCEL_GIT_COMMIT_SHA` or `GITHUB_SHA`, else `git rev-parse --short HEAD`, else the first line of `RELEASE.txt` (currently `r15b`) when the host builds without `.git` or a commit env var, read at build time (`vite.config.ts` `define: __BUILD_STAMP__`). With `npm run dev`, it is read when the server starts.
 
 ### Round 9b: photo changes never "change" to the same photo; keys, timings, Google optional
 
@@ -916,6 +916,17 @@ Reasoning effort: **low** on copy, QA, layout, and look-edit refine; **high** on
 Time: extra ~15–30s of model work when AI is on, with hard cutoffs so looks still return well before `maxDuration` 300s. Do not set `PREVIEW_MOCK` or `RATE_LIMIT_SCALE` on the published app.
 
 **Tests:** `src/lib/preview/stage-brief.test.ts`, `src/lib/preview/qa.test.ts`. Footer stamp `r15`.
+
+### Round 15b: hard diversity and Custom Design quality
+
+Bob's r15 Pauls Valley reimagine still looked too similar: all three cards were cream/navy/burnt-orange with serif display headlines and the same civic-proud voice, and Custom Design shipped a cropped tree/sky hero with a tiny corner headline. `differsHow` was only an adjective.
+
+A fixed matrix now assigns each look a hard axis set, then a programmatic check (`src/lib/preview/look-diversity.ts`) rewrites the weaker look if two are still too close: light vs dark vs saturated base; serif vs geometric sans vs condensed/display sans (no two serif display fonts); split vs full-bleed vs bento layout; accent hues at least ~40° apart; a different tone of voice. Theme-lean (horror) and era palettes/fonts are preserved. Logged as `[diversity]`. The QA score adds a `distinctness` dimension against sibling looks.
+
+Custom Design quality (`custom-quality.ts`): if the hero is mostly sky/foliage, the headline is tiny, the CTA is not tappable, or the hero is an empty arc crop, the look gets one repair pass and then falls back to a polished from-scratch layout that uses the site's best photo, large type, and a 44px CTA — rather than shipping the broken page. Custom Design's brief typography and palette are synced so they still differ from the other two.
+
+**Tests:** `src/lib/preview/look-diversity.test.ts`, `src/lib/preview/custom-quality.test.ts`. Footer stamp `r15b`.
+
 
 ## Create a New Site: domain first
 

@@ -152,6 +152,12 @@ export const previewDirections = createServerFn({ method: "POST" })
         // designed from scratch; the other two stay template looks for comparison.
         const brief = await briefP;
         directions = directions.map((d, i) => (i === 2 ? asCustomDirection(d, brief) : d));
+        // The creative brief often reuses a cream + serif "front porch" look; re-apply hard diversity
+        // and keep the brief typography/palette in sync so Custom Design is not a twin of Editorial.
+        const { enforceDiversity, syncCustomBrief } = await import("./preview/look-diversity");
+        const diverse = enforceDiversity(directions, data.facts);
+        directions = diverse.directions.map(syncCustomBrief);
+        for (const line of diverse.log) console.info(`[diversity] after custom brief: ${line}`);
       }
       return { ok: true, plan: planned.plan, directions, note };
     } catch (error) {
@@ -161,10 +167,11 @@ export const previewDirections = createServerFn({ method: "POST" })
 
 /** Step 3 — build one look: its images and its homepage. The browser runs the three looks in parallel. */
 export const previewLook = createServerFn({ method: "POST" })
-  .validator((input: { facts?: unknown; plan?: unknown; direction?: unknown; index?: number; variation?: number }) => ({
+  .validator((input: { facts?: unknown; plan?: unknown; direction?: unknown; index?: number; variation?: number; siblings?: unknown }) => ({
     facts: clampFacts(input?.facts),
     plan: clampPlanInput(input?.plan),
     direction: clampPlanInput(input?.direction),
+    siblings: Array.isArray(input?.siblings) ? input.siblings.slice(0, 2) : undefined,
     index: typeof input?.index === "number" ? Math.max(0, Math.min(2, Math.floor(input.index))) : 0,
     variation: variationOf(input?.variation),
   }))
@@ -181,9 +188,10 @@ export const previewLook = createServerFn({ method: "POST" })
       const plan = normalizePlan(rawPlan, data.facts, data.variation);
       if (rawPlan && typeof rawPlan === "object" && rawPlan.mock) plan.mock = true;
       const direction = normalizeDirection(data.direction, data.index, data.facts);
+      const siblings = (data.siblings ?? []).map((raw, i) => normalizeDirection(raw, i === data.index ? (data.index + 1) % 3 : i, data.facts));
       const id = newPageId();
       const tLook = Date.now();
-      const { site, ai, aiError, aiWarning, generated, photos } = await buildLook(id, data.facts, plan, direction, data.index);
+      const { site, ai, aiError, aiWarning, generated, photos } = await buildLook(id, data.facts, plan, direction, data.index, { siblings });
       console.info(`[timing] look ${data.index + 1} "${direction.name}": built in ${Date.now() - tLook}ms`);
       await saveSite(site);
       const look: LookInfo = {

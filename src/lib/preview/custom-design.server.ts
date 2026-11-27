@@ -4,6 +4,7 @@
  * is still broken. Logs start with [design]. Pure parts (prompts, sanitizer, validator): custom-design.ts.
  */
 import { aiAvailable, aiModel, chatJson, generateImage, imageModelInfo, imageProvider, isMockMode, type ContentPart } from "@/lib/ai-provider.server";
+import { customQualityProblems, pickBestSitePhoto, polishedScratchLayout, sampleHeroSubject } from "./custom-quality";
 import {
   CUSTOM_NAME,
   autoFixContrast,
@@ -570,6 +571,7 @@ export async function designCustom(site: StoredSite, deadline: number, mockup?: 
   const extra = artReady ? [] : await makeAssets(site, readAssets(rawAssets), deadline);
   const assets = [...madeArt, ...extra, ...(site.images?.hero && !ctx.images.some((i) => i.name === "hero") ? ["hero"] : [])];
   let result = check(ctx, palette, first, assets);
+  result = await withHeroQuality(site, result);
   const report = (r: typeof result) =>
     `${r.problems.length ? `${structural(r.problems).length} structural problem(s)${r.problems.length - structural(r.problems).length ? ` + ${r.problems.length - structural(r.problems).length} contrast` : ""}: ${r.problems.join(" | ").slice(0, 600)}` : "pass"}${r.autofixed.length ? ` · contrast auto-fixed (${r.autofixed.length}): ${r.autofixed.slice(0, 4).join("; ")}` : ""}${r.stripped.length ? ` · sanitized: ${r.stripped.join(", ").slice(0, 300)}` : ""}`;
   console.info(`[design] checks “${brief.concept}”: ${report(result)}`);
@@ -584,14 +586,22 @@ export async function designCustom(site: StoredSite, deadline: number, mockup?: 
     repaired = asks;
     const fixed = await ask(repairPrompt(ctx, brief, first, asks, fromMockup, colorsText, artReady), "repair pass");
     if (!fixed) {
-      if (structural(result.problems).length) return { reason: `the draft failed checks (${structural(result.problems)[0]}) and the repair pass did not return in time` };
+      if (structural(result.problems).length) {
+        const fallback = polishedFromScratch(site, brief, fonts, palette, `the draft failed checks (${structural(result.problems)[0]}) and the repair pass did not return in time`);
+        if (fallback) return { design: fallback };
+        return { reason: `the draft failed checks (${structural(result.problems)[0]}) and the repair pass did not return in time` };
+      }
       repaired = undefined; // fidelity-only repair timed out: keep the (valid) first build
     } else {
-      const again = check(ctx, palette, missing.length ? dropMissing(fixed, missing) : fixed, assets);
+      const again = await withHeroQuality(site, check(ctx, palette, missing.length ? dropMissing(fixed, missing) : fixed, assets));
       const fidAgain = fid(again);
       console.info(`[design] checks after repair: ${report(again)}${fidAgain ? ` · fidelity ${fidAgain.score}/100` : ""}`);
       if (structural(again.problems).length) {
-        if (structural(result.problems).length) return { reason: `still failing after the repair pass: ${structural(again.problems).slice(0, 2).join(" ")}` };
+        if (structural(result.problems).length) {
+          const fallback = polishedFromScratch(site, brief, fonts, palette, `still failing after the repair pass: ${structural(again.problems).slice(0, 2).join(" ")}`);
+          if (fallback) return { design: fallback };
+          return { reason: `still failing after the repair pass: ${structural(again.problems).slice(0, 2).join(" ")}` };
+        }
         repaired = undefined; // the fidelity repair broke the page: keep the first build
       } else if (!structural(result.problems).length && fidAgain && fidelity && fidAgain.score < fidelity.score) {
         repaired = undefined; // the fidelity repair made it worse: keep the first build
@@ -622,6 +632,84 @@ export async function designCustom(site: StoredSite, deadline: number, mockup?: 
   const own = imgs.filter((n) => /^the business's (own photo|signature graphic)/.test(ctx.images.find((i) => i.name === n)?.kind ?? ""));
   console.info(`[design] “${brief.concept}” ready (${design.status}${fromMockup ? ", from the Imagine mockup" : ", from the text brief"}) in ${secs(design.ms!)} · ${design.html.length} chars html · images ${imgs.join(", ") || "none"} (${own.length} of the site's own${site.images?.["brand-art"] && imgs.includes("brand-art") ? ", incl. its signature graphic" : ""})${used.length ? ` · Imagine art ${used.join(", ")}` : ""}${fidelity ? ` · fidelity ${fidelity.score}/100` : ""}${ctx.keep ? " · kept picture shown" : ""}${design.photoLine ? ` · card: ${design.photoLine}` : ""}`);
   return { design };
+}
+
+
+async function withHeroQuality(site: StoredSite, result: ReturnType<typeof check>): Promise<ReturnType<typeof check>> {
+  const used = [...(result.html + result.css).matchAll(/@img:([a-z0-9-]+)/g)].map((m) => m[1]!);
+  const heroName = used.find((n) => n === "hero") ?? used[0];
+  const meta = heroName ? site.images?.[heroName] : undefined;
+  const better = Boolean(pickBestSitePhoto(site.images, heroName));
+  let sample: ReturnType<typeof sampleHeroSubject> | undefined;
+  if (heroName) sample = await sampleStoredHero(site.id, heroName);
+  const extra = customQualityProblems(result.html, result.css, {
+    alt: meta?.alt,
+    shows: (meta as { shows?: string } | undefined)?.shows,
+    sample,
+    hasBetterPhoto: better,
+  });
+  if (extra.length) console.info(`[qa] custom quality: ${extra.join(" | ").slice(0, 400)}`);
+  return { ...result, problems: [...result.problems, ...extra] };
+}
+
+async function sampleStoredHero(id: string, name: string): Promise<ReturnType<typeof sampleHeroSubject> | undefined> {
+  try {
+    const { readImage } = await import("@/lib/pages.server");
+    const img = await readImage(id, name);
+    if (!img?.bytes) return undefined;
+    const type = img.type || "";
+    if (/png/.test(type)) {
+      const { PNG } = await import("pngjs");
+      const png = PNG.sync.read(img.bytes);
+      return sampleHeroSubject(png.data, png.width, png.height);
+    }
+    if (/jpe?g/.test(type)) {
+      const jpeg = (await import("jpeg-js")).default;
+      const decoded = jpeg.decode(img.bytes, { useTArray: true, maxResolutionInMP: 16, maxMemoryUsageInMB: 200 });
+      return sampleHeroSubject(decoded.data, decoded.width, decoded.height);
+    }
+  } catch (error) {
+    console.info(`[qa] custom hero sample skipped: ${error instanceof Error ? error.message.slice(0, 120) : "error"}`);
+  }
+  return undefined;
+}
+
+function polishedFromScratch(
+  site: StoredSite,
+  brief: CustomBrief,
+  fonts: { heading: string; body: string },
+  palette: SitePalette,
+  why: string,
+): CustomDesign | undefined {
+  const photo = pickBestSitePhoto(site.images);
+  const src = site.plan?.pages ?? site.pages;
+  const pages = src.map((p: { slug: string; navLabel?: string; title?: string }) => ({ slug: p.slug, navLabel: p.navLabel || p.title || p.slug, title: p.title || p.slug }));
+  const layout = polishedScratchLayout({
+    name: site.name,
+    headline: brief.headline || site.tagline || site.name,
+    tagline: site.tagline,
+    description: site.facts?.description ?? site.plan?.summary,
+    cta: site.plan?.cta ?? site.cta ?? { label: "Get in touch", slug: "contact" },
+    pages: pages.length ? pages : [{ slug: "home", title: "Home" }, { slug: "contact", title: "Contact" }],
+    phone: site.phone,
+    email: site.email,
+    fonts,
+    palette,
+    photo: photo?.name,
+    photoAlt: photo?.alt || photo?.shows,
+  });
+  console.info(`[scratch] quality failed after repair (${why.slice(0, 180)}); shipping a polished from-scratch layout${photo ? ` with “${photo.name}”` : " (big type, no weak crop)"}`);
+  return {
+    brief,
+    css: layout.css,
+    html: layout.html,
+    fonts,
+    status: "repaired",
+    stripped: [],
+    repaired: [why.slice(0, 220), "Replaced with a polished from-scratch layout using a strong site photo."],
+    source: "brief",
+    photoLine: photo ? `Photo: your site's own “${(photo.alt || photo.name).slice(0, 60)}”` : undefined,
+  };
 }
 
 async function makeAssets(site: StoredSite, wanted: Asset[], deadline: number): Promise<string[]> {

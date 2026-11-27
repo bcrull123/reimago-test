@@ -134,13 +134,13 @@ export function cleanBrief(raw: unknown, fallback: CustomBrief): CustomBrief {
 
 const FALLBACK_CONCEPTS: Record<string, Omit<CustomBrief, "palette" | "by" | "headline">> = {
   town: {
-    concept: "Front Porch",
-    metaphor: "the town as a front porch: a warm welcome, a wide view down main street",
-    mood: "warm, proud, neighborly, sunlit",
-    composition: "a tall photo panel with a hand-drawn SVG horizon line, an asymmetric grid of things to do, a big stamped 'Welcome' seal",
-    typography: { heading: "Fraunces", body: "Work Sans", notes: "big soft serif headings, generous line height" },
-    motion: "the horizon line draws itself once on load",
-    illustration: "an SVG skyline/horizon with a sun and wheat stalks",
+    concept: "Main Street",
+    metaphor: "the town as a wide main street: a strong photo of the place, big type, a clear invitation",
+    mood: "bold, civic, graphic, and neighborly — not a cream letterhead",
+    composition: "a full-bleed or large split hero of a real downtown/main-street photo, oversized condensed headline, a large tappable CTA, a bento grid of city services below",
+    typography: { heading: "Oswald", body: "Work Sans", notes: "condensed display headline, generous and readable body" },
+    motion: "the headline settles in once on load",
+    illustration: "simple SVG street-grid rules and a stamped city seal, never as a substitute for the hero photo",
   },
   restaurant: {
     concept: "The Long Table",
@@ -229,7 +229,8 @@ Technical contract (the page is rejected otherwise):
 - No <script>, no on* attributes, no <form>/<input>, no iframes, no external URLs (no http links except the social links given), no @import, no @font-face (the heading and body Google Fonts are loaded for you: use font-family var(--font-heading) and var(--font-body)).
 - Colors: use the CSS variables we define: var(--background), var(--surface), var(--text), var(--muted), var(--primary), var(--on-primary), var(--accent), var(--on-accent). Any other color you add must keep text at WCAG AA (4.5:1, 3:1 for headings over 24px) against what it sits on; declare color and background together on the same rule.
 - Responsive: mobile-first or with @media (max-width: 720px) rules; on phones the nav stays reachable (wrap it under the brand, never display:none without a <details> menu); nothing wider than the screen (no fixed widths over 600px; use max-width, %, clamp(), grid/flex). Animations only with @keyframes inside @media (prefers-reduced-motion: no-preference).
-- Keep it lean: html under 30000 characters, css under 18000.`;
+- Keep it lean: html under 30000 characters, css under 18000.
+- Hero quality: the <h1> must be large (clamp with a minimum of ~2.8rem). The hero CTA must be tappable (about 1rem type, ≥44px min-height). Do not leave a tall empty hero with tiny type in a corner. Do not crop the hero photo into a small arc/circle of sky or treetops — if the site has a strong photo of the place (street, building, people, landmark), use it large, full-bleed or a wide split, object-fit cover, object-position center.`;
   const user = `Creative brief: ${JSON.stringify({ concept: brief.concept, metaphor: brief.metaphor, mood: brief.mood, composition: brief.composition, typography: brief.typography, motion: brief.motion, illustration: brief.illustration, headline: brief.headline })}
 Site: ${contextJson(ctx)}`;
   return { system, user };

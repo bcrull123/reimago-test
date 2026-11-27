@@ -367,7 +367,7 @@ export function HomePage() {
     setStage("paint");
     const settled = await Promise.allSettled(
       planned.directions.map(async (direction, index) => {
-        const built = await previewLook({ data: { facts: nextFacts, plan: planned.plan, direction, index, variation: nextVariation }, signal });
+        const built = await previewLook({ data: { facts: nextFacts, plan: planned.plan, direction, index, variation: nextVariation, siblings: planned.directions.filter((_, j) => j !== index) }, signal });
         stop();
         // The from-scratch look: its template build first (images, sub-pages, the fallback), then Grok's own design.
         if (!built.ok || !direction.custom) return built;
