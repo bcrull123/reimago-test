@@ -5,12 +5,14 @@ import { diversifyDirections } from "./look-variety.ts";
 import { mockDirections, normalizeDirection } from "./design.ts";
 import {
   baseFamily,
+  businessWhere,
   distinctnessScore,
   diversityIssues,
   enforceDiversity,
   fontCategory,
   layoutAxis,
   paletteDistance,
+  placeFromFacts,
   syncCustomBrief,
 } from "./look-diversity.ts";
 import type { DesignDirection, SiteFacts, SitePalette } from "./types.ts";
@@ -104,6 +106,88 @@ describe("enforceDiversity", () => {
     assert.equal(synced.custom?.brief.typography.heading, custom!.fonts.heading);
     assert.equal(synced.custom?.brief.palette.background, custom!.palette.background);
     assert.notEqual(synced.custom?.brief.typography.heading, "Fraunces");
+    assert.match(synced.mood, /Town Front Porch/);
+    assert.doesNotMatch(synced.mood, /cream letterhead/i);
+  });
+
+  it("aligns name, description, swatches and fonts from the same final look; Custom Design uses its concept", () => {
+    const raw = [0, 1, 2].map((i) =>
+      normalizeDirection(
+        {
+          archetype: ["editorial", "minimal-luxury", "playful"][i],
+          name: ["Editorial", "Minimal Luxury", "Custom Design"][i],
+          mood: "Warm, neighborly, civic-proud, sunlit and rooted",
+          palette: { ...cream },
+          fonts: { heading: "DM Serif Display", body: "Source Sans 3" },
+          hero: "split",
+          heroStyle: "caption",
+          header: "light",
+        },
+        i,
+        pv,
+      ),
+    );
+    raw[2] = { ...raw[2]!, custom: { brief: { concept: "Shared Front Porch", typography: { heading: "Fraunces", body: "Work Sans", notes: "" }, palette: cream, metaphor: "a wide open front porch where paths meet, neighbors linger, and the whole town lays out", mood: "Bold, graphic, and colorful — not a cream letterhead. Direct and neighborly.", composition: "", motion: "", illustration: "", headline: "Hi", by: "fallback" } } };
+    const { directions } = enforceDiversity(raw, pv);
+    assert.deepEqual(directions.map((d) => d.name), ["Editorial", "Dark Premium", "Custom Design"]);
+    assert.equal(directions[1]!.archetype, "dark-premium");
+    assert.match(directions[1]!.mood, /cinematic|after-dark|Pauls Valley/i);
+    assert.doesNotMatch(directions[1]!.mood, /minimal luxury|quiet, precise/i);
+    assert.match(directions[2]!.mood, /Shared Front Porch/i);
+    assert.doesNotMatch(directions.map((d) => d.mood).join(" "), /cream letterhead/i);
+    // Name, mood, fonts and palette come from the same assigned slot.
+    assert.equal(baseFamily(directions[1]!.palette), "dark");
+    assert.equal(fontCategory(directions[1]!.fonts.heading), "geometric-sans");
+    const synced = syncCustomBrief(directions[2]!);
+    assert.match(synced.mood, /Shared Front Porch/i);
+    assert.doesNotMatch(synced.mood, /cream letterhead/i);
+  });
+
+  it("writes Cafe 501 card blurbs for this restaurant, not a fixed style template", () => {
+    const cafe: SiteFacts = {
+      ...pv,
+      sourceUrl: "https://cafe501.com/",
+      host: "cafe501.com",
+      name: "Cafe 501",
+      description: "An American restaurant in Edmond, Oklahoma.",
+      address: "501 S Boulevard, Edmond, OK 73034",
+      industry: "restaurant",
+      services: ["Brunch", "Lunch", "Dinner"],
+    };
+    const editorialMood = "Like a beloved local magazine spread—sunlit, conversational, and quietly proud of the neighborhood table. It should feel like reading the brunch section over coffee.";
+    const raw = [0, 1, 2].map((i) =>
+      normalizeDirection(
+        {
+          archetype: ["editorial", "dark-premium", "playful"][i],
+          name: ["Editorial", "Dark Premium", "Custom Design"][i],
+          mood: i === 0 ? editorialMood : "Cinematic and confident after dark: deep ground, warm metallic light, photography that glows, short punchy lines.",
+          palette: { ...cream },
+          fonts: { heading: "DM Serif Display", body: "Source Sans 3" },
+          hero: "split",
+          heroStyle: "caption",
+          header: "light",
+        },
+        i,
+        cafe,
+      ),
+    );
+    raw[2] = { ...raw[2]!, custom: { brief: { concept: "Neighborhood Table", typography: { heading: "Oswald", body: "Work Sans", notes: "" }, palette: cream, metaphor: "", mood: "Bold, graphic, and colorful — not a cream letterhead.", composition: "", motion: "", illustration: "", headline: "Linger longer over Edmond's best plates", by: "fallback" } } };
+    const { directions } = enforceDiversity(raw, cafe);
+    assert.equal(directions[0]!.name, "Editorial");
+    assert.equal(directions[0]!.mood, editorialMood);
+    assert.equal(directions[1]!.name, "Dark Premium");
+    assert.match(directions[1]!.mood, /Cafe 501/);
+    assert.match(directions[1]!.mood, /Edmond/);
+    assert.doesNotMatch(directions[1]!.mood, /Cinematic and confident after dark:/);
+    assert.equal(directions[2]!.name, "Custom Design");
+    assert.match(directions[2]!.mood, /Neighborhood Table/i);
+    assert.ok(!directions.some((d) => /cream letterhead/i.test(d.mood)));
+    assert.equal(businessWhere(cafe), "Cafe 501 in Edmond, OK");
+  });
+
+  it("reads the city from a civic or restaurant address", () => {
+    assert.equal(placeFromFacts(pv), "Pauls Valley, OK");
+    assert.equal(placeFromFacts({ address: "501 S Boulevard, Edmond, OK 73034" }), "Edmond, OK");
   });
 });
 

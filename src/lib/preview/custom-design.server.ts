@@ -39,6 +39,10 @@ import { withTheme } from "./theme-lean.ts";
 import { signatureSubject } from "./signature-hero.server.ts";
 import type { StoredSite } from "./render.ts";
 import type { DesignDirection, SiteFacts, SitePalette } from "./types.ts";
+import { cleanCaption } from "./text-case.ts";
+import { customLookMood } from "./look-diversity.ts";
+import { rewriteUnfortunateText, logCopyGuard } from "./copy-guard.ts";
+import { applyHtmlCopyGuard } from "./copy-guard.server.ts";
 
 export { CUSTOM_NAME };
 
@@ -449,6 +453,11 @@ function dropMissing(d: Draft, missing: string[]): Draft {
 }
 
 /** The card's picture line for the custom page. */
+
+function guardedCustomHtml(html: string, facts: { name?: string; description?: string; industry?: string; about?: string; services?: string[]; tagline?: string; address?: string; host?: string } | undefined): string {
+  return applyHtmlCopyGuard(html, facts, CUSTOM_NAME);
+}
+
 function photoLineFor(site: StoredSite, html: string): string | undefined {
   const uses = (n: string) => new RegExp(`@img:${n}\\b`).test(html);
   const imgs = site.images ?? {};
@@ -462,7 +471,10 @@ function photoLineFor(site: StoredSite, html: string): string | undefined {
     if (own) parts.push(`Photo${own === 1 ? "" : "s"}: your site's own (${own})`);
     return parts.join(" · ");
   }
-  if (imgs["brand-art"] && uses("brand-art")) parts.push(`Art: your site's own ${imgs["brand-art"].alt.slice(0, 40)}${art ? `, with ${art} piece${art === 1 ? "" : "s"} of art created by Grok Imagine for this design` : ""}`);
+  if (imgs["brand-art"] && uses("brand-art")) {
+    const label = cleanCaption(imgs["brand-art"].alt);
+    parts.push(`Art: your site's own${label ? ` (“${label.slice(0, 40)}”)` : " graphic"}${art ? `, with ${art} piece${art === 1 ? "" : "s"} of art created by Grok Imagine for this design` : ""}`);
+  }
   else if (art && !(imgs.hero && !imgs.hero.imagine && uses("hero"))) parts.push("Art: created by Grok Imagine for this design");
   if (imgs.hero?.temporary && uses("hero")) parts.push("Photo: from Google Images (Grok Imagine was unavailable; preview only)");
   else if (own) parts.push(`Photo${own === 1 ? "" : "s"}: your site's own (${own})`);
@@ -615,7 +627,7 @@ export async function designCustom(site: StoredSite, deadline: number, mockup?: 
   const design: CustomDesign = {
     brief,
     css: result.css,
-    html: result.html,
+    html: guardedCustomHtml(result.html, site.facts),
     fonts,
     status: repaired ? "repaired" : "ok",
     stripped: result.stripped,
@@ -702,7 +714,7 @@ function polishedFromScratch(
   return {
     brief,
     css: layout.css,
-    html: layout.html,
+    html: guardedCustomHtml(layout.html, site.facts),
     fonts,
     status: "repaired",
     stripped: [],
@@ -782,7 +794,7 @@ export async function editCustom(site: StoredSite, palette: SitePalette, request
       return { design: base, palette, how: "colors retuned (the AI edit failed checks)" };
     }
     console.info(`[design] edit “${request.slice(0, 80)}” by Grok in ${secs(Date.now() - t)}: ${draft.html ? "html+css" : "palette only"}${nextPalette.background !== site.palette.background ? ` · background ${site.palette.background} -> ${nextPalette.background}` : ""}${result.autofixed.length ? ` · contrast auto-fixed (${result.autofixed.length})` : ""} · edited in place${current.mockup ? " (the Imagine mockup is kept as the original design)" : ""}`);
-    return { design: { ...base, css: result.css, html: result.html, brief: { ...base.brief, palette: nextPalette }, stripped: [...base.stripped, ...result.stripped] }, palette: nextPalette, how: "edited by Grok" };
+    return { design: { ...base, css: result.css, html: guardedCustomHtml(result.html, site.facts), brief: { ...base.brief, palette: nextPalette }, stripped: [...base.stripped, ...result.stripped] }, palette: nextPalette, how: "edited by Grok" };
   } catch (error) {
     console.info(`[design] edit failed (${error instanceof Error ? error.message.slice(0, 120) : "error"}); colors retuned only`);
     return { design: base, palette, how: "colors retuned (the AI edit failed)" };
@@ -794,5 +806,7 @@ export function asCustomDirection(d: DesignDirection, brief: CustomBrief): Desig
   const palette = brief.by === "ai" ? brief.palette : d.palette;
   const fonts = { heading: safeFont(brief.typography.heading, HEADING_FONTS, d.fonts.heading), body: safeFont(brief.typography.body, BODY_FONTS, d.fonts.body) };
   console.info(`[design] look 3 is the from-scratch “${CUSTOM_NAME}”: concept “${brief.concept}” (${brief.by === "ai" ? "Grok brief" : "fallback brief"}); its sub-pages and fallback use the ${d.archetype} template with the brief's colors`);
-  return { ...d, name: CUSTOM_NAME, palette, fonts, mood: brief.mood || d.mood, headline: brief.headline || d.headline, custom: { brief: { ...brief, palette } } };
+  const headline = rewriteUnfortunateText(brief.headline || d.headline || "", { name: d.name }).text || brief.headline || d.headline;
+  if (headline && brief.headline && headline !== brief.headline) logCopyGuard(CUSTOM_NAME, [{ from: brief.headline, to: headline, reason: "headline" }], "denylist");
+  return { ...d, name: CUSTOM_NAME, palette, fonts, mood: customLookMood(brief) || d.mood, headline, custom: { brief: { ...brief, palette, headline: headline || brief.headline } } };
 }

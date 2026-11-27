@@ -14,6 +14,7 @@ import { briefFromDirection, type ArtDirectionBrief } from "@/lib/preview/stage-
 import { REIMAGO_SYSTEM } from "@/lib/preview/system-prompt";
 import type { Section } from "@/lib/preview/types";
 import { isBetter, mergeScores, parseAiScores, qaRoundsDefault, structuralMisses, structuralScore, type QaReport, type QaScores } from "@/lib/preview/qa";
+import { guardSections, logCopyGuard } from "@/lib/preview/copy-guard";
 
 export function qaRoundLimit(): number {
   const raw = Number(env("PREVIEW_QA_ROUNDS"));
@@ -34,7 +35,8 @@ const QA_SPECIALIST = `${REIMAGO_SYSTEM}
 
 You are the QA checker. Score the current homepage against the art-direction brief (0-100 on each dimension) and list only concrete misses. If there are misses, return a revised sections list that fixes ONLY those misses — do not restyle or rewrite what already works. Keep the hero type and the brief.
 Return ONLY JSON: {"scores":{"hierarchy":n,"typeScale":n,"spacing":n,"contrast":n,"styleMatch":n,"mobile":n,"blandness":n},"critique":[short notes],"misses":[short misses],"sections":[...revised sections or omit if no change]}
-blandness: 100 = distinctive, 0 = generic template copy. styleMatch: how well the look follows the brief and the owner's style words.`;
+blandness: 100 = distinctive, 0 = generic template copy. styleMatch: how well the look follows the brief and the owner's style words.
+Treat double entendres and off-putting wording as misses (linger/gas/moist/aftertaste around food, bathroom or bodily words, “to die for” in healthcare) and rewrite those lines.`;
 
 type Attempt = { sections: Section[]; scores: QaScores; notes: string[]; misses: string[]; method: "vision" | "html" };
 
@@ -64,20 +66,23 @@ export async function polishAndQa(
   const modePref = critiqueMode();
   const name = design?.name ?? site.name ?? "look";
 
+  const guarded0 = guardSections(original, site.facts, name);
+  if (guarded0.rewrites.length) logCopyGuard(name, guarded0.rewrites, "denylist");
+  const currentSections = guarded0.sections;
   const structural = design
-    ? structuralScore({ design, sections: original, facts: site.facts, siblings: opts.siblings })
+    ? structuralScore({ design, sections: currentSections, facts: site.facts, siblings: opts.siblings })
     : { hierarchy: 50, typeScale: 50, spacing: 50, contrast: 50, styleMatch: 50, mobile: 50, blandness: 50, distinctness: 50, total: 50 };
-  const startMisses = design ? structuralMisses({ design, sections: original, scores: structural }) : [];
+  const startMisses = design ? structuralMisses({ design, sections: currentSections, scores: structural, facts: site.facts }) : [];
 
   if (!home || !original.length || !design) {
     const qa: QaReport = { rounds: 0, mode: "skipped", scores: structural, kept: "latest", ms: Date.now() - started, misses: startMisses };
     logQa(name, qa);
-    return { sections: original, polish: { method: "skipped", notes: [], reason: "No homepage sections.", qa } };
+    return { sections: currentSections, polish: { method: "skipped", notes: [], reason: "No homepage sections.", qa } };
   }
   if (modePref === "off") {
     const qa: QaReport = { rounds: 0, mode: "skipped", scores: structural, kept: "latest", ms: Date.now() - started, misses: startMisses };
     logQa(name, qa);
-    return { sections: original, polish: { method: "skipped", notes: [], reason: "PREVIEW_CRITIQUE=off", qa } };
+    return { sections: currentSections, polish: { method: "skipped", notes: startMisses, reason: "PREVIEW_CRITIQUE=off", qa } };
   }
   if (isMockMode() || !aiAvailable()) {
     const qa: QaReport = {
@@ -90,7 +95,7 @@ export async function polishAndQa(
     };
     logQa(name, qa);
     return {
-      sections: original,
+      sections: currentSections,
       polish: { method: "skipped", notes: startMisses, reason: isMockMode() ? "Mock mode (PREVIEW_MOCK=1): structural QA only." : "AI is not configured: structural QA only.", qa },
     };
   }
@@ -106,7 +111,7 @@ export async function polishAndQa(
   }
 
   const limit = rewrite ? qaRoundLimit() : 1;
-  let best: Attempt = { sections: original, scores: structural, notes: startMisses, misses: startMisses, method: method0 };
+  let best: Attempt = { sections: currentSections, scores: structural, notes: startMisses, misses: startMisses, method: method0 };
   let kept: QaReport["kept"] = "latest";
   let roundsRun = 0;
   let current = original;
@@ -212,9 +217,11 @@ export async function polishAndQa(
   // If we never beat the starting structural score's sections but ran a round that didn't stick, still report the mode that ran.
   if (roundsRun && qa.mode === "structural") qa.mode = method0;
   logQa(name, qa);
+  const final = guardSections(best.sections, site.facts, name);
+  if (final.rewrites.length) logCopyGuard(name, final.rewrites, "denylist");
   const method: PolishInfo["method"] = qa.mode === "vision" || qa.mode === "html" ? qa.mode : "skipped";
   return {
-    sections: best.sections,
+    sections: final.sections,
     polish: {
       method,
       notes: best.notes,

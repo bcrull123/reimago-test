@@ -10,6 +10,8 @@ import { briefFromDirection } from "@/lib/preview/stage-brief";
 import { REIMAGO_SYSTEM } from "@/lib/preview/system-prompt";
 import type { Section } from "@/lib/preview/types";
 import type { StoredSite } from "@/lib/preview/render";
+import { headlineCaseFor, normalizeHeadline, normalizeLead, properNounsFrom } from "./text-case.ts";
+import { guardCopyWithModel } from "./copy-guard.server.ts";
 
 export type CopySeoResult = { sections: Section[]; metaDescription?: string; headline?: string; ms: number; ran: boolean };
 
@@ -22,7 +24,8 @@ Rules:
 - metaDescription is a single factual sentence (no invented claims).
 - CTA must be clear and tappable (2–5 words). There must be a closing cta-band.
 - Fix weak copy only; do not change the hero type, palette, or section count by more than one.
-- Headings and buttons should stay short enough for a mobile screen (hero heading ideally under 70 characters).`;
+- Headings and buttons should stay short enough for a mobile screen (hero heading ideally under 70 characters).
+- Never use double entendres or off-putting wording, especially around food (linger, gas, moist, aftertaste, “leaves you wanting”) or “to die for” in healthcare.`;
 
 export async function copySeoPass(site: StoredSite, ctx: NormalizeContext, budgetMs: number): Promise<CopySeoResult> {
   const started = Date.now();
@@ -57,12 +60,25 @@ export async function copySeoPass(site: StoredSite, ctx: NormalizeContext, budge
     if (typeof raw.headline === "string" && raw.headline.trim() && next[0]) {
       next[0] = { ...next[0], heading: raw.headline.replace(/\s+/g, " ").trim().slice(0, 90) };
     }
-    const meta = typeof raw.metaDescription === "string" ? raw.metaDescription.replace(/\s+/g, " ").trim().slice(0, 160) : undefined;
+    const cased = applyCopyCase(next, design, site.facts);
+    const guarded = await guardCopyWithModel(cased, site.facts, design.name, { budgetMs: Math.max(0, budgetMs - (Date.now() - started)) });
+    const meta = typeof raw.metaDescription === "string" ? normalizeLead(raw.metaDescription, properNounsFrom(site.facts)).slice(0, 160) : undefined;
     const ms = Date.now() - started;
     console.info(`[stage] copy “${design.name}” ${ms}ms${meta ? ` meta=${meta.length}c` : ""}`);
-    return { sections: next, metaDescription: meta, headline: next[0]?.heading, ms, ran: true };
+    return { sections: guarded.sections, metaDescription: meta, headline: guarded.sections[0]?.heading, ms, ran: true };
   } catch (error) {
     console.error(`[stage] copy “${design.name}” failed`, error instanceof Error ? error.message : error);
     return { sections, ms: Date.now() - started, ran: false };
   }
+}
+
+/** Normalize headlines and body copy from the copy pass to the look's style. */
+export function applyCopyCase(sections: Section[], design: StoredSite["design"], facts?: Parameters<typeof properNounsFrom>[0]): Section[] {
+  const proper = properNounsFrom(facts);
+  const style = headlineCaseFor(design ?? undefined, sections[0]?.heading);
+  return sections.map((s, i) => {
+    const heading = s.heading ? normalizeHeadline(s.heading, i === 0 ? style : headlineCaseFor(design ?? undefined, s.heading), proper) : s.heading;
+    const text = s.text ? normalizeLead(s.text, proper) : s.text;
+    return { ...s, heading, text };
+  });
 }

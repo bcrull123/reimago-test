@@ -5,8 +5,8 @@
  * look if two are still too close. Theme-lean (horror) and era palettes/fonts are
  * preserved; only colliding layouts are nudged in those cases.
  */
-import { luminance, readablePalette } from "./design.ts";
-import type { DesignDirection, SitePalette } from "./types.ts";
+import { luminance, LOOK_MOODS, readablePalette } from "./design.ts";
+import type { Archetype, DesignDirection, SitePalette } from "./types.ts";
 import { detectTheme } from "./theme-lean.ts";
 
 export type FontCategory = "serif-display" | "geometric-sans" | "condensed-display" | "novelty-display";
@@ -26,6 +26,8 @@ export type DiversitySlot = {
   hue: HueFamily;
   voice: string;
   palette: SitePalette;
+  name: string;
+  archetype: Archetype;
 };
 
 const SERIF = new Set(["Playfair Display", "Fraunces", "DM Serif Display", "Cormorant Garamond", "Instrument Serif", "Libre Caslon Display", "EB Garamond", "Lora", "Merriweather", "Pirata One"]);
@@ -125,6 +127,8 @@ export const DIVERSITY_MATRIX: DiversitySlot[] = [
     hue: "cool",
     voice: "Clear and civic, like a well-made local magazine: confident restraint, generous margins, no filler slogans.",
     palette: LIGHT,
+    name: "Editorial",
+    archetype: "editorial",
   },
   {
     base: "dark",
@@ -138,6 +142,8 @@ export const DIVERSITY_MATRIX: DiversitySlot[] = [
     hue: "warm",
     voice: "Cinematic and confident after dark: deep ground, warm metallic light, photography that glows, short punchy lines.",
     palette: DARK,
+    name: "Dark Premium",
+    archetype: "dark-premium",
   },
   {
     base: "saturated",
@@ -149,8 +155,10 @@ export const DIVERSITY_MATRIX: DiversitySlot[] = [
     heroStyle: "collage",
     recipe: "bold",
     hue: "vivid",
-    voice: "Bold, graphic, and colorful — not a cream letterhead. Direct and neighborly, with big type and a loud, clear call to action.",
+    voice: "Bold, graphic, and colorful. Direct and neighborly, with big type and a loud, clear call to action.",
     palette: SATURATED,
+    name: "Playful",
+    archetype: "playful",
   },
 ];
 
@@ -182,6 +190,152 @@ export function diversityIssues(directions: DesignDirection[]): DiversityIssue[]
   return out;
 }
 
+
+export function isCustomLook(d: Pick<DesignDirection, "name" | "custom">): boolean {
+  return Boolean(d.custom?.brief) || d.name === "Custom Design";
+}
+
+/** Card blurb for Custom Design: the concept, not a leftover slot voice. */
+export function customLookMood(brief?: { concept?: string; metaphor?: string; mood?: string }): string {
+  const concept = (brief?.concept ?? "").replace(/\s+/g, " ").trim();
+  const metaphor = (brief?.metaphor ?? "").replace(/\s+/g, " ").trim();
+  if (concept && metaphor) {
+    const m = metaphor.charAt(0).toUpperCase() + metaphor.slice(1);
+    const ended = /[.!?]$/.test(m) ? m : `${m}.`;
+    return `${concept}. ${ended}`;
+  }
+  if (concept) return concept;
+  return (brief?.mood ?? "").replace(/\s+/g, " ").trim() || "Designed from scratch for this business.";
+}
+
+function preferredSlot(d: DesignDirection): number | undefined {
+  if (isCustomLook(d)) return 2;
+  if (d.archetype === "dark-premium" || baseFamily(d.palette) === "dark") return 1;
+  if (d.archetype === "editorial" || d.archetype === "minimal-luxury") return 0;
+  if (d.archetype === "playful" || d.archetype === "bold-photo") return 2;
+  return undefined;
+}
+
+/** Which matrix slot each look should get, honoring existing names/archetypes when they don't collide. */
+export function slotOrder(directions: DesignDirection[]): number[] {
+  const n = Math.min(directions.length, DIVERSITY_MATRIX.length);
+  const assigned = Array.from({ length: n }, () => -1);
+  const used = new Set<number>();
+  for (let i = 0; i < n; i += 1) {
+    const pref = preferredSlot(directions[i]!);
+    if (pref != null && pref < n && !used.has(pref)) {
+      assigned[i] = pref;
+      used.add(pref);
+    }
+  }
+  let nextFree = 0;
+  for (let i = 0; i < n; i += 1) {
+    if (assigned[i]! >= 0) continue;
+    while (used.has(nextFree)) nextFree += 1;
+    assigned[i] = nextFree;
+    used.add(nextFree);
+  }
+  return assigned;
+}
+
+/** True when a blurb is a leftover style-template voice, not a brief for this business. */
+export function isTemplateMood(mood: string | undefined): boolean {
+  const t = (mood ?? "").replace(/\s+/g, " ").trim().toLowerCase();
+  if (!t) return true;
+  if (/not a cream letterhead|do not use|don't use |never use |avoid using/.test(t)) return true;
+  const templates = DIVERSITY_MATRIX.map((s) => s.voice.replace(/\s+/g, " ").trim().toLowerCase());
+  if (templates.some((v) => t === v || (v.length > 40 && t.includes(v.slice(0, 48))))) return true;
+  if (/^cinematic and confident after dark/.test(t)) return true;
+  if (/^clear and civic, like a well-made local magazine/.test(t)) return true;
+  if (/^bold, graphic, and colorful/.test(t)) return true;
+  const stock = Object.values(LOOK_MOODS).map((v) => v.replace(/\s+/g, " ").trim().toLowerCase());
+  if (stock.some((v) => t === v || (v.length > 30 && t.startsWith(v.slice(0, 36))))) return true;
+  return false;
+}
+
+export function placeFromFacts(facts?: CardFacts): string {
+  const addr = (facts?.address ?? "").replace(/\s+/g, " ").trim();
+  const matches = [...addr.matchAll(/([A-Za-z][A-Za-z .']+),\s*([A-Z]{2})(?:\s+\d{5}(?:-\d{4})?)?/g)];
+  const m = matches.at(-1);
+  if (!m) return "";
+  const raw = m[1]!.trim();
+  const city = raw.match(/([A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,2})$/)?.[1] ?? raw;
+  return `${city}, ${m[2]}`;
+}
+
+export function businessWhere(facts?: CardFacts): string {
+  const name = (facts?.name ?? "").replace(/\s+/g, " ").trim();
+  const place = placeFromFacts(facts);
+  const city = place.split(",")[0]?.trim() ?? "";
+  if (name && city && !name.toLowerCase().includes(city.toLowerCase())) return `${name} in ${place}`;
+  if (name) return name;
+  return "this business";
+}
+
+function stripInternalPhrases(mood: string): string {
+  return mood
+    .replace(/\s*[—–-]\s*not a cream letterhead\.?/gi, "")
+    .replace(/\bnot a cream letterhead\b[.!]?/gi, "")
+    .replace(/\s{2,}/g, " ")
+    .replace(/\s+([.,])/g, "$1")
+    .trim();
+}
+
+function writeSiteSpecificMood(d: DesignDirection, facts: CardFacts | undefined, slot: DiversitySlot): string {
+  const who = businessWhere(facts);
+  switch (slot.archetype) {
+    case "editorial":
+      return `A clear, civic magazine look for ${who} — confident restraint, generous margins, and a calm, readable page.`;
+    case "dark-premium":
+      return `A cinematic after-dark look for ${who} — deep ground, warm metallic light, and photography that glows.`;
+    case "playful":
+      return `A bold, graphic look for ${who} — big type, vivid color, and a clear call to action.`;
+    case "minimal-luxury":
+      return `A quiet, precise look for ${who} — generous space, soft light, and considered type.`;
+    case "bold-photo":
+      return `A photo-forward look for ${who} — big pictures, short lines, and a confident headline.`;
+    case "warm-craft":
+      return `A warm, handmade look for ${who} — tactile type, soft color, and a neighborly voice.`;
+    default:
+      return `A distinct look for ${who}.`;
+  }
+}
+
+/**
+ * Card blurb from this look's brief for this business — never a leftover
+ * style-template voice, and never an internal instruction like “not a cream letterhead”.
+ */
+export function lookCardDescription(
+  d: DesignDirection,
+  facts: CardFacts | undefined,
+  slot: DiversitySlot,
+  before?: { mood?: string; archetype?: string; name?: string },
+): string {
+  if (isCustomLook(d)) {
+    const fromBrief = customLookMood(d.custom?.brief);
+    if (fromBrief && !isTemplateMood(fromBrief) && fromBrief !== "Designed from scratch for this business.") return stripInternalPhrases(fromBrief);
+    const concept = (d.custom?.brief?.concept ?? "").replace(/\s+/g, " ").trim();
+    if (concept) return concept;
+    return `Designed from scratch for ${businessWhere(facts)}.`;
+  }
+  const existing = stripInternalPhrases((before?.mood ?? d.mood ?? "").replace(/\s+/g, " ").trim());
+  const styleHeld = !before || before.archetype === slot.archetype || before.name === slot.name;
+  if (existing && styleHeld && !isTemplateMood(existing) && existing.length >= 40) return existing;
+  return writeSiteSpecificMood(d, facts, slot);
+}
+
+/** Name, mood, and archetype come from the same final look after diversity. */
+export function alignLookIdentity(
+  d: DesignDirection,
+  slot: DiversitySlot,
+  facts?: CardFacts,
+  before?: { mood?: string; archetype?: string; name?: string },
+): DesignDirection {
+  if (isCustomLook(d)) return { ...d, name: "Custom Design", mood: lookCardDescription(d, facts, slot, before) };
+  const next = { ...d, name: slot.name, archetype: slot.archetype };
+  return { ...next, mood: lookCardDescription(next, facts, slot, before) };
+}
+
 function applySlot(d: DesignDirection, slot: DiversitySlot, opts: { palette: boolean; fonts: boolean; layout: boolean; voice: boolean }): DesignDirection {
   const next: DesignDirection = { ...d };
   if (opts.palette) next.palette = { ...slot.palette };
@@ -195,7 +349,8 @@ function applySlot(d: DesignDirection, slot: DiversitySlot, opts: { palette: boo
   return next;
 }
 
-export type EnforceOpts = { seed?: number; facts?: { notes?: string; feedback?: string[]; description?: string; name?: string; tagline?: string; brief?: string; about?: string } };
+export type CardFacts = { name?: string; tagline?: string; description?: string; about?: string; address?: string; industry?: string; host?: string; services?: string[]; notes?: string; feedback?: string[]; brief?: string };
+export type EnforceOpts = { seed?: number; facts?: CardFacts };
 
 /**
  * Assign the three looks to the fixed matrix and rewrite any look that still collides.
@@ -212,18 +367,20 @@ export function enforceDiversity(directions: DesignDirection[], facts?: EnforceO
   }
 
   let next = directions.map((d) => ({ ...d, palette: { ...d.palette }, fonts: { ...d.fonts } }));
+  const originals = next.map((d) => ({ mood: d.mood, archetype: d.archetype, name: d.name }));
+  const slots = slotOrder(next);
 
-  // First assignment: each index gets its matrix slot (light / dark / saturated).
+  // First assignment: each look gets a matrix slot (prefer matching its archetype/name).
   for (let i = 0; i < Math.min(next.length, DIVERSITY_MATRIX.length); i += 1) {
-    const slot = DIVERSITY_MATRIX[i]!;
+    const slot = DIVERSITY_MATRIX[slots[i]!]!;
     const d = next[i]!;
     const needPalette = !preserveSkin && baseFamily(d.palette) !== slot.base;
     const cat = fontCategory(d.fonts.heading);
     const needFont = !preserveSkin && cat !== slot.font && cat !== "novelty-display";
     const needLayout = layoutAxis(d) !== slot.layout;
-    const needVoice = !preserveSkin && (!d.mood || d.mood === next[(i + 1) % next.length]?.mood);
+    const needVoice = !preserveSkin && !isCustomLook(d) && (!d.mood || d.mood === next[(i + 1) % next.length]?.mood);
     if (needPalette || needFont || needLayout || needVoice) {
-      next[i] = applySlot(d, slot, { palette: needPalette || (!preserveSkin && paletteTooCloseToEarlier(next, i)), fonts: needFont, layout: needLayout, voice: needVoice || !preserveSkin });
+      next[i] = applySlot(d, slot, { palette: needPalette || (!preserveSkin && paletteTooCloseToEarlier(next, i)), fonts: needFont, layout: needLayout, voice: false });
       const applied: string[] = [];
       if (needPalette || (!preserveSkin && baseFamily(next[i]!.palette) === slot.base && baseFamily(d.palette) !== slot.base)) applied.push(`base=${slot.base}`);
       if (needFont) applied.push(`font=${slot.heading} (${slot.font})`);
@@ -241,11 +398,11 @@ export function enforceDiversity(directions: DesignDirection[], facts?: EnforceO
       if (!issue.reasons.some((r) => /layout/.test(r))) continue;
     }
     const j = issue.j;
-    const slot = DIVERSITY_MATRIX[Math.min(j, DIVERSITY_MATRIX.length - 1)]!;
+    const slot = DIVERSITY_MATRIX[slots[j] ?? Math.min(j, DIVERSITY_MATRIX.length - 1)]!;
     const before = next[j]!;
     const fixLayout = issue.reasons.some((r) => /layout/.test(r));
     const fixSkin = !preserveSkin && issue.reasons.some((r) => /palette|base|accent|heading|serif|lightness/.test(r));
-    next[j] = applySlot(before, slot, { palette: fixSkin, fonts: fixSkin, layout: fixLayout, voice: fixSkin });
+    next[j] = applySlot(before, slot, { palette: fixSkin, fonts: fixSkin, layout: fixLayout, voice: false });
     log.push(`“${next[j]!.name}” too close to “${next[issue.i]!.name}” (${issue.reasons.join("; ")}); regenerated to ${slot.base}/${slot.font}/${slot.layout}`);
   }
 
@@ -261,6 +418,10 @@ export function enforceDiversity(directions: DesignDirection[], facts?: EnforceO
   const minP = minPair(next, (a, b) => paletteDistance(a.palette, b.palette));
   const minH = minPair(next, (a, b) => hueDistance(accentHex(a.palette), accentHex(b.palette)));
   log.push(`${issues.length ? "remaining issues" : "ok"}: bases ${bases}, fonts ${fonts}, layouts ${layouts}, min palette Δ=${minP.toFixed(3)}, min hue Δ=${Math.round(minH)}`);
+  if (!preserveSkin) {
+    next = next.map((d, i) => alignLookIdentity(d, DIVERSITY_MATRIX[slots[i] ?? i]!, facts, originals[i]));
+    log.push(`identity: ${next.map((d) => `“${d.name}” ${d.archetype}`).join(" · ")}`);
+  }
   return { directions: next, log };
 }
 
@@ -323,13 +484,14 @@ export function syncCustomBrief(d: DesignDirection): DesignDirection {
   const brief = d.custom.brief;
   return {
     ...d,
+    name: "Custom Design",
+    mood: customLookMood(brief),
     custom: {
       ...d.custom,
       brief: {
         ...brief,
         palette: d.palette,
         typography: { ...brief.typography, heading: d.fonts.heading, body: d.fonts.body },
-        mood: d.mood || brief.mood,
       },
     },
   };

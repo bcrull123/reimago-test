@@ -147,6 +147,14 @@ function authPopupPlugin(): Plugin {
  * The build stamp shown in the site footer (Bob can check which build he's on): the short commit hash from the
  * host's env (Vercel / GitHub), else `git rev-parse`, plus the build date (UTC).
  */
+function releaseLabel(): string {
+  try {
+    return readFileSync(new URL("./RELEASE.txt", import.meta.url), "utf8").trim().split("\n")[0] || "";
+  } catch {
+    return "";
+  }
+}
+
 function buildStamp(): string {
   const env = process.env.BUILD_COMMIT || process.env.VERCEL_GIT_COMMIT_SHA || process.env.GITHUB_SHA || "";
   let sha = env.slice(0, 7);
@@ -157,16 +165,12 @@ function buildStamp(): string {
       sha = "";
     }
   }
-  if (!sha) {
-    // Some hosts (e.g. Grok Build publish) build without .git or commit env vars: fall back to RELEASE.txt,
-    // a hand-bumped label committed with each round.
-    try {
-      sha = readFileSync(new URL("./RELEASE.txt", import.meta.url), "utf8").trim().split("\n")[0] || "unknown";
-    } catch {
-      sha = "unknown";
-    }
-  }
-  return `${sha} · ${new Date().toISOString().slice(0, 16).replace("T", " ")} UTC`;
+  const release = releaseLabel();
+  const when = `${new Date().toISOString().slice(0, 16).replace("T", " ")} UTC`;
+  // Prefer a visible round label (r15c) plus the commit when we have both, so Bob can
+  // confirm the published footer without depending on whether the host has git metadata.
+  const parts = [release && release !== sha ? release : "", sha || release || "unknown", when].filter(Boolean);
+  return parts.join(" · ");
 }
 
 // `0.0.0.0:8080` is the live-preview contract — don't change host/port.

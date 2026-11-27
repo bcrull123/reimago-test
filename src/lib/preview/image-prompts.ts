@@ -10,6 +10,7 @@ import { imageWishes, requestedPhoto, sceneToFind } from "./owner-request.ts";
 import { creditLine, placeOf } from "./web-photo.ts";
 import type { DesignDirection, PreviewTrace, SiteFacts } from "./types.ts";
 import { isFilenameLike } from "./site-photos.ts";
+import { cleanCaption } from "./text-case.ts";
 
 const TRADES: [RegExp, string][] = [
   [/plumb|drain|sewer|water heater/i, "plumbing company"],
@@ -155,7 +156,8 @@ export function photosLine(trace: PreviewTrace | undefined, ownPhotos: number): 
     const raw = hero.credit?.title && !/^your homepage$/i.test(hero.credit.title) ? hero.credit.title : scene ? "" : hero.scene;
     // File-name noise ("o o o", "n.jpg") is not a caption.
     // Round 10: a file name ("background fx dji still004 dji still") is never shown as the caption.
-    const title = /[a-z]{3}/i.test(raw.replace(/\b(?:jpe?g|png|webp)\b/gi, "")) && !/^your homepage$/i.test(raw) && !isFilenameLike(raw) ? raw : "";
+    const maybe = /[a-z]{3}/i.test(raw.replace(/\b(?:jpe?g|png|webp)\b/gi, "")) && !/^your homepage$/i.test(raw) && !isFilenameLike(raw) ? raw : "";
+    const title = cleanCaption(maybe) ?? "";
     return `Photo: your site's own${title ? ` (“${title.slice(0, 50)}”)` : scene ? ` photo of ${what}` : ""}${counts}`;
   }
   if (hero.status === "web photo" && hero.credit) return `Photo: ${creditLine(hero.credit)}`;

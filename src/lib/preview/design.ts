@@ -389,7 +389,7 @@ function archetypeOrder(facts: Pick<SiteFacts, "industry" | "name" | "host" | "n
 }
 
 
-const LOOK_MOODS: Record<Archetype, string> = {
+export const LOOK_MOODS: Record<Archetype, string> = {
   editorial: "Reads like a well-made local magazine: big serif headlines, calm cream paper, confident restraint.",
   "dark-premium": "Moody and premium: deep charcoal, warm metallic accents, and photography that glows.",
   "bold-photo": "Loud and clear: full-bleed photography, heavy type, and one bright accent that says call now.",

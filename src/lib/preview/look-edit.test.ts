@@ -61,6 +61,10 @@ describe("findTargetLook: which look the owner means", () => {
     assert.equal(edit.targetId, "b2");
     assert.deepEqual(edit.adjustments, [{ type: "lighten", amount: "slight" }]);
   });
+  it("editByWording: “Have it say explore our Brick streets” captures the dictated headline", () => {
+    const edit = editByWording("Have it say explore our Brick streets", looks, "b1");
+    assert.equal(edit.copy?.headline, "explore our Brick streets");
+  });
 });
 
 describe("readAdjustments: the requested change and how much", () => {

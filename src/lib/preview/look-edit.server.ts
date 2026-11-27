@@ -41,6 +41,8 @@ import {
 } from "./look-edit.ts";
 import type { StoredSite } from "./render.ts";
 import type { StoredImage } from "./types.ts";
+import { cleanCaption, headlineCaseFor, normalizeHeadline, normalizeLead, properNounsFrom, readDictatedCopy } from "./text-case.ts";
+import { logCopyGuard, rewriteUnfortunateText } from "./copy-guard.ts";
 
 /** The looks on screen, as read back from storage (never the browser's copy). */
 export function lookRefs(sites: StoredSite[]): LookRef[] {
@@ -59,10 +61,12 @@ export function lookRefs(sites: StoredSite[]): LookRef[] {
 export function editByWording(text: string, looks: LookRef[], focusedId?: string): LookEdit {
   const target = findTargetLook(text, looks, focusedId);
   const borrow = findBorrow(text, looks, focusedId);
+  const copy = readDictatedCopy(text);
   return {
     targetId: target?.id,
     how: target?.how,
     adjustments: readAdjustments(text),
+    copy,
     borrow: borrow && borrow.targetId === target?.id ? { fromId: borrow.fromId, assets: borrow.assets } : undefined,
     ...(() => {
       const req = borrow?.assets.includes("photo") ? undefined : readPhotoRequest(text);
@@ -147,7 +151,7 @@ Rules:
       how: rules.how ?? (aiTarget ? `named “${aiTarget.name}” (AI)` : undefined),
       // The planner's reading, plus anything the wording rules caught that it missed ("daylight", "text contrast").
       adjustments: adjustments.length ? [...adjustments, ...rules.adjustments.filter((r) => !adjustments.some((a) => a.type === r.type))].slice(0, 6) : rules.adjustments,
-      copy: copy.headline || copy.lead ? copy : undefined,
+      copy: copy.headline || copy.lead ? copy : rules.copy,
       // A borrowed picture comes from the other look, never from a new search.
       photo,
       photoRequest,
@@ -382,7 +386,8 @@ function heroChangeLine(r: { image: StoredImage; match: PhotoOutcome; note: stri
   if (r.image.temporary) return "Photo: from Google Images (preview only, replaced when your site is built) · as you asked";
   if (r.image.source === "web") return `Photo: ${r.image.credit?.title ? `“${r.image.credit.title.slice(0, 50)}” ` : ""}(${r.image.credit?.provider ?? "web"}, free license) · as you asked`;
   if (r.image.source === "generated") return `${r.note} · as you asked`;
-  return `Photo: your site's own${r.image.alt ? ` (“${r.image.alt.slice(0, 50)}”)` : ""} · as you asked`;
+  const ownAlt = cleanCaption(r.image.alt);
+  return `Photo: your site's own${ownAlt ? ` (“${ownAlt.slice(0, 50)}”)` : ""} · as you asked`;
 }
 
 /**
@@ -435,11 +440,18 @@ export async function buildEdits(stored: StoredSite, edit: LookEdit, feedback: s
     const pages = stored.pages.map((p) => ({ ...p, sections: p.sections?.map((s) => ({ ...s })) }));
     const hero = pages.find((p) => p.slug === "home")?.sections?.[0];
     if (hero && edit.copy?.headline) {
-      hero.heading = edit.copy.headline;
+      const proper = properNounsFrom(stored.facts);
+      const cased = normalizeHeadline(edit.copy.headline, headlineCaseFor(design, hero.heading), proper);
+      const guarded = rewriteUnfortunateText(cased, stored.facts);
+      if (guarded.changed) logCopyGuard(design.name ?? stored.name ?? "look", [{ from: cased, to: guarded.text, reason: guarded.hits.map((h) => h.reason).join("; ") }], "denylist");
+      hero.heading = guarded.text;
       notes.push("new headline");
     }
     if (hero && edit.copy?.lead) {
-      hero.text = edit.copy.lead;
+      const lead = normalizeLead(edit.copy.lead, properNounsFrom(stored.facts));
+      const guarded = rewriteUnfortunateText(lead, stored.facts);
+      if (guarded.changed) logCopyGuard(design.name ?? stored.name ?? "look", [{ from: lead, to: guarded.text, reason: guarded.hits.map((h) => h.reason).join("; ") }], "denylist");
+      hero.text = guarded.text;
       notes.push("new intro text");
     }
     const images: Record<string, StoredImage> = { ...(stored.images ?? {}) };

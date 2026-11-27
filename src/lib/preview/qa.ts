@@ -6,6 +6,7 @@
 import { contrast } from "./design.ts";
 import { detectTheme, type ThemeId } from "./theme-lean.ts";
 import { distinctnessScore } from "./look-diversity.ts";
+import { findUnfortunatePhrasing, type GuardFacts } from "./copy-guard.ts";
 import type { DesignDirection, Section, SitePalette } from "./types.ts";
 
 export const QA_DIMENSIONS = ["hierarchy", "typeScale", "spacing", "contrast", "styleMatch", "mobile", "blandness", "distinctness"] as const;
@@ -158,7 +159,7 @@ const GENERIC_MISS: [RegExp, string][] = [
   [/one-stop shop/i, "copy is bland"],
 ];
 
-export function structuralMisses(input: { design: DesignDirection; sections: Section[]; scores: QaScores }): string[] {
+export function structuralMisses(input: { design: DesignDirection; sections: Section[]; scores: QaScores; facts?: GuardFacts }): string[] {
   const misses: string[] = [];
   const { design, sections, scores } = input;
   if (scores.contrast < 60) misses.push("text contrast against the background is weak");
@@ -169,7 +170,10 @@ export function structuralMisses(input: { design: DesignDirection; sections: Sec
   if (design.fonts.heading === design.fonts.body) misses.push("heading and body use the same font");
   const text = allText(sections);
   for (const [re, label] of GENERIC_MISS) if (re.test(text)) misses.push(label);
-  return [...new Set(misses)].slice(0, 6);
+  for (const hit of findUnfortunatePhrasing(text, input.facts)) {
+    misses.push(`unfortunate phrasing: “${hit.excerpt}” (${hit.reason})`);
+  }
+  return [...new Set(misses)].slice(0, 8);
 }
 
 export function qaRoundsDefault(): number {

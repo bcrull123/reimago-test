@@ -336,6 +336,7 @@ export const previewCustom = createServerFn({ method: "POST" })
         return {
           ok: true,
           name: site.design.name,
+          mood: site.design.mood,
           layout: customLayoutLine(brief),
           custom: {
             concept: brief.concept,
