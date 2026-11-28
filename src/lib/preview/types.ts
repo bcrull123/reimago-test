@@ -28,6 +28,12 @@ export type SiteFacts = {
   description: string;
   logo: string;
   colors: string[];
+  /** Near-black / near-white brand grounds (Cafe 501's black), which color extraction otherwise skips. */
+  inks?: string[];
+  /** Heading/body fonts detected on the current site, when we can read them. */
+  fonts?: string[];
+  /** True when the current homepage is clearly a dark (black) brand. */
+  darkBrand?: boolean;
   phone: string;
   email: string;
   address: string;
@@ -117,7 +123,7 @@ export type DesignDirection = {
   /** "center" = centered logo with the menu under it. */
   header: "light" | "dark" | "overlay" | "center";
   /** How the hero shows its photo; no two looks share one (see look-variety.ts). */
-  heroStyle?: "caption" | "cinematic" | "collage" | "poster" | "panorama" | "framed";
+  heroStyle?: "caption" | "cinematic" | "collage" | "poster" | "panorama" | "framed" | "bleed" | "improved";
   /** Below-the-fold section recipe; no two looks share one. */
   layout?: "editorial" | "showcase" | "bold";
   footer: "columns" | "minimal" | "statement";
@@ -129,8 +135,10 @@ export type DesignDirection = {
   headline: string;
   /** Why this direction fits the business. */
   rationale: string;
-  /** The from-scratch look ("Custom Design"): Grok's creative brief; its homepage is freeform HTML/CSS (custom-design.ts). */
+  /** The from-scratch look ("Custom Design"): Grok's creative brief; its homepage is freeform HTML/CSS (custom-design.ts). Off by default in r16. */
   custom?: { brief: CustomBrief; failed?: string };
+  /** Round 16: a faithful refresh of the current site (card 1, “Your Site, Improved”). Exempt from the light/dark slot matrix. */
+  improved?: boolean;
 };
 
 export const SECTION_TYPES = [

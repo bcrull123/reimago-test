@@ -11,6 +11,7 @@
 import { escapeHtml, pageSlugFor, scrubInventedContacts } from "./sanitize.ts";
 import { requestHints, type RequestedSection } from "./owner-request.ts";
 import { SECTION_TYPES, type DesignDirection, type PlanPage, type Section, type SectionItem, type SectionType, type SiteFacts, type SitePlan } from "./types.ts";
+import { composeImprovedPage, composeSunlitPage, isImprovedLook, isSunlitLook } from "./site-improved.ts";
 
 // ---------------------------------------------------------------- icons (trusted, inline SVG)
 
@@ -501,6 +502,8 @@ export type ComposeImages = { hero?: string; feature?: string; services: string[
  * different compositions so the three mock looks feel genuinely different.
  */
 export function composeMockPage(page: PlanPage, facts: SiteFacts, plan: SitePlan, design: DesignDirection, images: ComposeImages): Section[] {
+  if (isImprovedLook(design)) return composeImprovedPage(page, facts, plan, images);
+  if (isSunlitLook(design)) return composeSunlitPage(page, facts, plan, images);
   const a = design.archetype;
   const servicesSlug = plan.pages.find((p) => /service|menu|product|what-we-do/.test(p.slug))?.slug;
   const aboutSlug = plan.pages.find((p) => p.slug === "about")?.slug;
@@ -724,11 +727,13 @@ export function renderSection(section: Section, ctx: RenderContext): string {
     case "hero-split": {
       // v-caption: framed photo with a caption under it; v-collage: tilted photo + a second photo tile + stamp.
       const caption = section.variant === "caption" && section.image ? ctx.imageCaption?.(section.image) : undefined;
-      const tile = section.variant === "collage" && section.items?.[0]?.image && ctx.images.has(section.items[0].image) ? media(section.items[0].image, ctx, "media tile") : "";
+      const tile = (section.variant === "collage" || section.variant === "bleed") && section.items?.[0]?.image && ctx.images.has(section.items[0].image) ? media(section.items[0].image, ctx, "media tile") : "";
       const visual =
         section.variant === "caption"
           ? `<figure class="frame rv">${media(section.image, ctx)}${caption ? `<figcaption>${esc(caption)}</figcaption>` : ""}</figure>`
-          : `<div class="frame rv">${badge(ctx)}${media(section.image, ctx)}${tile}</div>`;
+          : section.variant === "bleed"
+            ? `<div class="frame bleed-frame rv">${media(section.image, ctx, "media bleed-photo")}${tile}</div>`
+            : `<div class="frame rv">${badge(ctx)}${media(section.image, ctx)}${tile}</div>`;
       return `${open}<div class="wrap grid"><div class="hero-copy">${section.eyebrow ? `<span class="eyebrow">${esc(section.eyebrow)}</span>` : ""}<h1>${rich(section.heading || ctx.name)}</h1>${paragraphs(section.text, "lead")}${actions(section, ctx)}</div>${visual}</div></section>`;
     }
     case "hero-photo":
@@ -757,7 +762,11 @@ export function renderSection(section: Section, ctx: RenderContext): string {
       if (variant === "images" && withImage * 2 < items.length) variant = "icons";
       if (variant === "bento" && items.length > 5) variant = "icons";
       let grid: string;
-      if (variant === "list") {
+      if (variant === "blocks") {
+        grid = `<div class="menu-blocks">${items
+          .map((it, i) => `<article class="menu-block b${(i % 4) + 1} rv"><span class="n">${String(i + 1).padStart(2, "0")}</span><h3>${rich(it.title)}</h3></article>`)
+          .join("")}</div>`;
+      } else if (variant === "list") {
         grid = `<div class="svc-list">${items
           .map((it, i) => `<div class="svc-row rv"><span class="n">${String(i + 1).padStart(2, "0")}</span><h3>${rich(it.title)}</h3><p>${esc(it.text)}</p></div>`)
           .join("")}</div>`;

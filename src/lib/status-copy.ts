@@ -10,7 +10,7 @@ const COPY: Record<StatusMode, Partial<Record<StatusStage, string[]>>> = {
     check: ["Knocking on your site's door…"],
     read: ["Reading your site…", "Hunting down your best photos…", "Taking notes on what you do best…", "Checking which photos are sharp enough…"],
     dream: ["Sketching three fresh looks…", "Pairing fonts and colors…", "Writing headlines that sound like you…"],
-    paint: ["Painting your homepages…", "Grok Imagine is drawing your custom design…", "Placing your photos just so…", "Polishing the details…"],
+    paint: ["Painting your homepages…", "Refreshing your current site…", "Placing your photos just so…", "Polishing the details…"],
     picture: ["Snapping a picture of your look…"],
     send: ["Sending it your way…"],
     finish: ["Building every page in this look…", "Polishing the details…"],

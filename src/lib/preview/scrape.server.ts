@@ -26,6 +26,7 @@ import {
   stripChrome,
 } from "@/lib/reimagine.server";
 import type { ScrapedPage, SiteFacts, SiteNavLink, Testimonial } from "@/lib/preview/types";
+import { brandInks, extractFonts, pageIsDarkBrand } from "./site-brand.ts";
 
 const MAX_EXTRA = 10;
 /** Round 9: a second hop into photo pages (galleries, parks, events…) linked from the first pages. */
@@ -721,13 +722,22 @@ export async function scrapeSite(rawUrl: string, notes: string, options: ScrapeO
     console.info(`[thin] ${base.hostname}: homepage text is thin, deeper crawl tried ${more.length} page${more.length === 1 ? "" : "s"}, read ${deeper}, text now ${textTotal()} chars`);
   }
 
-  // Stylesheets (same site only, max 2) help find brand colors.
+  // Stylesheets help find brand colors. Same-site first, plus a site-builder theme sheet
+  // (Squarespace hosts cafe501.com's palette on static1.squarespace.com / versioned-site-css).
+  const cssRank = (href: string): number => {
+    if (/versioned-site-css|\/site\.css(\?|$)|custom\.css|theme\.css|global\.css/i.test(href)) return 0;
+    if (sameSite(hostOf(href), base.hostname)) return 1;
+    if (/squarespace\.com|sqspcdn\.com|shopify|webflow|wixstatic/i.test(href)) return 3;
+    return 9;
+  };
   const cssLinks = [...home.html.matchAll(/<link\b[^>]*>/gi)]
     .map((m) => m[0])
     .filter((tag) => /stylesheet/i.test(attr(tag, "rel")))
     .map((tag) => httpUrl(attr(tag, "href"), home.url))
-    .filter((href) => href && sameSite(hostOf(href), base.hostname) && !/wp-includes|plugins|font|icon/i.test(href))
-    .slice(0, 2);
+    .filter((href) => href && !/wp-includes|plugins|font|icon|google/i.test(href) && cssRank(href) < 9)
+    .filter((href, i, list) => list.indexOf(href) === i)
+    .sort((a, b) => cssRank(a) - cssRank(b))
+    .slice(0, 3);
   const css = await Promise.all(cssLinks.map((href) => fetchCss(href, deadline)));
   console.info(
     `[timing] read ${base.hostname}: homepage ${tHome}ms, ${firstWave} linked page${firstWave === 1 ? "" : "s"} by ${tPages}ms, ${docs.length - 1 - firstWave} photo page${docs.length - 1 - firstWave === 1 ? "" : "s"} by ${tPhotoPages}ms (${photoPages.length} found), stylesheets by ${Date.now() - t0}ms · cap ${TOTAL_BUDGET_MS / 1000}s`,
@@ -840,7 +850,11 @@ export async function scrapeSite(rawUrl: string, notes: string, options: ScrapeO
     text: readableLines(doc.html).lines.join("\n").slice(0, 1800),
   }));
 
+  const colorSources = [...css, ...inlineStyles, home.html];
   const colors = brandColors([...css, ...inlineStyles], meta(home.html, "theme-color"));
+  const inks = brandInks(colorSources, meta(home.html, "theme-color"), home.html);
+  const darkBrand = pageIsDarkBrand(colorSources, home.html);
+  const fonts = extractFonts(colorSources);
   const industry =
     ld.map((f) => f.type ?? "").find((type) => type && !/^(Organization|LocalBusiness|WebSite|WebPage|Corporation|Place|ProfessionalService)$/i.test(type)) ?? "";
 
@@ -868,6 +882,9 @@ export async function scrapeSite(rawUrl: string, notes: string, options: ScrapeO
     description: (description || thinDescription).slice(0, 400),
     logo,
     colors,
+    inks,
+    fonts,
+    darkBrand,
     phone: phoneRaw ? formatPhone(phoneRaw) : "",
     email: emailRaw.toLowerCase(),
     address: address.slice(0, 160),

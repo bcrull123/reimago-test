@@ -10,6 +10,7 @@
  */
 import { LOW_QUALITY } from "./hero-brief.ts";
 import type { Archetype } from "./types.ts";
+import { isTextGraphicLabel } from "./site-brand.ts";
 
 // ------------------------------------------------------------------------------------------------ pixels
 
@@ -119,7 +120,7 @@ export function hamming(a: string, b: string): number {
 
 /** Signs, plaques, logos and other text-first pictures (fine once, never as every look's hero). */
 export const SIGN_WORDS =
-  /\b(?:welcome\s+(?:to\b|sign)|city\s+limits?|town\s+limits?|(?:entrance|entry|gateway|monument|welcome|city|town|road|street|highway|historical?|marquee)\s+signs?|signs?|signage|plaques?|historical\s+markers?|markers?|billboards?|logos?|seal|emblem|placards?|letters?|lettering|text)\b/i;
+  /\b(?:welcome\s+(?:to\b|sign)|city\s+limits?|town\s+limits?|(?:entrance|entry|gateway|monument|welcome|city|town|road|street|highway|historical?|marquee)\s+signs?|signs?|signage|plaques?|historical\s+markers?|markers?|billboards?|logos?|seal|emblem|placards?|letters?|lettering|text|typography|wordmark|word mark|logotype|type treatment|text graphic|cropped text|monogram|lockup)\b/i;
 
 /** The main clause of a caption ("A park with a flower bed and a historic sign" -> "A park"). */
 export function mainSubject(text: string): string {
@@ -127,7 +128,7 @@ export function mainSubject(text: string): string {
 }
 
 export function isSignLike(text: string): boolean {
-  return SIGN_WORDS.test(text);
+  return SIGN_WORDS.test(text) || isTextGraphicLabel(text);
 }
 
 /** Scene buckets, most specific first. Two photos in the same bucket show "the same subject". */

@@ -237,7 +237,7 @@ export function creditLine(credit: PhotoCredit): string {
 const GOOD_PLACE =
   /\b(downtown|main street|streets?|park|parks|lake|river|creek|skyline|sunset|sunrise|aerial|landscape|landmark|courthouse|city hall|historic|storefronts?|shops?|exterior|facade|welcom\w*|sign|depot|museum|church|fountain|plaza|square|trail|garden|town|patio|dining room)\b/g;
 const GOOD_PEOPLE = /\b(festival|parade|events?|market|families|family|people|crowd|neighbors|kids|children|team|crew|smiling|customers?)\b/g;
-const BAD_ALWAYS = /\b(logo|icon|document|pdf|form|flyer|poster|screenshot|chart|graph|map|agenda|minutes|open bids|bids?|headshots?|portrait|staff photo|employee|mugshot|seal|clip ?art|text reading|qr code|placeholder)\b/g;
+const BAD_ALWAYS = /\b(logo|icon|document|pdf|form|flyer|poster|screenshot|chart|graph|map|agenda|minutes|open bids|bids?|headshots?|portrait|staff photo|employee|mugshot|seal|clip ?art|text reading|qr code|placeholder|wordmark|word mark|logotype|type treatment|text graphic|cropped text|monogram|lockup|banner type)\b/g;
 /** For a town/city site, utility and infrastructure photos are not a welcome (Bob: "why are pipes showing up in a town website?"). */
 const BAD_CIVIC =
   /\b(pipes?|piping|valves?|meters?|pumps?|utility|utilities|sewer|wastewater|water treatment|treatment plant|plant room|tanks?|equipment|machinery|mechanical|industrial|infrastructure|substation|transformers?|wires?|hydrants?|manholes?|technical room|control panel)\b/g;

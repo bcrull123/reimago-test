@@ -9,6 +9,7 @@ import { seeded } from "./look-variety.ts";
 import { cleanEraTag } from "./era-style.ts";
 import { ARCHETYPE_LABEL } from "./archetype-label.ts";
 import { ARCHETYPES, MOTIFS, type Archetype, type DesignDirection, type Motif, type SiteFacts, type SitePalette } from "./types.ts";
+import { finalizeBlurb } from "./blurb.ts";
 
 /** Curated Google Fonts with the exact axis spec that the css2 API accepts (all verified). */
 export const FONT_SPECS: Record<string, string> = {
@@ -295,7 +296,7 @@ export function normalizeDirection(raw: unknown, index: number, facts: Pick<Site
   return {
     id: `look-${index + 1}`,
     name: clip(r.name, 40) || `${archetype.replace("-", " ").replace(/\b\w/g, (c) => c.toUpperCase())}`,
-    mood: clip(r.mood, 240),
+    mood: finalizeBlurb(typeof r.mood === "string" ? r.mood : "", 240),
     archetype,
     palette: readablePalette(r.palette as Partial<SitePalette> | undefined, fallbackPalette),
     fonts: { heading, body },
@@ -308,13 +309,14 @@ export function normalizeDirection(raw: unknown, index: number, facts: Pick<Site
     buttons: oneOf(r.buttons, ["pill", "square", "outline"] as const, preset.buttons),
     hero: oneOf(r.hero, ["split", "photo", "type"] as const, preset.hero),
     header: oneOf(r.header, ["light", "dark", "overlay", "center"] as const, preset.header),
-    heroStyle: oneOf<"caption" | "cinematic" | "collage" | "poster" | "panorama" | "framed" | "">(r.heroStyle, ["caption", "cinematic", "collage", "poster", "panorama", "framed"] as const, "") || undefined,
+    heroStyle: oneOf<"caption" | "cinematic" | "collage" | "poster" | "panorama" | "framed" | "bleed" | "improved" | "">(r.heroStyle, ["caption", "cinematic", "collage", "poster", "panorama", "framed", "bleed", "improved"] as const, "") || undefined,
     layout: oneOf<"editorial" | "showcase" | "bold" | "">(r.layout, ["editorial", "showcase", "bold"] as const, "") || undefined,
     footer: oneOf(r.footer, ["columns", "minimal", "statement"] as const, preset.footer),
     era: cleanEraTag(r.era),
     headline: clip(r.headline, 110),
     rationale: clip(r.rationale, 300),
     custom: customOf(r.custom, clip(r.name, 40), readablePalette(r.palette as Partial<SitePalette> | undefined, fallbackPalette)),
+    improved: r.improved === true ? true : undefined,
   };
 }
 

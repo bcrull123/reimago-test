@@ -452,7 +452,7 @@ export function LooksPicker({
             Not quite right? What would you like to see different?
           </label>
           <p className="mt-1 text-sm text-muted">
-            Tell us in your own words (colors, mood, photos, sections, wording). To change just one look, use the “Change this look” box on that card (or name it here: “Dark Premium, a little lighter”, “use Editorial's picture on Dark Premium”); the other looks stay as they are. Otherwise we'll make 3 new looks using your original note plus this. Nothing is sent until you choose a look.
+            Tell us in your own words (colors, mood, photos, sections, wording). To change just one look, use the “Change this look” box on that card (or name it here: “Dark Premium, a little lighter”, “use Sunlit Cut's picture on Dark Premium”, “the improved one, a clearer menu button”); the other looks stay as they are. Otherwise we'll make 3 new looks using your original note plus this. Nothing is sent until you choose a look.
           </p>
           <textarea
             id="refine-text"

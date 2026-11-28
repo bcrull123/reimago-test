@@ -165,6 +165,7 @@ export type LookRef = { id: string; name: string; archetype: Archetype; index: n
 
 /** "the custom one", "custom design", "the from-scratch one", "bespoke": the from-scratch look. */
 const CUSTOM_LABEL = /\bcustom(?:[\s-]*design)?(?:'?s)?\b|\bfrom[\s-]*scratch\b|\bbespoke\b/g;
+const IMPROVED_LABEL = /\byour\s+site,?\s+improved\b|\bthe\s+improved\s+(?:one|look|version|card)\b|\bthe\s+current\s+site\b/g;
 
 const STOP = new Set(["the", "and", "a", "an", "of", "look", "one", "with", "&"]);
 const norm = (s: string) => s.toLowerCase().replace(/[’']/g, "'").replace(/[^a-z0-9&' ]+/g, " ").replace(/\s+/g, " ").trim();
@@ -307,6 +308,12 @@ export function findLookRefs(text: string, looks: LookRef[]): LookMention[] {
     for (const m of t.matchAll(CUSTOM_LABEL)) {
       if (ADJECTIVAL.test(t.slice(0, m.index!)) && !/^\s*(?:one|look|version|design|option|card)\b/.test(t.slice(m.index! + m[0].length))) continue;
       add(custom[0], "the custom (from-scratch) look", m.index!, m.index! + m[0].length);
+    }
+  }
+  const improved = looks.filter((l) => /your site,? improved/i.test(l.name) || l.index === 0 && /improved/i.test(l.name));
+  if (improved.length === 1) {
+    for (const m of t.matchAll(IMPROVED_LABEL)) {
+      add(improved[0], "the improved look", m.index!, m.index! + m[0].length);
     }
   }
   let pos = 0;

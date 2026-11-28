@@ -15,6 +15,8 @@ import {
   placeFromFacts,
   syncCustomBrief,
 } from "./look-diversity.ts";
+import { arrangeLooks } from "./site-improved.ts";
+import { IMPROVED_NAME, SUNLIT_NAME, isTextGraphicLabel } from "./site-brand.ts";
 import type { DesignDirection, SiteFacts, SitePalette } from "./types.ts";
 
 const civicColors = ["#1b365d", "#c45a12"];
@@ -63,87 +65,66 @@ function threeAlike(): DesignDirection[] {
   );
 }
 
+function arranged(facts: SiteFacts, raw?: DesignDirection[]): DesignDirection[] {
+  return arrangeLooks(raw ?? threeAlike(), facts);
+}
+
 describe("enforceDiversity", () => {
-  it("forces light / dark / saturated bases, three font categories, and three layouts on a cream-serif civic site", () => {
-    const { directions, log } = enforceDiversity(threeAlike(), pv);
-    assert.deepEqual(directions.map((d) => baseFamily(d.palette)), ["light", "dark", "saturated"]);
-    assert.deepEqual(directions.map((d) => fontCategory(d.fonts.heading)), ["serif-display", "geometric-sans", "condensed-display"]);
-    assert.deepEqual(directions.map((d) => layoutAxis(d)), ["split", "full-bleed", "bento"]);
-    assert.equal(diversityIssues(directions).length, 0, log.join(" | "));
-    assert.ok(paletteDistance(directions[0]!.palette, directions[1]!.palette) >= 0.12);
+  it("orders Your Site, Improved / Dark Premium / Sunlit Cut and keeps Improved's brand", () => {
+    const { directions, log } = enforceDiversity(arranged(pv), pv);
+    assert.deepEqual(directions.map((d) => d.name), [IMPROVED_NAME, "Dark Premium", SUNLIT_NAME]);
+    assert.equal(directions[0]!.improved, true);
+    assert.equal(baseFamily(directions[1]!.palette), "dark");
+    assert.equal(fontCategory(directions[1]!.fonts.heading), "geometric-sans");
+    assert.equal(layoutAxis(directions[1]!), "full-bleed");
+    assert.equal(directions[1]!.heroStyle, "cinematic");
+    assert.equal(layoutAxis(directions[2]!), "edge-bleed");
+    assert.equal(directions[2]!.heroStyle, "bleed");
+    assert.equal(directions[2]!.fonts.heading, "Fraunces");
     assert.ok(luminanceOk(directions[1]!.palette.background) < 0.28, "Dark Premium must actually be dark");
-    assert.ok(log.some((l) => /assigned|regenerated|ok:/.test(l)));
+    // No leftover icy blue / lime swatches on Dark Premium.
+    assert.doesNotMatch(directions[1]!.palette.primary, /#8cb4ff/i);
+    assert.doesNotMatch(`${directions[1]!.palette.primary}${directions[1]!.palette.accent}`, /#00ff00|#22c55e|#8cb4ff/i);
+    assert.ok(log.some((l) => /assigned|ok:|identity/.test(l)));
   });
 
-  it("still works on mock Pauls Valley directions (including brand navy + orange)", () => {
-    const raw = diversifyDirections(mockDirections(pv, 0));
-    const { directions, log } = enforceDiversity(raw, pv);
-    assert.equal(new Set(directions.map((d) => baseFamily(d.palette))).size, 3, log.join(" | "));
-    assert.equal(new Set(directions.map((d) => fontCategory(d.fonts.heading))).size, 3);
-    assert.equal(new Set(directions.map((d) => layoutAxis(d))).size, 3);
-    assert.equal(diversityIssues(directions).length, 0, log.join(" | "));
+  it("does not force Improved off a light civic brand, and still makes Sunlit Cut a distinct light look", () => {
+    const { directions, log } = enforceDiversity(arranged(pv, diversifyDirections(mockDirections(pv, 0))), pv);
+    assert.equal(directions[0]!.name, IMPROVED_NAME);
+    assert.ok(baseFamily(directions[0]!.palette) !== "dark", log.join(" | "));
+    assert.equal(baseFamily(directions[1]!.palette), "dark");
+    assert.equal(directions[2]!.name, SUNLIT_NAME);
+    assert.equal(layoutAxis(directions[2]!), "edge-bleed");
+    assert.ok(paletteDistance(directions[0]!.palette, directions[2]!.palette) > 0.01);
+    assert.notEqual(directions[0]!.fonts.heading, directions[2]!.fonts.heading);
   });
 
-  it("keeps horror palettes and fonts (scarry) and does not force a light bakery look", () => {
+  it("keeps horror fonts on the two creative looks; Improved on a reimagine follows brand more than the theme skin", () => {
     const freak: SiteFacts = { ...pv, name: "freak show resturant", colors: [], notes: "scarry", description: "We serve eyeballs and brains" };
     const raw = applyTheme(diversifyDirections(mockDirections(freak, 0)), freak);
-    const { directions, log } = enforceDiversity(raw, freak);
+    const { directions, log } = enforceDiversity(arranged(freak, raw), freak);
     assert.ok(log.some((l) => /theme=horror/.test(l)));
-    for (const d of directions) {
+    assert.equal(directions[0]!.name, IMPROVED_NAME);
+    for (const d of directions.slice(1)) {
       assert.match(d.fonts.heading, /Creepster|Eater|Nosifer|Pirata One|New Rocker|Griffy/);
-      assert.ok(baseFamily(d.palette) === "dark" || /#8b1018|#5c0c12|#0b0b0d|#140a0c/i.test(d.palette.background) || luminanceOk(d.palette.background) < 0.45);
     }
-    assert.ok(!directions.some((d) => fontCategory(d.fonts.heading) === "serif-display" && /Playfair|Fraunces|Cormorant|DM Serif/.test(d.fonts.heading)));
   });
 
-  it("syncCustomBrief copies the enforced palette and fonts onto the custom brief", () => {
-    const [custom] = enforceDiversity(threeAlike(), pv).directions.slice(2);
+  it("syncCustomBrief still copies palette and fonts onto a custom brief when one exists", () => {
+    const dark = enforceDiversity(arranged(pv), pv).directions[1]!;
     const withBrief = {
-      ...custom!,
+      ...dark,
+      name: "Custom Design",
       custom: { brief: { concept: "Town Front Porch", typography: { heading: "Fraunces", body: "Work Sans", notes: "" }, palette: cream, metaphor: "", mood: "sunlit", composition: "", motion: "", illustration: "", headline: "Hi", by: "fallback" as const } },
     };
     const synced = syncCustomBrief(withBrief);
-    assert.equal(synced.custom?.brief.typography.heading, custom!.fonts.heading);
-    assert.equal(synced.custom?.brief.palette.background, custom!.palette.background);
-    assert.notEqual(synced.custom?.brief.typography.heading, "Fraunces");
+    assert.equal(synced.custom?.brief.typography.heading, dark.fonts.heading);
+    assert.equal(synced.custom?.brief.palette.background, dark.palette.background);
     assert.match(synced.mood, /Town Front Porch/);
     assert.doesNotMatch(synced.mood, /cream letterhead/i);
   });
 
-  it("aligns name, description, swatches and fonts from the same final look; Custom Design uses its concept", () => {
-    const raw = [0, 1, 2].map((i) =>
-      normalizeDirection(
-        {
-          archetype: ["editorial", "minimal-luxury", "playful"][i],
-          name: ["Editorial", "Minimal Luxury", "Custom Design"][i],
-          mood: "Warm, neighborly, civic-proud, sunlit and rooted",
-          palette: { ...cream },
-          fonts: { heading: "DM Serif Display", body: "Source Sans 3" },
-          hero: "split",
-          heroStyle: "caption",
-          header: "light",
-        },
-        i,
-        pv,
-      ),
-    );
-    raw[2] = { ...raw[2]!, custom: { brief: { concept: "Shared Front Porch", typography: { heading: "Fraunces", body: "Work Sans", notes: "" }, palette: cream, metaphor: "a wide open front porch where paths meet, neighbors linger, and the whole town lays out", mood: "Bold, graphic, and colorful — not a cream letterhead. Direct and neighborly.", composition: "", motion: "", illustration: "", headline: "Hi", by: "fallback" } } };
-    const { directions } = enforceDiversity(raw, pv);
-    assert.deepEqual(directions.map((d) => d.name), ["Editorial", "Dark Premium", "Custom Design"]);
-    assert.equal(directions[1]!.archetype, "dark-premium");
-    assert.match(directions[1]!.mood, /cinematic|after-dark|Pauls Valley/i);
-    assert.doesNotMatch(directions[1]!.mood, /minimal luxury|quiet, precise/i);
-    assert.match(directions[2]!.mood, /Shared Front Porch/i);
-    assert.doesNotMatch(directions.map((d) => d.mood).join(" "), /cream letterhead/i);
-    // Name, mood, fonts and palette come from the same assigned slot.
-    assert.equal(baseFamily(directions[1]!.palette), "dark");
-    assert.equal(fontCategory(directions[1]!.fonts.heading), "geometric-sans");
-    const synced = syncCustomBrief(directions[2]!);
-    assert.match(synced.mood, /Shared Front Porch/i);
-    assert.doesNotMatch(synced.mood, /cream letterhead/i);
-  });
-
-  it("writes Cafe 501 card blurbs for this restaurant, not a fixed style template", () => {
+  it("writes Cafe 501 card blurbs for this restaurant; Improved stays first and black-branded", () => {
     const cafe: SiteFacts = {
       ...pv,
       sourceUrl: "https://cafe501.com/",
@@ -153,34 +134,21 @@ describe("enforceDiversity", () => {
       address: "501 S Boulevard, Edmond, OK 73034",
       industry: "restaurant",
       services: ["Brunch", "Lunch", "Dinner"],
+      inks: ["#111111"],
+      colors: ["#c45a12"],
+      nav: [{ label: "Menu", url: "https://cafe501.com/menu" }],
     };
-    const editorialMood = "Like a beloved local magazine spread—sunlit, conversational, and quietly proud of the neighborhood table. It should feel like reading the brunch section over coffee.";
-    const raw = [0, 1, 2].map((i) =>
-      normalizeDirection(
-        {
-          archetype: ["editorial", "dark-premium", "playful"][i],
-          name: ["Editorial", "Dark Premium", "Custom Design"][i],
-          mood: i === 0 ? editorialMood : "Cinematic and confident after dark: deep ground, warm metallic light, photography that glows, short punchy lines.",
-          palette: { ...cream },
-          fonts: { heading: "DM Serif Display", body: "Source Sans 3" },
-          hero: "split",
-          heroStyle: "caption",
-          header: "light",
-        },
-        i,
-        cafe,
-      ),
-    );
-    raw[2] = { ...raw[2]!, custom: { brief: { concept: "Neighborhood Table", typography: { heading: "Oswald", body: "Work Sans", notes: "" }, palette: cream, metaphor: "", mood: "Bold, graphic, and colorful — not a cream letterhead.", composition: "", motion: "", illustration: "", headline: "Linger longer over Edmond's best plates", by: "fallback" } } };
-    const { directions } = enforceDiversity(raw, cafe);
-    assert.equal(directions[0]!.name, "Editorial");
-    assert.equal(directions[0]!.mood, editorialMood);
-    assert.equal(directions[1]!.name, "Dark Premium");
+    const { directions } = enforceDiversity(arranged(cafe), cafe);
+    assert.deepEqual(directions.map((d) => d.name), [IMPROVED_NAME, "Dark Premium", SUNLIT_NAME]);
+    assert.match(directions[0]!.mood, /Cafe 501/);
+    assert.match(directions[0]!.mood, /black brand|your food|View Menu/i);
+    assert.equal(directions[0]!.mood[0], "Y");
+    assert.ok(luminanceOk(directions[0]!.palette.background) < 0.2, "Improved keeps Cafe 501's black ground");
     assert.match(directions[1]!.mood, /Cafe 501/);
     assert.match(directions[1]!.mood, /Edmond/);
     assert.doesNotMatch(directions[1]!.mood, /Cinematic and confident after dark:/);
-    assert.equal(directions[2]!.name, "Custom Design");
-    assert.match(directions[2]!.mood, /Neighborhood Table/i);
+    assert.match(directions[2]!.mood, /Cafe 501|appetite|food|sunlit/i);
+    assert.ok(directions.every((d) => d.mood[0] === d.mood[0]!.toUpperCase()));
     assert.ok(!directions.some((d) => /cream letterhead/i.test(d.mood)));
     assert.equal(businessWhere(cafe), "Cafe 501 in Edmond, OK");
   });
@@ -192,12 +160,19 @@ describe("enforceDiversity", () => {
 });
 
 describe("distinctnessScore", () => {
-  it("penalizes three cream-serif siblings and rewards the enforced set", () => {
-    const alike = threeAlike();
-    assert.ok(distinctnessScore(alike[0]!, alike.slice(1)) <= 50, "sameness should score low");
-    const { directions } = enforceDiversity(alike, pv);
-    assert.ok(distinctnessScore(directions[0]!, directions.slice(1)) >= 80);
+  it("rewards the enforced Improved / Dark Premium / Sunlit Cut set", () => {
+    const { directions } = enforceDiversity(arranged(pv), pv);
+    assert.ok(distinctnessScore(directions[1]!, [directions[0]!, directions[2]!]) >= 70);
+    assert.ok(distinctnessScore(directions[2]!, [directions[0]!, directions[1]!]) >= 70);
     assert.equal(distinctnessScore(directions[0]!, []), 80);
+  });
+});
+
+describe("text-graphic rejection", () => {
+  it("flags cropped typography like FES ED", () => {
+    assert.equal(isTextGraphicLabel("FES ED"), true);
+    assert.equal(isTextGraphicLabel("cropped typography on a poster"), true);
+    assert.equal(isTextGraphicLabel("A plate of pasta with basil"), false);
   });
 });
 

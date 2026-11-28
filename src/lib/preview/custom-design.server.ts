@@ -46,9 +46,9 @@ import { applyHtmlCopyGuard } from "./copy-guard.server.ts";
 
 export { CUSTOM_NAME };
 
-/** On unless PREVIEW_CUSTOM_LOOK=0; needs a real model (mock mode / no key: three template looks as before). */
+/** Off unless PREVIEW_CUSTOM_LOOK=1. Even when on, Custom Design is not assigned as a look (r16). */
 export function customLookEnabled(): boolean {
-  if ((process.env.PREVIEW_CUSTOM_LOOK ?? "1").trim() === "0") return false;
+  if ((process.env.PREVIEW_CUSTOM_LOOK ?? "").trim() !== "1") return false;
   return !isMockMode() && aiAvailable();
 }
 

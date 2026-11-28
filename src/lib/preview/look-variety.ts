@@ -11,7 +11,7 @@
  */
 import type { Archetype, DesignDirection, Section, SectionType } from "./types.ts";
 
-export const HERO_STYLES = ["caption", "cinematic", "collage", "poster", "panorama", "framed"] as const;
+export const HERO_STYLES = ["caption", "cinematic", "collage", "poster", "panorama", "framed", "bleed", "improved"] as const;
 export type HeroStyle = (typeof HERO_STYLES)[number];
 export type LayoutRecipe = "editorial" | "showcase" | "bold";
 
@@ -41,6 +41,8 @@ export const STYLE_PLAN: Record<HeroStyle, { hero: DesignDirection["hero"]; head
   poster: { hero: "photo", header: "overlay", layout: "bold", buttons: "pill", footer: "statement" },
   panorama: { hero: "type", header: "light", layout: "showcase", buttons: "square", footer: "columns" },
   framed: { hero: "split", header: "dark", layout: "editorial", buttons: "outline", footer: "minimal" },
+  bleed: { hero: "split", header: "light", layout: "bold", buttons: "square", footer: "minimal" },
+  improved: { hero: "photo", header: "dark", layout: "showcase", buttons: "square", footer: "columns" },
 };
 
 function pickFree<T>(preferred: T, options: readonly T[], used: Set<T>): T {
@@ -149,7 +151,7 @@ export function arrangeSections(sections: Section[], design: DesignDirection, av
       if (style === "panorama") {
         out[0] = { ...first, type: "hero-type", variant: "panorama", tone: "light", image, fit: "cutout" };
       } else {
-        const cut = style === "poster" || style === "cinematic" ? "cinematic" : style === "framed" || style === "caption" ? "caption" : style;
+        const cut = style === "poster" || style === "cinematic" ? "cinematic" : style === "framed" || style === "caption" || style === "bleed" || style === "improved" ? "caption" : style;
         const tone = cut === "cinematic" ? "dark" : cut === "collage" ? "brand" : "light";
         const reverse = style === "cinematic" || style === "framed";
         out[0] = { ...first, type: "hero-split", variant: cut, tone, fit: "cutout", reverse, items: cut === "collage" ? [] : first.items };
@@ -162,6 +164,11 @@ export function arrangeSections(sections: Section[], design: DesignDirection, av
       out[0] = { ...first, type: "hero-split", variant: "framed", tone: "tint", reverse: false };
     } else if (style === "caption") {
       out[0] = { ...first, type: "hero-split", variant: "caption", tone: "light", reverse: false };
+    } else if (style === "bleed") {
+      const second = photos.find((p) => p !== image);
+      out[0] = { ...first, type: "hero-split", variant: "bleed", tone: "light", reverse: false, items: second ? [{ title: "", text: "", image: second }] : first.items };
+    } else if (style === "improved") {
+      out[0] = { ...first, type: "hero-photo", variant: "improved", tone: first.tone === "light" ? "light" : "dark" };
     } else {
       const second = photos.find((p) => p !== image);
       out[0] = { ...first, type: "hero-split", variant: "collage", tone: "brand", items: second ? [{ title: "", text: "", image: second }] : first.items };
@@ -229,10 +236,10 @@ export function layoutLine(design: DesignDirection, builtHero?: string): string 
   const noPhoto = builtHero?.startsWith("hero-type") && builtHero !== "hero-type/panorama" && builtHero !== "hero-type/panorama/cutout";
   const cutout = builtHero?.endsWith("/cutout");
   const hero = cutout
-    ? { caption: "split hero with your art shown whole on a light panel (art right)", cinematic: "dark stage hero with your art shown whole (art left)", collage: "color-block hero with your art shown whole", poster: "dark stage hero with your art shown whole (art right)", panorama: "giant headline over a color band with your art shown whole", framed: "light panel hero with your art shown whole (art left)" }[design.heroStyle]
+    ? { caption: "split hero with your art shown whole on a light panel (art right)", cinematic: "dark stage hero with your art shown whole (art left)", collage: "color-block hero with your art shown whole", poster: "dark stage hero with your art shown whole (art right)", panorama: "giant headline over a color band with your art shown whole", framed: "light panel hero with your art shown whole (art left)", bleed: "oversized photo bleeding off the edge (art shown whole)", improved: "full-bleed photo hero of your current site, refreshed" }[design.heroStyle]
     : noPhoto
-    ? { caption: "type-only hero on a light panel (no photo)", cinematic: "dark type-only hero (no photo)", collage: "color-block type hero (no photo)", poster: "dark poster type hero (no photo)", panorama: "big type hero (no photo)", framed: "type-only hero on a tinted panel (no photo)" }[design.heroStyle]
-    : { caption: "split hero with a captioned photo", cinematic: "full-bleed cinematic hero", collage: "collage hero with a tilted duotone photo", poster: "full-bleed poster hero with a centered headline", panorama: "big-type hero over a panoramic photo strip", framed: "framed photo hero with an overlapping copy card" }[design.heroStyle];
+    ? { caption: "type-only hero on a light panel (no photo)", cinematic: "dark type-only hero (no photo)", collage: "color-block type hero (no photo)", poster: "dark poster type hero (no photo)", panorama: "big type hero (no photo)", framed: "type-only hero on a tinted panel (no photo)", bleed: "short huge headline, no photo", improved: "type-only hero in your current brand (no photo)" }[design.heroStyle]
+    : { caption: "split hero with a captioned photo", cinematic: "full-bleed cinematic hero", collage: "collage hero with a tilted duotone photo", poster: "full-bleed poster hero with a centered headline", panorama: "big-type hero over a panoramic photo strip", framed: "framed photo hero with an overlapping copy card", bleed: "oversized photo bleeding off the edge, short headline", improved: "photo-forward hero in your current brand, with a clear button" }[design.heroStyle];
   const header = (noPhoto || cutout) && design.header === "overlay" ? "dark header" : { light: "solid header", overlay: "transparent header", center: "centered-logo header", dark: "dark header" }[design.header];
   return `Layout: ${hero} · ${header} · ${design.buttons} buttons`;
 }

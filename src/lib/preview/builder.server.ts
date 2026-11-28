@@ -13,11 +13,14 @@
 import { aiAvailable, aiFallbackModel, aiModel, chatJson, isMockMode } from "@/lib/ai-provider.server";
 import { briefFromDirection } from "@/lib/preview/stage-brief";
 import { enforceDiversity } from "@/lib/preview/look-diversity";
+import { arrangeLooks, improvedSiteCta, isImprovedLook } from "@/lib/preview/site-improved";
+import { finalizeBlurb } from "@/lib/preview/blurb";
+import { isFoodSite } from "@/lib/preview/copy-guard";
+import { isTextGraphicLabel } from "@/lib/preview/site-brand";
 import { REIMAGO_SYSTEM } from "@/lib/preview/system-prompt";
 
 import { BODY_FONTS, HEADING_FONTS, defaultPalette, hashString, safeFont, safePalette } from "@/lib/preview/theme";
 import { ARCHETYPES, type DesignDirection, type PlanPage, type PlanSection, type Section, type SiteFacts, type SitePlan, type StoredImage, type AiDebug } from "@/lib/preview/types";
-import { lookName } from "@/lib/preview/archetype-label";
 import { briefQueries, heroBrief } from "@/lib/preview/hero-brief";
 import { PRESETS, archetypesFor, mockDirections, normalizeDirection, HEADING_FONTS as DISPLAY_FONTS, BODY_FONTS as TEXT_FONTS } from "@/lib/preview/design";
 import { SECTION_GUIDE, checkSections, composeImages, composeMockPage, corpusFor, type NormalizeContext } from "@/lib/preview/sections";
@@ -319,16 +322,16 @@ export async function directionsFor(
   const prev = opts.previous;
   let directions = result.directions;
   if (prev?.names.length) directions = directions.map((d) => freshenDirection(d, prev));
-  // One name per look: its style ("Dark Premium"), the same on the card, the banner and in refine requests.
-  directions = directions.map((d) => ({ ...d, name: lookName(d.archetype) }));
   directions = diversifyDirections(directions, opts.seed ?? 0, prev?.heroStyles ?? []);
   // Round 14: a vivid theme (scarry + eyeballs, etc.) leans palettes, fonts and mood before any period override.
   directions = applyTheme(directions, facts);
   // Round 13: "make it look late 90s / Y2K / brutalist" is forced onto every look (a different variant each), AI or not.
   directions = applyEra(directions, facts);
-  // Round 15b: hard axis constraints (base, font category, layout, accent, voice). Theme/era skins stay.
+  // Round 16: card order is Your Site, Improved → Dark Premium → Sunlit Cut. Custom Design is not a look.
+  directions = arrangeLooks(directions, facts);
+  // Round 15b/16: hard axes on the two creative looks; Improved keeps the scraped brand.
   const diverse = enforceDiversity(directions, facts, { seed: opts.seed ?? 0 });
-  directions = diverse.directions;
+  directions = diverse.directions.map((d) => ({ ...d, mood: finalizeBlurb(d.mood) }));
   for (const line of diverse.log) console.info(`[diversity] ${line}`);
   console.info(`[looks] round${prev?.names.length ? " (regenerated)" : ""}: ${directions.map((d) => `“${d.name}” ${d.archetype}/${d.heroStyle}`).join(" · ")}${prev?.names.length ? ` · previous round: ${prev.names.map((n, i) => `“${n}” ${prev.archetypes[i] ?? ""}/${prev.heroStyles[i] ?? ""}`).join(" · ")}` : ""}`);
   console.info(`[stage] art-direction ${directions.length} looks: ${directions.map((d, i) => `“${d.name}” ${d.archetype}/${d.heroStyle ?? d.hero}${d.era ? ` era=${d.era}` : ""}`).join(" · ")}`);
@@ -562,7 +565,7 @@ export async function sectionsFor(
   const names = list.map((i) => i.name);
   const ctx = normalizeContext(facts, plan, page.slug, names);
   const fallback = () => composeMockPage(page, facts, plan, design, composeImages(names));
-  if (!useAi) {
+  if (!useAi || isImprovedLook(design)) {
     console.info(`[stage] layout ${page.slug} “${design.name}” 0ms ai=no (mock or unconfigured)`);
     return { sections: fallback(), ai: false };
   }
@@ -690,7 +693,7 @@ export function stepBudgetMs(): number {
 const OWN_MAX = 8;
 
 /** Homepage-only site for one direction. Images and homepage copy are produced in parallel. */
-/** The from-scratch Custom Design is the third look (custom-design.server.ts asCustomDirection). */
+/** Legacy index; Custom Design is no longer a look (r16). Kept for a couple of photo-share filters. */
 const CUSTOM_LOOK = 2;
 
 export async function buildLook(
@@ -727,8 +730,16 @@ export async function buildLook(
   const rated = new Map((pre0?.site ?? []).map((c) => [c.id, c] as const));
   const failedIds = new Set(pre0?.bar?.failed ?? []);
   const verdict = (url: string) => (failedIds.has(url) ? -1 : (rated.get(url)?.appeal ?? 0));
+  const foodSite = isFoodSite(facts);
+  const FOOD_WORDS = /\b(food|dish|dishes|plate|plates|meal|menu|entree|entrée|brunch|lunch|dinner|pasta|pizza|burger|steak|salad|dessert|bakery|bread|cake|pastry|coffee|cocktail|cuisine|appetizer|specials?|kitchen)\b/i;
   const scored = (await goodPhotos(facts, 14))
-    .map((photo, i) => ({ photo, i, score: heroSuitability(photo.url, facts.imageText?.[photo.url] ?? "", civic) }))
+    .map((photo, i) => {
+      const label = facts.imageText?.[photo.url] ?? "";
+      let score = heroSuitability(photo.url, label, civic);
+      if (isTextGraphicLabel(label) || isTextGraphicLabel(photo.url)) score = -8;
+      if (foodSite && FOOD_WORDS.test(`${label} ${photo.url}`)) score += 5;
+      return { photo, i, score };
+    })
     .filter((p) => p.score > -3 || (rated.get(p.photo.url)?.appeal ?? 0) >= 5)
     .sort((a, b) => verdict(b.photo.url) - verdict(a.photo.url) || b.score - a.score || a.i - b.i);
   const photos = scored.slice(0, OWN_MAX).map((p) => p.photo);
@@ -1147,7 +1158,10 @@ export async function buildLook(
   if (sections[0]?.type.startsWith("hero-")) sections[0] = heroForRequest(sections[0], facts, design, Boolean(images.hero), scene ?? (kept ? keepSubject : undefined) ?? googleHero, freshPhotos && !proactiveOwn, proactiveOwn ?? ownHero);
   if (proactiveOwn && sections[0]?.type.startsWith("hero-") && !images.hero) sections[0] = { ...sections[0], image: proactiveOwn };
   // Each look: its own hero treatment, section order and section variants (kept art shown whole, as a cutout).
-  sections.splice(0, sections.length, ...arrangeSections(sections, design, available, facts.services, Boolean(images.hero?.cutout && sections[0]?.image === "hero")));
+  // Improved already has a composed page; do not reshuffle it into a template recipe.
+  if (!isImprovedLook(design)) {
+    sections.splice(0, sections.length, ...arrangeSections(sections, design, available, facts.services, Boolean(images.hero?.cutout && sections[0]?.image === "hero")));
+  }
   // Round 9: a site photo under 1400px wide in the hero gets a treatment (tinted overlay / framed, not stretched).
   {
     const heroImg = sections[0]?.image ? images[sections[0].image] : undefined;
@@ -1185,7 +1199,7 @@ export async function buildLook(
     social: facts.social,
     palette: design.palette,
     fonts: design.fonts,
-    cta: plan.cta,
+    cta: isImprovedLook(design) ? improvedSiteCta(facts, plan) : plan.cta,
     pages,
     industry: facts.industry,
     design,
@@ -1307,7 +1321,7 @@ export async function finishSite(site: StoredSite): Promise<{ site: StoredSite; 
       // (A subject to keep that wasn't found on the site leaves the hero as it was: no plain-background swap.)
       const heroScene = trace.request.intent === "keep" && !images.hero?.kept ? undefined : (trace.request.scene ?? trace.request.autoScene);
       if (home[0]?.type.startsWith("hero-")) home[0] = heroForRequest(home[0], facts, design, Boolean(images.hero), heroScene, wantsNewPhotos(facts));
-      const arranged = arrangeSections(home, design, available, facts.services, Boolean(images.hero?.cutout && home[0]?.image === "hero"));
+      const arranged = isImprovedLook(design) ? home : arrangeSections(home, design, available, facts.services, Boolean(images.hero?.cutout && home[0]?.image === "hero"));
       trace.layout = lookSignature(design, arranged, images.hero?.credit?.sourceUrl ?? arranged[0]?.image);
       return { ...page, sections: arranged, pending: false };
     }

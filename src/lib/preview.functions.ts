@@ -127,10 +127,7 @@ export const previewDirections = createServerFn({ method: "POST" })
         return p;
       });
       const looksP = directionsFor(data.facts, data.variation, { seed, previous });
-      // The from-scratch look's creative brief (Grok), alongside the template directions.
-      const { creativeBrief, customLookEnabled, asCustomDirection } = await import("./preview/custom-design.server");
-      const { PRESETS } = await import("./preview/design");
-      const briefP = customLookEnabled() ? creativeBrief(data.facts, PRESETS.editorial.palette, started + 35_000) : undefined;
+      // Round 16: Custom Design is off by default and, even when PREVIEW_CUSTOM_LOOK=1, is not assigned as a look.
       // Proactive photo search (Serper) starts as soon as the plan's imageQueries exist, alongside the looks.
       // It also waits for the looks' archetypes, so each look's photo can suit its mood (dark premium: night, …).
       const archetypesP = looksP.then((l) => l.directions.map((d) => d.archetype)).catch(() => undefined);
@@ -146,19 +143,7 @@ export const previewDirections = createServerFn({ method: "POST" })
       await Promise.race([prefetchP, new Promise((r) => setTimeout(r, Math.max(0, Math.min(12_000, started + stepBudgetMs() - 10_000 - Date.now()))))]);
       console.info(`[timing] directions: plan ${tPlan}ms, looks ${tLooks}ms, site photos + vision gate ${tPhotos ? `${tPhotos}ms` : "still running (each look reads the stored ranking or redoes it)"}, total ${Date.now() - started}ms`);
       const note = [planned.note, looks.note].filter(Boolean).join(" ") || undefined;
-      let directions = looks.directions;
-      if (briefP && directions.length >= 3) {
-        // Bob: "Let's just do one design for now until we get it right and then expand." The third look is
-        // designed from scratch; the other two stay template looks for comparison.
-        const brief = await briefP;
-        directions = directions.map((d, i) => (i === 2 ? asCustomDirection(d, brief) : d));
-        // The creative brief often reuses a cream + serif "front porch" look; re-apply hard diversity
-        // and keep the brief typography/palette in sync so Custom Design is not a twin of Editorial.
-        const { enforceDiversity, syncCustomBrief } = await import("./preview/look-diversity");
-        const diverse = enforceDiversity(directions, data.facts);
-        directions = diverse.directions.map(syncCustomBrief);
-        for (const line of diverse.log) console.info(`[diversity] after custom brief: ${line}`);
-      }
+      const directions = looks.directions;
       return { ok: true, plan: planned.plan, directions, note };
     } catch (error) {
       return { ok: false, error: error instanceof Error ? error.message : "The looks could not be planned." };
@@ -201,7 +186,7 @@ export const previewLook = createServerFn({ method: "POST" })
         name: direction.name,
         mood: direction.mood,
         archetype: direction.archetype,
-        palette: direction.palette,
+        palette: site.palette,
         fonts: direction.fonts,
         images: { generated, photos },
         mock: site.mock,
@@ -276,7 +261,7 @@ export const previewCustom = createServerFn({ method: "POST" })
     if (!/^[a-f0-9]{16}$/.test(id)) throw new Error("That look was not found. Run the site again.");
     return { id, retry: Boolean(input?.retry) };
   })
-  .handler(async ({ data }): Promise<PreviewStepResult<{ custom: NonNullable<LookInfo["custom"]>; name: string; layout?: string }>> => {
+  .handler(async ({ data }): Promise<PreviewStepResult<{ custom: NonNullable<LookInfo["custom"]>; name: string; mood?: string; layout?: string }>> => {
     (await import("./abort.server")).watchStop("custom design");
     (await import("./env.server")).logKeyPresenceOnce();
     if (await limited("custom", 30)) return { ok: false, error: "Too many previews from this network in the last hour. Try again shortly." };

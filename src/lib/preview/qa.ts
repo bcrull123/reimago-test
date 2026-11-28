@@ -6,7 +6,8 @@
 import { contrast } from "./design.ts";
 import { detectTheme, type ThemeId } from "./theme-lean.ts";
 import { distinctnessScore } from "./look-diversity.ts";
-import { findUnfortunatePhrasing, type GuardFacts } from "./copy-guard.ts";
+import { findUnfortunatePhrasing, isFoodSite, type GuardFacts } from "./copy-guard.ts";
+import { IMPROVED_NAME } from "./site-brand.ts";
 import type { DesignDirection, Section, SitePalette } from "./types.ts";
 
 export const QA_DIMENSIONS = ["hierarchy", "typeScale", "spacing", "contrast", "styleMatch", "mobile", "blandness", "distinctness"] as const;
@@ -168,6 +169,16 @@ export function structuralMisses(input: { design: DesignDirection; sections: Sec
   if (scores.blandness < 55) misses.push("copy leans on generic phrases");
   if (scores.styleMatch < 50) misses.push("look does not match the requested theme or style words");
   if (design.fonts.heading === design.fonts.body) misses.push("heading and body use the same font");
+  const hero = sections.find((s) => s.type.startsWith("hero-") || s.type === "page-hero") ?? sections[0];
+  const improved = Boolean(design.improved) || design.name === IMPROVED_NAME;
+  if (improved) {
+    if (!hero || !hero.type.startsWith("hero-") || !hero.image) misses.push("photo-forward hero is missing");
+    if (!hero?.cta?.label) misses.push("primary call to action is not prominent in the hero");
+  }
+  if (input.facts && isFoodSite(input.facts)) {
+    const foodNearby = Boolean(hero?.image) || Boolean(sections[1]?.image) || Boolean(sections[1]?.items?.some((it) => it.image));
+    if (!foodNearby) misses.push("restaurant look is missing a photo in or just below the hero");
+  }
   const text = allText(sections);
   for (const [re, label] of GENERIC_MISS) if (re.test(text)) misses.push(label);
   for (const hit of findUnfortunatePhrasing(text, input.facts)) {

@@ -8,10 +8,12 @@
 import { luminance, LOOK_MOODS, readablePalette } from "./design.ts";
 import type { Archetype, DesignDirection, SitePalette } from "./types.ts";
 import { detectTheme } from "./theme-lean.ts";
+import { finalizeBlurb } from "./blurb.ts";
+import { IMPROVED_NAME, SUNLIT_NAME } from "./site-brand.ts";
 
 export type FontCategory = "serif-display" | "geometric-sans" | "condensed-display" | "novelty-display";
 export type BaseFamily = "light" | "dark" | "saturated";
-export type LayoutAxis = "split" | "full-bleed" | "bento" | "big-type";
+export type LayoutAxis = "split" | "full-bleed" | "bento" | "big-type" | "edge-bleed" | "site-refresh";
 export type HueFamily = "cool" | "warm" | "vivid";
 
 export type DiversitySlot = {
@@ -56,6 +58,8 @@ export function baseFamily(palette: SitePalette): BaseFamily {
 }
 
 export function layoutAxis(d: DesignDirection): LayoutAxis {
+  if (d.heroStyle === "improved" || d.improved) return "site-refresh";
+  if (d.heroStyle === "bleed") return "edge-bleed";
   if (d.hero === "type" || d.heroStyle === "panorama") return "big-type";
   if (d.heroStyle === "collage") return "bento";
   if (d.hero === "photo" || d.heroStyle === "cinematic" || d.heroStyle === "poster") return "full-bleed";
@@ -109,60 +113,49 @@ export function accentHex(p: SitePalette): string {
   return approxChroma(p.accent) >= approxChroma(p.primary) ? p.accent : p.primary;
 }
 
-const LIGHT: SitePalette = readablePalette({ primary: "#1b365d", accent: "#0f7a6b", background: "#f7f4ee", surface: "#efe8dc", text: "#16181d", muted: "#4f5661" }, { primary: "#1b365d", accent: "#0f7a6b", background: "#f7f4ee", surface: "#efe8dc", text: "#16181d", muted: "#4f5661" });
-const DARK: SitePalette = readablePalette({ primary: "#8cb4ff", accent: "#e8b86d", background: "#0e1628", surface: "#182234", text: "#f3efe6", muted: "#b9b5ad" }, { primary: "#8cb4ff", accent: "#e8b86d", background: "#0e1628", surface: "#182234", text: "#f3efe6", muted: "#b9b5ad" });
+const LIGHT: SitePalette = readablePalette({ primary: "#9a3412", accent: "#c45c26", background: "#f6efe4", surface: "#efe4d4", text: "#1a120c", muted: "#5c4a3d" }, { primary: "#9a3412", accent: "#c45c26", background: "#f6efe4", surface: "#efe4d4", text: "#1a120c", muted: "#5c4a3d" });
+const DARK: SitePalette = readablePalette({ primary: "#e8d9c4", accent: "#e8b86d", background: "#12110f", surface: "#1c1a17", text: "#f3efe6", muted: "#b9b5ad" }, { primary: "#e8d9c4", accent: "#e8b86d", background: "#12110f", surface: "#1c1a17", text: "#f3efe6", muted: "#b9b5ad" });
 const SATURATED: SitePalette = readablePalette({ primary: "#9f1239", accent: "#1d4ed8", background: "#f97316", surface: "#fb923c", text: "#1c0a06", muted: "#4a1d0e" }, { primary: "#9f1239", accent: "#1d4ed8", background: "#f97316", surface: "#fb923c", text: "#1c0a06", muted: "#4a1d0e" });
 
-/** Fixed matrix for the three cards: light+serif+split, dark+geometric+full-bleed, saturated+condensed+bento. */
-export const DIVERSITY_MATRIX: DiversitySlot[] = [
-  {
-    base: "light",
-    font: "serif-display",
-    heading: "Playfair Display",
-    body: "Source Sans 3",
-    layout: "split",
-    hero: "split",
-    heroStyle: "caption",
-    recipe: "editorial",
-    hue: "cool",
-    voice: "Clear and civic, like a well-made local magazine: confident restraint, generous margins, no filler slogans.",
-    palette: LIGHT,
-    name: "Editorial",
-    archetype: "editorial",
-  },
-  {
-    base: "dark",
-    font: "geometric-sans",
-    heading: "Space Grotesk",
-    body: "Manrope",
-    layout: "full-bleed",
-    hero: "photo",
-    heroStyle: "cinematic",
-    recipe: "showcase",
-    hue: "warm",
-    voice: "Cinematic and confident after dark: deep ground, warm metallic light, photography that glows, short punchy lines.",
-    palette: DARK,
-    name: "Dark Premium",
-    archetype: "dark-premium",
-  },
-  {
-    base: "saturated",
-    font: "condensed-display",
-    heading: "Oswald",
-    body: "Work Sans",
-    layout: "bento",
-    hero: "split",
-    heroStyle: "collage",
-    recipe: "bold",
-    hue: "vivid",
-    voice: "Bold, graphic, and colorful. Direct and neighborly, with big type and a loud, clear call to action.",
-    palette: SATURATED,
-    name: "Playful",
-    archetype: "playful",
-  },
-];
+/** Creative looks only (cards 2 and 3). Card 1 is “Your Site, Improved” and is exempt. */
+export const DARK_PREMIUM_SLOT: DiversitySlot = {
+  base: "dark",
+  font: "geometric-sans",
+  heading: "Space Grotesk",
+  body: "Manrope",
+  layout: "full-bleed",
+  hero: "photo",
+  heroStyle: "cinematic",
+  recipe: "showcase",
+  hue: "warm",
+  voice: "Cinematic and confident after dark: deep ground, warm metallic light, photography that glows, short punchy lines.",
+  palette: DARK,
+  name: "Dark Premium",
+  archetype: "dark-premium",
+};
+export const SUNLIT_CUT_SLOT: DiversitySlot = {
+  base: "light",
+  font: "serif-display",
+  heading: "Fraunces",
+  body: "Source Sans 3",
+  layout: "edge-bleed",
+  hero: "split",
+  heroStyle: "bleed",
+  recipe: "bold",
+  hue: "warm",
+  voice: "Sunlit and appetite-first: an oversized photo that spills off the page, a bold color-blocked strip, and a short expressive headline.",
+  palette: LIGHT,
+  name: SUNLIT_NAME,
+  archetype: "editorial",
+};
+/** Fixed matrix for the two creative cards, in grid order after Improved: Dark Premium, Sunlit Cut. */
+export const DIVERSITY_MATRIX: DiversitySlot[] = [DARK_PREMIUM_SLOT, SUNLIT_CUT_SLOT];
 
 export type DiversityIssue = { i: number; j: number; reasons: string[] };
+
+export function isImprovedLookName(d: Pick<DesignDirection, "name" | "improved">): boolean {
+  return Boolean(d.improved) || d.name === IMPROVED_NAME;
+}
 
 export function diversityIssues(directions: DesignDirection[]): DiversityIssue[] {
   const out: DiversityIssue[] = [];
@@ -171,19 +164,24 @@ export function diversityIssues(directions: DesignDirection[]): DiversityIssue[]
       const a = directions[i]!;
       const b = directions[j]!;
       const reasons: string[] = [];
+      const improvedPair = isImprovedLookName(a) || isImprovedLookName(b);
       const fa = fontCategory(a.fonts.heading);
       const fb = fontCategory(b.fonts.heading);
       if (fa === fb && fa !== "novelty-display") reasons.push(`same heading category ${fa} (${a.fonts.heading} / ${b.fonts.heading})`);
       if (fa === "serif-display" && fb === "serif-display") reasons.push("two serif display headlines");
       const ba = baseFamily(a.palette);
       const bb = baseFamily(b.palette);
-      if (ba === bb) reasons.push(`same base ${ba}`);
+      // Improved is exempt from the light/dark/saturated slot, so it may share a dark (or light) base
+      // with a creative look — Cafe 501 stays black, Dark Premium stays cinematic dark.
+      if (ba === bb && !improvedPair) reasons.push(`same base ${ba}`);
       if (layoutAxis(a) === layoutAxis(b)) reasons.push(`same layout ${layoutAxis(a)}`);
-      if (paletteDistance(a.palette, b.palette) < 0.12) reasons.push(`palettes too close (${paletteDistance(a.palette, b.palette).toFixed(3)})`);
-      if (Math.abs(luminance(a.palette.background) - luminance(b.palette.background)) < 0.12 && ba === bb) reasons.push("background lightness too close");
+      if (!improvedPair && paletteDistance(a.palette, b.palette) < 0.12) reasons.push(`palettes too close (${paletteDistance(a.palette, b.palette).toFixed(3)})`);
+      if (!improvedPair && Math.abs(luminance(a.palette.background) - luminance(b.palette.background)) < 0.12 && ba === bb) reasons.push("background lightness too close");
       const ha = accentHex(a.palette);
       const hb = accentHex(b.palette);
-      if (approxChroma(ha) > 0.05 && approxChroma(hb) > 0.05 && hueDistance(ha, hb) < 40) reasons.push(`accent hues too close (${Math.round(hueDistance(ha, hb))}°)`);
+      // A dark-gold accent and a light-terracotta accent can sit near each other on the wheel
+      // without looking like the same look; rotating one produced icy/lime swatches (r15c).
+      if (!improvedPair && ba === bb && approxChroma(ha) > 0.05 && approxChroma(hb) > 0.05 && hueDistance(ha, hb) < 40) reasons.push(`accent hues too close (${Math.round(hueDistance(ha, hb))}°)`);
       if (reasons.length) out.push({ i, j, reasons });
     }
   }
@@ -209,10 +207,9 @@ export function customLookMood(brief?: { concept?: string; metaphor?: string; mo
 }
 
 function preferredSlot(d: DesignDirection): number | undefined {
-  if (isCustomLook(d)) return 2;
-  if (d.archetype === "dark-premium" || baseFamily(d.palette) === "dark") return 1;
-  if (d.archetype === "editorial" || d.archetype === "minimal-luxury") return 0;
-  if (d.archetype === "playful" || d.archetype === "bold-photo") return 2;
+  if (isImprovedLookName(d)) return undefined;
+  if (d.name === "Dark Premium" || d.archetype === "dark-premium" || d.heroStyle === "cinematic") return 0;
+  if (d.name === SUNLIT_NAME || d.heroStyle === "bleed") return 1;
   return undefined;
 }
 
@@ -248,6 +245,7 @@ export function isTemplateMood(mood: string | undefined): boolean {
   if (/^cinematic and confident after dark/.test(t)) return true;
   if (/^clear and civic, like a well-made local magazine/.test(t)) return true;
   if (/^bold, graphic, and colorful/.test(t)) return true;
+  if (/^sunlit and appetite-first/.test(t)) return true;
   const stock = Object.values(LOOK_MOODS).map((v) => v.replace(/\s+/g, " ").trim().toLowerCase());
   if (stock.some((v) => t === v || (v.length > 30 && t.startsWith(v.slice(0, 36))))) return true;
   return false;
@@ -283,6 +281,9 @@ function stripInternalPhrases(mood: string): string {
 
 function writeSiteSpecificMood(d: DesignDirection, facts: CardFacts | undefined, slot: DiversitySlot): string {
   const who = businessWhere(facts);
+  if (slot.name === SUNLIT_NAME || slot.heroStyle === "bleed") {
+    return `A sunlit, photo-forward look for ${who} — an oversized picture that spills off the page, a bold color-blocked strip, and a short expressive headline.`;
+  }
   switch (slot.archetype) {
     case "editorial":
       return `A clear, civic magazine look for ${who} — confident restraint, generous margins, and a calm, readable page.`;
@@ -311,6 +312,12 @@ export function lookCardDescription(
   slot: DiversitySlot,
   before?: { mood?: string; archetype?: string; name?: string },
 ): string {
+  if (isImprovedLookName(d)) {
+    const existing = stripInternalPhrases((before?.mood ?? d.mood ?? "").replace(/\s+/g, " ").trim());
+    if (existing && !isTemplateMood(existing)) return finalizeBlurb(existing);
+    const who = businessWhere(facts);
+    return finalizeBlurb(`Your current ${who} look, refreshed: same brand, your best photos up front, and a clear call to action.`);
+  }
   if (isCustomLook(d)) {
     const fromBrief = customLookMood(d.custom?.brief);
     if (fromBrief && !isTemplateMood(fromBrief) && fromBrief !== "Designed from scratch for this business.") return stripInternalPhrases(fromBrief);
@@ -331,6 +338,7 @@ export function alignLookIdentity(
   facts?: CardFacts,
   before?: { mood?: string; archetype?: string; name?: string },
 ): DesignDirection {
+  if (isImprovedLookName(d)) return { ...d, name: IMPROVED_NAME, improved: true, custom: undefined, mood: lookCardDescription({ ...d, name: IMPROVED_NAME, improved: true }, facts, slot, before) };
   if (isCustomLook(d)) return { ...d, name: "Custom Design", mood: lookCardDescription(d, facts, slot, before) };
   const next = { ...d, name: slot.name, archetype: slot.archetype };
   return { ...next, mood: lookCardDescription(next, facts, slot, before) };
@@ -368,47 +376,50 @@ export function enforceDiversity(directions: DesignDirection[], facts?: EnforceO
 
   let next = directions.map((d) => ({ ...d, palette: { ...d.palette }, fonts: { ...d.fonts } }));
   const originals = next.map((d) => ({ mood: d.mood, archetype: d.archetype, name: d.name }));
-  const slots = slotOrder(next);
 
-  // First assignment: each look gets a matrix slot (prefer matching its archetype/name).
-  for (let i = 0; i < Math.min(next.length, DIVERSITY_MATRIX.length); i += 1) {
-    const slot = DIVERSITY_MATRIX[slots[i]!]!;
+  // Round 16: Improved (usually index 0) is exempt. The other two always get Dark Premium then Sunlit Cut.
+  const improvedAt = next.findIndex((d) => isImprovedLookName(d));
+  const creativeIdx = next.map((_, i) => i).filter((i) => i !== improvedAt);
+  const creativeSlots = creativeIdx.map((i, n) => [i, DIVERSITY_MATRIX[Math.min(n, DIVERSITY_MATRIX.length - 1)]!] as const);
+
+  for (const [i, slot] of creativeSlots) {
     const d = next[i]!;
-    const needPalette = !preserveSkin && baseFamily(d.palette) !== slot.base;
+    // Always apply the creative slot palette so swatches match the look (no leftover icy blue on Dark Premium).
+    const needPalette = !preserveSkin;
     const cat = fontCategory(d.fonts.heading);
     const needFont = !preserveSkin && cat !== slot.font && cat !== "novelty-display";
     const needLayout = layoutAxis(d) !== slot.layout;
-    const needVoice = !preserveSkin && !isCustomLook(d) && (!d.mood || d.mood === next[(i + 1) % next.length]?.mood);
-    if (needPalette || needFont || needLayout || needVoice) {
-      next[i] = applySlot(d, slot, { palette: needPalette || (!preserveSkin && paletteTooCloseToEarlier(next, i)), fonts: needFont, layout: needLayout, voice: false });
-      const applied: string[] = [];
-      if (needPalette || (!preserveSkin && baseFamily(next[i]!.palette) === slot.base && baseFamily(d.palette) !== slot.base)) applied.push(`base=${slot.base}`);
-      if (needFont) applied.push(`font=${slot.heading} (${slot.font})`);
-      if (needLayout) applied.push(`layout=${slot.layout}/${slot.heroStyle}`);
-      if (needVoice || !preserveSkin) applied.push("voice");
-      if (applied.length) log.push(`“${next[i]!.name}” assigned ${applied.join(", ")}`);
-    }
+    next[i] = applySlot(d, slot, { palette: needPalette, fonts: needFont || needPalette, layout: true, voice: false });
+    log.push(`“${next[i]!.name}” assigned ${slot.name} ${slot.base}/${slot.font}/${slot.layout}`);
   }
 
-  // Second pass: if anything still collides, rewrite the later look.
   let issues = diversityIssues(next);
   for (const issue of issues) {
+    if (isImprovedLookName(next[issue.i]!) && !issue.reasons.some((r) => /layout|heading category|serif/.test(r))) {
+      // Same-base / close palette with Improved is acceptable; only fix typography/layout on the creative look.
+      if (!issue.reasons.some((r) => /layout|heading category|serif/.test(r))) continue;
+    }
     if (preserveSkin && issue.reasons.every((r) => /palette|base|accent|heading category|serif display|lightness/i.test(r))) {
-      // Only layout collisions are auto-fixed when theme/era owns the skin.
       if (!issue.reasons.some((r) => /layout/.test(r))) continue;
     }
-    const j = issue.j;
-    const slot = DIVERSITY_MATRIX[slots[j] ?? Math.min(j, DIVERSITY_MATRIX.length - 1)]!;
+    const j = isImprovedLookName(next[issue.j]!) ? issue.i : issue.j;
+    if (isImprovedLookName(next[j]!)) continue;
+    const slot = creativeSlots.find(([idx]) => idx === j)?.[1] ?? DIVERSITY_MATRIX[Math.min(j, DIVERSITY_MATRIX.length - 1)]!;
     const before = next[j]!;
     const fixLayout = issue.reasons.some((r) => /layout/.test(r));
     const fixSkin = !preserveSkin && issue.reasons.some((r) => /palette|base|accent|heading|serif|lightness/.test(r));
-    next[j] = applySlot(before, slot, { palette: fixSkin, fonts: fixSkin, layout: fixLayout, voice: false });
-    log.push(`“${next[j]!.name}” too close to “${next[issue.i]!.name}” (${issue.reasons.join("; ")}); regenerated to ${slot.base}/${slot.font}/${slot.layout}`);
+    next[j] = applySlot(before, slot, { palette: fixSkin, fonts: fixSkin, layout: fixLayout || true, voice: false });
+    log.push(`“${next[j]!.name}” too close to “${next[issue.i]!.name}” (${issue.reasons.join("; ")}); kept ${slot.name}`);
   }
 
   issues = diversityIssues(next).filter((iss) => !(preserveSkin && iss.reasons.every((r) => !/layout/.test(r))));
   if (issues.length && !preserveSkin) {
-    next = next.map((d, i) => (i === 0 ? d : nudgeAwayFrom(d, next.slice(0, i))));
+    next = next.map((d, i) => {
+      if (isImprovedLookName(d)) return d;
+      // Never bleach a creative look's ground just because Improved shares a dark (or light) brand.
+      const peers = next.filter((x, k) => k < i && !isImprovedLookName(x));
+      return peers.length ? nudgeAwayFrom(d, peers) : d;
+    });
     issues = diversityIssues(next);
     if (issues.length) log.push(`nudged palettes; remaining: ${issues.map((iss) => iss.reasons.join(", ")).join(" | ")}`);
   }
@@ -418,10 +429,13 @@ export function enforceDiversity(directions: DesignDirection[], facts?: EnforceO
   const minP = minPair(next, (a, b) => paletteDistance(a.palette, b.palette));
   const minH = minPair(next, (a, b) => hueDistance(accentHex(a.palette), accentHex(b.palette)));
   log.push(`${issues.length ? "remaining issues" : "ok"}: bases ${bases}, fonts ${fonts}, layouts ${layouts}, min palette Δ=${minP.toFixed(3)}, min hue Δ=${Math.round(minH)}`);
-  if (!preserveSkin) {
-    next = next.map((d, i) => alignLookIdentity(d, DIVERSITY_MATRIX[slots[i] ?? i]!, facts, originals[i]));
-    log.push(`identity: ${next.map((d) => `“${d.name}” ${d.archetype}`).join(" · ")}`);
-  }
+  next = next.map((d, i) => {
+    if (isImprovedLookName(d)) return alignLookIdentity(d, DARK_PREMIUM_SLOT, facts, originals[i]);
+    const slot = creativeSlots.find(([idx]) => idx === i)?.[1] ?? DIVERSITY_MATRIX[0]!;
+    if (preserveSkin) return { ...d, name: slot.name, mood: lookCardDescription({ ...d, name: slot.name }, facts, slot, originals[i]) };
+    return alignLookIdentity(d, slot, facts, originals[i]);
+  });
+  log.push(`identity: ${next.map((d) => `“${d.name}” ${d.archetype}`).join(" · ")}`);
   return { directions: next, log };
 }
 
@@ -434,15 +448,15 @@ function mixRgb(a: string, b: string, t: number): string {
 function nudgeAwayFrom(d: DesignDirection, earlier: DesignDirection[]): DesignDirection {
   let p = { ...d.palette };
   for (const o of earlier) {
-    if (paletteDistance(p, o.palette) < 0.14) {
-      // Push the background further from the earlier look (toward black or a vivid accent).
+    if (isImprovedLookName(o)) continue;
+    const sameBase = baseFamily(p) === baseFamily(o.palette);
+    if (sameBase && paletteDistance(p, o.palette) < 0.14) {
       const toward = luminance(o.palette.background) > 0.5 ? "#7c2d12" : "#ffedd5";
       p = readablePalette({ ...p, background: mixRgb(p.background, toward, 0.45), surface: mixRgb(p.surface, toward, 0.35) }, p);
     }
     const ha = accentHex(p);
     const hb = accentHex(o.palette);
-    if (approxChroma(ha) > 0.05 && approxChroma(hb) > 0.05 && hueDistance(ha, hb) < 45) {
-      // Rotate the accent ~90° in HSL.
+    if (sameBase && approxChroma(ha) > 0.05 && approxChroma(hb) > 0.05 && hueDistance(ha, hb) < 45) {
       const h = (hueDeg(ha) + 90) % 360;
       p = readablePalette({ ...p, accent: hslToHex(h, 0.7, luminance(p.background) < 0.3 ? 0.62 : 0.42) }, p);
     }
