@@ -2,6 +2,7 @@
 import type { SiteFacts, SitePlan } from "@/lib/preview/types";
 import { cleanFeedback } from "@/lib/preview/owner-request";
 import { isOwnStoredImageUrl } from "@/lib/preview/own-image";
+import { scrubCopy } from "@/lib/preview/site-copy";
 
 const str = (value: unknown, max: number) => (typeof value === "string" ? value.trim().slice(0, max) : "");
 const strs = (value: unknown, count: number, max: number) =>
@@ -53,8 +54,8 @@ export function clampFacts(input: unknown): SiteFacts {
     sourceUrl: str(f.sourceUrl, 300),
     host: str(f.host, 200).replace(/[^a-zA-Z0-9.\- ]/g, "") || name,
     name,
-    tagline: str(f.tagline, 160),
-    description: str(f.description, 500),
+    tagline: scrubCopy(str(f.tagline, 160)),
+    description: scrubCopy(str(f.description, 500)),
     logo: storedOrHttps(f.logo),
     colors: strs(f.colors, 4, 7).filter((c) => /^#[0-9a-fA-F]{6}$/.test(c)),
     inks: strs(f.inks, 6, 7).filter((c) => /^#[0-9a-fA-F]{6}$/.test(c)),
@@ -65,7 +66,7 @@ export function clampFacts(input: unknown): SiteFacts {
     address: str(f.address, 200),
     hours: strs(f.hours, 7, 80),
     services: strs(f.services, 12, 100),
-    about: str(f.about, 1600),
+    about: scrubCopy(str(f.about, 1600)),
     testimonials: (Array.isArray(f.testimonials) ? f.testimonials : [])
       .map((t) => ({ quote: str((t as Record<string, unknown>)?.quote, 500), author: str((t as Record<string, unknown>)?.author, 80) }))
       .filter((t) => t.quote)

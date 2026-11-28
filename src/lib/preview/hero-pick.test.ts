@@ -1,6 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { assignHeroes, dHash, hamming, heroScore, isSignLike, moodFit, pixelStats, subjectOf, type HeroCandidate, type PixelStats } from "./hero-pick.ts";
+import { assignHeroes, dHash, hamming, heroScore, isSignLike, isTextGraphicArt, isTextGraphicPixels, moodFit, pixelStats, subjectOf, type HeroCandidate, type PixelStats } from "./hero-pick.ts";
 import { cleanImageQueries, defaultImageQueries } from "./photo-queries.ts";
 import type { SiteFacts } from "./types.ts";
 
@@ -21,7 +21,7 @@ function image(w: number, h: number, fn: (x: number, y: number) => [number, numb
 // A "street": textured mid-grey buildings over a brick-red road, a strip of sky.
 const street = (shift = 0) => image(300, 200, (x, y) => (y < 40 ? [150, 180, 220] : y > 130 ? [140 + ((x * 7 + y * 3) % 40), 70, 50] : [((x + shift) * 13) % 200 + 30, ((x + shift) * 13) % 200 + 30, ((x + shift) * 13) % 200 + 30]));
 
-const good: PixelStats = { mean: 0.45, contrast: 0.26, sky: 0.15, green: 0.05, saturation: 0.15, warm: 0.02 };
+const good: PixelStats = { mean: 0.45, contrast: 0.26, sky: 0.15, green: 0.05, saturation: 0.15, warm: 0.02, unique: 40, flat: 0.2, edges: 0.12, bimodal: 0.15 };
 const c = (id: string, text: string, over: Partial<HeroCandidate> = {}): HeroCandidate => ({ id, source: "google", text, width: 1920, height: 1280, stats: good, relevance: 2, ...over });
 
 describe("pixels: brightness, contrast, sky, grass, perceptual hash", () => {
@@ -161,5 +161,92 @@ describe("proactive queries: the best-looking scenes, not the name", () => {
   });
   it("drops planner queries that return signs, logos or maps", () => {
     assert.deepEqual(cleanImageQueries(["Welcome to Pauls Valley", "Pauls Valley city limits sign", "Pauls Valley logo", "Pauls Valley Oklahoma main street"]), ["Pauls Valley Oklahoma main street"]);
+  });
+});
+
+function rgba(width: number, height: number, px: (x: number, y: number) => [number, number, number]): Uint8Array {
+  const data = new Uint8Array(width * height * 4);
+  for (let y = 0; y < height; y += 1) {
+    for (let x = 0; x < width; x += 1) {
+      const [r, g, b] = px(x, y);
+      const i = (y * width + x) * 4;
+      data[i] = r;
+      data[i + 1] = g;
+      data[i + 2] = b;
+      data[i + 3] = 255;
+    }
+  }
+  return data;
+}
+
+/** Giant white block letters on black — the cropped "CAFE 501 / EDI" typographic banner case. */
+function letterBanner(): { data: Uint8Array; width: number; height: number } {
+  const width = 640;
+  const height = 280;
+  const data = rgba(width, height, (x, y) => {
+    // Five tall letter-shaped columns with glyph-like counters.
+    const col = Math.floor(x / 110);
+    const lx = x % 110;
+    const inStem = lx >= 18 && lx <= 42 && y >= 30 && y <= 250;
+    const inBar = y >= 30 && y <= 58 && lx >= 18 && lx <= 90 && col % 2 === 0;
+    const inBar2 = y >= 130 && y <= 154 && lx >= 18 && lx <= 80;
+    const letter = inStem || inBar || inBar2;
+    return letter ? [245, 240, 230] : [8, 8, 8];
+  });
+  return { data, width, height };
+}
+
+/** A noisy, warm, many-colored "food" photograph stand-in. */
+function foodPhoto(): { data: Uint8Array; width: number; height: number } {
+  const width = 640;
+  const height = 400;
+  const data = rgba(width, height, (x, y) => {
+    const n = (x * 37 + y * 19) % 97;
+    const r = 140 + ((x * 13 + n) % 90);
+    const g = 60 + ((y * 11 + n) % 80);
+    const b = 30 + ((x * y + n) % 50);
+    return [r, g, b];
+  });
+  return { data, width, height };
+}
+
+describe("typographic hero rejection", () => {
+  it("detects a high-contrast letter banner by its pixels, and prefers a food photo", () => {
+    const banner = letterBanner();
+    const food = foodPhoto();
+    const bannerStats = pixelStats(banner.data, banner.width, banner.height);
+    const foodStats = pixelStats(food.data, food.width, food.height);
+    assert.equal(isTextGraphicPixels(bannerStats, banner.width, banner.height), true, JSON.stringify(bannerStats));
+    assert.equal(isTextGraphicPixels(foodStats, food.width, food.height), false, JSON.stringify(foodStats));
+    assert.equal(
+      isTextGraphicArt({ text: "Cafe 501", name: "Cafe 501", stats: bannerStats, width: banner.width, height: banner.height }),
+      true,
+    );
+    assert.equal(
+      isTextGraphicArt({ text: "griddle cakes and eggs", name: "Cafe 501", stats: foodStats, width: food.width, height: food.height }),
+      false,
+    );
+    const bannerScore = heroScore({
+      id: "banner",
+      source: "site",
+      text: "Cafe 501",
+      width: banner.width,
+      height: banner.height,
+      stats: bannerStats,
+      relevance: 3,
+      appeal: 9,
+    });
+    const foodScore = heroScore({
+      id: "food",
+      source: "site",
+      text: "griddle cakes and eggs",
+      width: food.width,
+      height: food.height,
+      stats: foodStats,
+      relevance: 1,
+      appeal: 7,
+    });
+    assert.equal(bannerScore.sign, true);
+    assert.ok(foodScore.score > bannerScore.score, `${foodScore.score} vs ${bannerScore.score}`);
   });
 });

@@ -1,5 +1,5 @@
 /**
- * Round 16 — extract a recognizable brand from the scraped site (colors including
+ * Round 16–16b — extract a recognizable brand from the scraped site (colors including
  * black grounds, font feel, nav, CTAs) so “Your Site, Improved” can follow it.
  */
 import { BODY_FONTS, HEADING_FONTS, luminance, readablePalette } from "./design.ts";
@@ -143,10 +143,70 @@ export function improvedFonts(facts: Pick<SiteFacts, "fonts" | "colors" | "inks"
   return { heading, body };
 }
 
+/** Squarespace / player / browser chrome — never a site's brand accent. */
+export const UI_ACCENT_JUNK = new Set([
+  "#f0523d",
+  "#e4351e",
+  "#00b2ff",
+  "#ffff00",
+  "#00ff00",
+  "#ff00ff",
+  "#00ffff",
+  "#ff0000",
+  "#0000ff",
+]);
+
+/** True for delete/error reds, neon primaries, and similar UI leftovers. */
+export function isUiAccent(hex: string): boolean {
+  const h = hex.toLowerCase();
+  if (UI_ACCENT_JUNK.has(h)) return true;
+  const rgb = hexToRgb(h);
+  if (!rgb) return false;
+  const ch = rgb.map((v) => (v >= 250 ? 1 : v <= 5 ? 0 : 2));
+  if (ch.includes(2)) return false;
+  const lit = ch.filter((v) => v === 1).length;
+  return lit >= 1 && lit <= 2;
+}
+
+const ACCENT_VAR_NAMES = [
+  "sqsp-palette-accent-color",
+  "accent-hsl",
+  "accent",
+  "safeDarkAccent-hsl",
+  "primaryButtonBackgroundColor",
+  "secondaryButtonBackgroundColor",
+  "lightAccent-hsl",
+];
+
+/**
+ * Brand accents from CSS variables first (Squarespace --accent-hsl), then frequent hexes,
+ * skipping UI junk so Cafe 501 keeps its slate navy instead of tooltip red / player blue.
+ */
+export function brandAccents(sources: string[], themeColor = ""): string[] {
+  const counts = new Map<string, number>();
+  const add = (rgb: [number, number, number] | undefined, weight: number) => {
+    if (!rgb) return;
+    const hex = hexOf(rgb);
+    if (isUiAccent(hex) || NEAR_BLACK(rgb) || NEAR_WHITE(rgb)) return;
+    counts.set(hex, (counts.get(hex) ?? 0) + weight);
+  };
+  const vars = cssVariables(sources);
+  if (themeColor) add(parseCssColor(themeColor, vars), 40);
+  for (const name of ACCENT_VAR_NAMES) {
+    const raw = vars.get(name);
+    if (raw) add(parseCssColor(raw, vars), 160);
+  }
+  add(lastVarColor(vars, ACCENT_VAR_NAMES), 80);
+  for (const source of sources) {
+    for (const match of source.matchAll(/#([0-9a-fA-F]{6}|[0-9a-fA-F]{3})\b/g)) add(hexToRgb(`#${match[1]}`), 1);
+  }
+  return [...counts.entries()].sort((a, b) => b[1] - a[1]).map(([hex]) => hex).slice(0, 4);
+}
+
 /** A readable palette that keeps the current site's ink (e.g. Cafe 501's black) and accent colors. */
 export function improvedPalette(facts: Pick<SiteFacts, "colors" | "inks" | "name" | "darkBrand">): SitePalette {
   const inks = (facts.inks ?? []).map((c) => c.toLowerCase());
-  const accents = (facts.colors ?? []).map((c) => c.toLowerCase()).filter((c) => /^#[0-9a-f]{6}$/.test(c));
+  const accents = (facts.colors ?? []).map((c) => c.toLowerCase()).filter((c) => /^#[0-9a-f]{6}$/.test(c) && !isUiAccent(c));
   const inkRgb = inks.map(hexToRgb).filter((c): c is [number, number, number] => Boolean(c));
   const darkInk = inkRgb.filter((c) => NEAR_BLACK(c));
   const lightInk = inkRgb.filter((c) => NEAR_WHITE(c));
@@ -160,8 +220,9 @@ export function improvedPalette(facts: Pick<SiteFacts, "colors" | "inks" | "name
   const text = isDarkBrand ? "#f4efe8" : "#16181d";
   const surface = isDarkBrand ? mixHex(background, "#ffffff", 0.08) : mixHex(background, "#000000", 0.04);
   const muted = isDarkBrand ? "#c8c0b6" : "#4f5661";
-  const accent = accents.find((c) => Math.abs(luminance(c) - luminance(background)) > 0.15) ?? (isDarkBrand ? "#e8b86d" : "#0f7a6b");
-  const primary = accents.find((c) => c !== accent && Math.abs(luminance(c) - luminance(background)) > 0.12) ?? (isDarkBrand ? "#f4efe8" : "#1b365d");
+  const usable = accents.filter((c) => Math.abs(luminance(c) - luminance(background)) > 0.02);
+  const accent = usable[0] ?? (isDarkBrand ? "#e8b86d" : "#0f7a6b");
+  const primary = usable.find((c) => c !== accent) ?? (isDarkBrand ? "#f4efe8" : "#1b365d");
   return readablePalette({ primary, accent, background, surface, text, muted }, { primary, accent, background, surface, text, muted });
 }
 
@@ -248,17 +309,47 @@ export function improvedHeadline(facts: SiteFacts): string {
 
 /** Words / labels that mean a cropped typography graphic, not a photograph. */
 export const TEXT_GRAPHIC =
-  /\b(lettering|typography|wordmark|word mark|type treatment|text graphic|cropped text|letters only|monogram|lockup|logotype|banner type|marquee letters?)\b/i;
+  /\b(lettering|typography|typographic|wordmark|word[ -]?mark|type treatment|text graphic|cropped text|letters only|monogram|lockup|logotype|logo[ -]?mark|banner type|marquee letters?|masthead|word[- ]?art)\b/i;
+
+const PHOTO_SCENE =
+  /\b(food|dish|dishes|plate|plates|meal|brunch|interior|exterior|dining|room|kitchen|patio|storefront|building|facade|people|chef|table|street|downtown|portrait|garden|park)\b/i;
 
 export function isTextGraphicLabel(text: string): boolean {
   const t = text.replace(/\s+/g, " ").trim();
   if (!t) return false;
-  if (TEXT_GRAPHIC.test(t)) return true;
+  if (TEXT_GRAPHIC.test(t) && !PHOTO_SCENE.test(t)) return true;
   if (/\b(logo|wordmark|logotype|lockup)\b/i.test(t) && !/\b(storefront|building|sign in front)\b/i.test(t)) return true;
   // Short all-caps fragments like “FES ED” from a cropped poster.
   const letters = t.replace(/[^A-Za-z ]/g, " ").replace(/\s+/g, " ").trim();
   if (/^([A-Z]{2,4}\s+){1,3}[A-Z]{2,4}$/.test(letters) && letters.length <= 16) return true;
+  const file = t.replace(/[._\-/]+/g, " ");
+  if (/\b(logo|wordmark|lockup|logotype|masthead|word ?mark|typograph)\b/i.test(file) && !PHOTO_SCENE.test(file)) return true;
   return false;
+}
+
+/** Alt / filename that is just the business name (or a fragment), i.e. a wordmark, not a photograph. */
+export function isWordmarkLike(text: string, name = ""): boolean {
+  if (isTextGraphicLabel(text)) return true;
+  const t = text.replace(/\s+/g, " ").trim();
+  if (!t || !name || PHOTO_SCENE.test(t)) return false;
+  const tokens = (s: string) =>
+    s
+      .toLowerCase()
+      // Hostnames like cafe501.com would otherwise look like the business name.
+      .replace(/https?:\/\/[^/\s]+/g, " ")
+      .replace(/[^a-z0-9]+/g, " ")
+      .trim()
+      .split(/\s+/)
+      .filter((w) => w.length > 1 && !/^(the|and|of|for|at|in|to|a|an|logo|banner|header|hero|image|photo|img|graphic|brand|site|homepage|home|og|icon|mark|jpg|jpeg|png|webp|www|com|net|org|html)$/.test(w));
+  const named = tokens(name);
+  const words = tokens(t);
+  if (!named.length || !words.length) return false;
+  const same = (w: string, n: string) => w === n;
+  const hit = words.filter((w) => named.some((n) => same(w, n)));
+  // Filename “Cafe+501+Ed+white.png” is a wordmark: every name token is present as its own word.
+  if (named.every((n) => words.some((w) => same(w, n))) && named.length >= 1) return true;
+  if (words.length > 8) return false;
+  return hit.length === words.length && hit.length > 0;
 }
 
 

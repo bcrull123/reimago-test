@@ -20,6 +20,7 @@ import {
 } from "./site-brand.ts";
 import type { DesignDirection, PlanPage, Section, SiteFacts, SitePlan } from "./types.ts";
 import type { ComposeImages } from "./sections.ts";
+import { scrubCopy } from "./site-copy.ts";
 
 export { IMPROVED_NAME, SUNLIT_NAME };
 
@@ -32,6 +33,8 @@ export function isSunlitLook(d: Pick<DesignDirection, "name" | "heroStyle"> | un
 }
 
 function firstSentences(text: string, count: number, max = 320): string {
+  text = scrubCopy(text || "");
+  if (!text) return "";
   const parts = text.split(/(?<=[.!?])\s+/).filter(Boolean);
   return parts.slice(0, count).join(" ").slice(0, max);
 }

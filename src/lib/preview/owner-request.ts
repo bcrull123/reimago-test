@@ -92,7 +92,8 @@ const COLORS: [RegExp, string, string][] = [
 
 const TONES: [RegExp, Archetype, string][] = [
   [/\b(?:scarry|scarey|scray|scary|horror|horrer|spooky|creepy|macabre|gory|halloween|haunted|eyeballs?|brains?|freak\s*shows?)\b/, "dark-premium", "horror / macabre"],
-  [/\bdark\b|\bmoody\b|\bnight\b|\bblack\b/, "dark-premium", "dark & moody"],
+  // "black" is a brand color ("keep the black brand"), not a horror/mood cue. Only dark/moody/night lean that way.
+  [/\b(?:dark(?:er)?|moody|night)\b/, "dark-premium", "dark & moody"],
   [/\bbold\b|\bloud\b|\bpunchy\b|\bbig photos?\b|\bstrong\b/, "bold-photo", "bold"],
   [/\bplayful\b|\bfun\b|\bfriendly\b|\bcolou?rful\b|\bcheerful\b/, "playful", "playful"],
   [/\bminimal\b|\bclean\b|\bsimple\b|\bluxur\w*\b|\belegant\b|\bupscale\b|\bpremium\b/, "minimal-luxury", "clean & premium"],
@@ -130,11 +131,104 @@ function find(text: string, re: RegExp): boolean {
   return false;
 }
 
+export type OwnerHeroIntent = { subject: string; intent: PhotoIntent };
+
+export type OwnerIntents = RequestHints & {
+  /** A color the owner wants kept as the brand (e.g. "keep the black brand"). */
+  brandColor?: { name: string; hex: string };
+  /** A photo they asked to show. */
+  hero?: OwnerHeroIntent;
+  /** A call-to-action they asked for, in button words ("View Menu"). */
+  cta?: string;
+  /** A real theme lean (horror only when scary/spooky/… is present, never from "black"). */
+  themeLabel?: string;
+};
+
+const BRAND_COLOR = /\b(?:keep|use|retain|preserve|stay(?:ing)?|same)?\s*(?:the\s+|your\s+|our\s+|a\s+)?(black|navy|teal|red|blue|green|orange|yellow|gold|purple|pink|brown|white|cream)\s+(?:brand|colors?|palette|ink)\b/;
+const HERO_FOOD = /\b(?:show|showing|feature|featuring|use|using|put|with)\s+(?:the\s+|your\s+|our\s+|some\s+)?(?:food|dishes|plates|meals)(?:\s+(?:up front|front and center|in the hero|as the hero|photo|photos|pictures?|images?))?\b|\bfood\s+(?:up front|front and center|in the hero|as the hero)\b/;
+const CTA_MENU = /\b(?:a\s+)?(?:clear|prominent|obvious|big|visible|simple)?\s*(?:view\s+)?menu\s+buttons?\b|\b(?:clear|prominent)\s+menu\b/;
+const DESIGN_KEEP = /^(?:the\s+|your\s+|our\s+)?(?:(?:black|navy|teal|red|blue|green|orange|yellow|gold|purple|pink|brown|white|cream|dark|light)\s+)?(?:brand|colors?|palette|look|style|ink|fonts?|type|typography|buttons?|cta)\b/;
+
+export function isDesignSubject(subject: string): boolean {
+  const s = subject.replace(/\s+/g, " ").trim().toLowerCase();
+  if (!s) return true;
+  if (DESIGN_KEEP.test(s)) return true;
+  // A long "keep the black brand, show the food, and make a clear menu button" leftover.
+  if (/\bbrand\b/.test(s) && /\b(?:food|menu|button)\b/.test(s)) return true;
+  return false;
+}
+
+/** Break a wish into color / hero / CTA / theme intents, with a clean "Applied:" line. */
+export function parseOwnerIntents(facts: RequestFacts): OwnerIntents {
+  const hints = collectHints(facts);
+  const { note, feedback } = ownerRequests(facts);
+  const texts = [...feedback].reverse().concat(note ? [note] : []);
+  const joined = texts.join(" ");
+  const lower = joined.toLowerCase();
+  const intents: OwnerIntents = { ...hints, applied: [] };
+
+  const brand = lower.match(BRAND_COLOR);
+  if (brand) {
+    const name = brand[1]!;
+    const hex = COLORS.find(([, n]) => n === name)?.[2] ?? (name === "white" || name === "cream" ? "#f4efe8" : "#141416");
+    intents.brandColor = { name, hex };
+    if (!intents.colors.some((c) => c.name === name)) intents.colors.unshift({ name, hex });
+    intents.colors = intents.colors.slice(0, 2);
+  }
+  if (HERO_FOOD.test(lower)) intents.hero = { subject: "food", intent: "find" };
+  if (CTA_MENU.test(lower)) intents.cta = "View Menu";
+
+  // "black brand" is a color, not a "dark backgrounds" scheme or a horror lean.
+  if (intents.brandColor && !/\b(?:dark(?:er)? background|make it dark|moody|night)\b/.test(lower)) {
+    if (intents.scheme === "dark" && !/\b(?:dark(?:er)?|moody|night)\b/.test(lower.replace(BRAND_COLOR, " "))) intents.scheme = undefined;
+  }
+
+  const horror = TONES[0]![0];
+  if (find(lower, horror)) intents.themeLabel = "horror / macabre";
+  else intents.themeLabel = undefined;
+
+  const applied: string[] = [];
+  if (intents.brandColor) applied.push(`${intents.brandColor.name} brand colors`);
+  else if (intents.colors.length) applied.push(`${intents.colors.map((c) => c.name).join(" + ")} colors`);
+  if (intents.hero?.subject === "food") applied.push("food as the hero photo");
+  else if (intents.hero) applied.push(`${intents.hero.subject} as the hero photo`);
+  if (intents.cta) applied.push(`a clear ${intents.cta} button`);
+  if (intents.scheme) applied.push(`${intents.scheme} backgrounds`);
+  if (intents.themeLabel) applied.push(intents.themeLabel);
+  else {
+    const toneLabels = hints.applied.filter((l) => l !== intents.themeLabel);
+    // collectHints already put tone labels in hints.applied — rebuild without horror unless themeLabel
+    // (collectHints.applied is replaced below)
+  }
+  // Non-horror tone labels and sections from collectHints:
+  const extraTones: string[] = [];
+  const { note: _n, feedback: _f } = ownerRequests(facts);
+  const tlow = [..._f].reverse().concat(_n ? [_n] : []).map((x) => x.toLowerCase());
+  for (const text of tlow) {
+    for (const [re, , label] of TONES) {
+      if (label === "horror / macabre") continue;
+      if (find(text, re) && !extraTones.includes(label)) extraTones.push(label);
+    }
+  }
+  if (!intents.themeLabel) {
+    for (const label of extraTones) if (!applied.includes(label) && !applied.some((a) => a.includes("brand colors"))) applied.push(label);
+    // "dark & moody" is redundant next to "black brand colors" when they only asked to keep the black brand.
+    if (intents.brandColor && !/\b(?:moody|night|make it dark|dark(?:er)? background)\b/.test(lower)) {
+      const i = applied.indexOf("dark & moody");
+      if (i >= 0) applied.splice(i, 1);
+    }
+  }
+  if (intents.sections.length) applied.push(SECTIONS.filter(([, s]) => intents.sections.includes(s)).map(([, , label]) => label).join(", "));
+  intents.applied = [...new Set(applied)];
+  return intents;
+}
+
 /** Simple wishes read from the request, latest feedback first (used by mock mode only). */
-export function requestHints(facts: RequestFacts): RequestHints {
+function collectHints(facts: RequestFacts): RequestHints {
   const { note, feedback } = ownerRequests(facts);
   const texts = [...feedback].reverse().concat(note ? [note] : []).map((t) => t.toLowerCase());
   const hints: RequestHints = { colors: [], archetypes: [], sections: [], applied: [] };
+  const toneLabels: string[] = [];
   for (const text of texts) {
     for (const [re, name, hex] of COLORS) {
       if (hints.colors.length < 2 && !hints.colors.some((c) => c.name === name) && find(text, re)) hints.colors.push({ name, hex });
@@ -144,20 +238,41 @@ export function requestHints(facts: RequestFacts): RequestHints {
       else if (find(text, /\blight(er)?\b|\bbright(er)?\b|\bwhite\b|\bairy\b/)) hints.scheme = "light";
       else if (/\b(less|not|too) dark\b/.test(text)) hints.scheme = "light";
     }
-    for (const [re, archetype] of TONES) {
-      if (!hints.archetypes.includes(archetype) && find(text, re)) hints.archetypes.push(archetype);
+    for (const [re, archetype, label] of TONES) {
+      if (find(text, re)) {
+        if (!hints.archetypes.includes(archetype)) hints.archetypes.push(archetype);
+        if (!toneLabels.includes(label)) toneLabels.push(label);
+      }
     }
     for (const [re, section] of SECTIONS) {
       if (!hints.sections.includes(section) && find(text, re)) hints.sections.push(section);
     }
   }
-  if (hints.scheme === "light") hints.archetypes = hints.archetypes.filter((a) => a !== "dark-premium");
+  if (hints.scheme === "light") {
+    hints.archetypes = hints.archetypes.filter((a) => a !== "dark-premium");
+    const drop = TONES.filter(([, a, label]) => a === "dark-premium").map(([, , label]) => label);
+    for (const label of drop) {
+      const i = toneLabels.indexOf(label);
+      if (i >= 0) toneLabels.splice(i, 1);
+    }
+  }
   if (hints.colors.length) hints.applied.push(`${hints.colors.map((c) => c.name).join(" + ")} colors`);
   if (hints.scheme) hints.applied.push(`${hints.scheme} backgrounds`);
-  const toneLabels = TONES.filter(([, a]) => hints.archetypes.includes(a)).map(([, , label]) => label);
-  if (toneLabels.length) hints.applied.push([...new Set(toneLabels)].slice(0, 2).join(", "));
+  if (toneLabels.length) hints.applied.push(toneLabels.slice(0, 2).join(", "));
   if (hints.sections.length) hints.applied.push(SECTIONS.filter(([, s]) => hints.sections.includes(s)).map(([, , label]) => label).join(", "));
   return hints;
+}
+
+/** Simple wishes read from the request, latest feedback first (used by mock mode only). */
+export function requestHints(facts: RequestFacts): RequestHints {
+  const intents = parseOwnerIntents(facts);
+  return {
+    colors: intents.colors,
+    scheme: intents.scheme,
+    archetypes: intents.archetypes,
+    sections: intents.sections,
+    applied: intents.applied,
+  };
 }
 
 // ---------------------------------------------------------------- photos: the scene the owner asked for
@@ -165,7 +280,7 @@ export function requestHints(facts: RequestFacts): RequestHints {
 /** Words that make a phrase about design, not a photo subject ("use navy and gold", "use bigger fonts"). */
 /** Words about the design, not about what a photo shows ("use orange", "navy and gold", "add a gallery"). */
 const DESIGN_WORD =
-  /^(colou?rs?|navy|gold|red|blue|green|orange|yellow|purple|pink|black|white|gr[ae]y|brown|teal|tan|cream|font|fonts|type|typography|style|styles|layout|section|sections|button|buttons|text|copy|wording|headline|headlines|logo|menu|darker|lighter|dark|light|bold|bolder|playful|modern|minimal|premium|warm|cozy|clean|simple|bigger|smaller|larger|spacing|space|reviews?|testimonials?|faq|gallery|steps|how|works|phone|number|email|address|hours|contact|form|look|feel|vibe|theme|scheme|palette|accent|accents|shade|shades|tone|tones|it|this|that|everything|site|website|page|pages|please|something|stuff|better|nicer|pretty|more|less|bit|lot|one|ones|thing|things|photo|photos|picture|pictures|image|images|pic|pics|background|backgrounds|hero|backdrop|banner|header|top|instead|too|also|here|there|and|or|with|the|a|an|of|in|on|for|to|as|at|my|our|some|use|using|put|add|show|make|want|like|same|current|existing|original|exact|professional|friendly|fun|elegant|sleek|short|simple|consistent|keep|retain|preserve|lose|leave|stay|way|is|was|now|everything|all|look)$/;
+  /^(colou?rs?|navy|gold|red|blue|green|orange|yellow|purple|pink|black|white|gr[ae]y|brown|teal|tan|cream|font|fonts|type|typography|style|styles|layout|section|sections|button|buttons|text|copy|wording|headline|headlines|logo|menu|darker|lighter|dark|light|bold|bolder|playful|modern|minimal|premium|warm|cozy|clean|simple|bigger|smaller|larger|spacing|space|reviews?|testimonials?|faq|gallery|steps|how|works|phone|number|email|address|hours|contact|form|look|feel|vibe|theme|scheme|palette|brand|accent|accents|shade|shades|tone|tones|it|this|that|everything|site|website|page|pages|please|something|stuff|better|nicer|pretty|more|less|bit|lot|one|ones|thing|things|photo|photos|picture|pictures|image|images|pic|pics|background|backgrounds|hero|backdrop|banner|header|top|instead|too|also|here|there|and|or|with|the|a|an|of|in|on|for|to|as|at|my|our|some|use|using|put|add|show|make|want|like|same|current|existing|original|exact|professional|friendly|fun|elegant|sleek|short|simple|consistent|keep|retain|preserve|lose|leave|stay|way|is|was|now|everything|all|look)$/;
 
 /** A real subject has at least one word that is not about colors/fonts/layout ("the red bricks" yes, "red and gold" no). */
 /** Words that never make a photo subject on their own ("show me something different", "use another one"). */
@@ -255,17 +370,20 @@ export type PhotoIntent = "keep" | "find" | "none";
  * words always means keep (it is the safe reading: nothing is fetched from outside the site).
  */
 export function requestedPhoto(facts: RequestFacts): { subject?: string; intent: PhotoIntent; from?: "AI planner" | "note wording" } {
+  const intents = parseOwnerIntents(facts);
+  if (intents.hero) return { subject: intents.hero.subject, intent: intents.hero.intent, from: "note wording" };
   const words = readPhoto(facts);
   const planned = cleanSubject(facts.photoSubject);
   const plannedIntent = facts.photoIntent === "keep" || facts.photoIntent === "find" ? facts.photoIntent : undefined;
   // The planner's subject counts only when the owner actually asked for something and it names a thing from their
   // words. With no note at all the planner sometimes "reads" a subject off the site itself (Pauls Valley round 1:
   // "keep the pauls valley welcome sign"), and the card then claimed the owner had asked for it.
-  if (planned && plannedFromOwner(facts, planned)) {
+  // A design wish ("keep the black brand") is not a photo to keep, even if the planner said it was.
+  if (planned && !isDesignSubject(planned) && plannedFromOwner(facts, planned)) {
     const keep = plannedIntent === "keep" || (words?.intent === "keep" && sameThing(words.subject, planned));
     return { subject: planned, intent: keep ? "keep" : "find", from: "AI planner" };
   }
-  if (words) return { ...words, from: "note wording" };
+  if (words && !isDesignSubject(words.subject)) return { ...words, from: "note wording" };
   return { intent: "none" };
 }
 

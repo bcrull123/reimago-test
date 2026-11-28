@@ -26,7 +26,8 @@ import {
   stripChrome,
 } from "@/lib/reimagine.server";
 import type { ScrapedPage, SiteFacts, SiteNavLink, Testimonial } from "@/lib/preview/types";
-import { brandInks, extractFonts, pageIsDarkBrand } from "./site-brand.ts";
+import { brandAccents, brandInks, extractFonts, pageIsDarkBrand } from "./site-brand.ts";
+import { isJunkCopy, scrubCopy, scrubLines } from "./site-copy.ts";
 
 const MAX_EXTRA = 10;
 /** Round 9: a second hop into photo pages (galleries, parks, events…) linked from the first pages. */
@@ -189,6 +190,8 @@ function saturation([r, g, b]: [number, number, number]): number {
 }
 
 export function brandColors(sources: string[], themeColor: string): string[] {
+  const fromVars = brandAccents(sources, themeColor);
+  if (fromVars.length) return fromVars;
   const counts = new Map<string, number>();
   const add = (raw: string, weight: number) => {
     const rgb = hexToRgb(raw);
@@ -196,6 +199,7 @@ export function brandColors(sources: string[], themeColor: string): string[] {
     const brightness = (rgb[0] * 299 + rgb[1] * 587 + rgb[2] * 114) / 1000;
     if (saturation(rgb) < 0.25 || brightness > 235 || brightness < 25) return;
     const hex = `#${rgb.map((n) => n.toString(16).padStart(2, "0")).join("")}`;
+    if (hex === "#f0523d" || hex === "#e4351e" || hex === "#00b2ff" || hex === "#ffff00") return;
     counts.set(hex, (counts.get(hex) ?? 0) + weight);
   };
   if (themeColor) add(themeColor, 50);
@@ -325,7 +329,7 @@ function paragraphs(html: string, min = 40): string[] {
     }
   }
   const seen = new Set<string>();
-  return out.filter((text) => {
+  return scrubLines(out).filter((text) => {
     const key = text.toLowerCase().replace(/[^a-z0-9]/g, "").slice(0, 160);
     if (seen.has(key)) return false;
     seen.add(key);
@@ -458,10 +462,12 @@ function blockLines(html: string): string[] {
       .replace(/<\/?(?:br|hr|p|div|li|ul|ol|td|th|tr|table|h[1-6]|section|article|header|footer|main|blockquote|dd|dt|dl|figcaption|address)\b[^>]*>/gi, "\n")
       .replace(/<[^>]+>/g, " "),
   );
-  return text
-    .split(/\n+/)
-    .map((line) => scrubPlatform(line.replace(/\s+/g, " ").trim()))
-    .filter((line) => line.length >= 25 && line.length <= 500 && line.split(" ").length >= 4 && !BOILERPLATE.test(line));
+  return scrubLines(
+    text
+      .split(/\n+/)
+      .map((line) => scrubPlatform(line.replace(/\s+/g, " ").trim()))
+      .filter((line) => line.length >= 25 && line.length <= 500 && line.split(" ").length >= 4 && !BOILERPLATE.test(line)),
+  );
 }
 
 /** Text inside <noscript> (many JS sites keep a plain fallback there). */
@@ -473,7 +479,7 @@ function noscriptLines(html: string): string[] {
       if (t.length >= 25 && t.split(" ").length >= 4 && !/enable javascript|javascript (?:is|must|has)|turn on javascript|requires javascript|please enable/i.test(t)) out.push(t);
     }
   }
-  return out;
+  return scrubLines(out);
 }
 
 const SKIP_KEYS = /^(?:css|style|styles|class|classname|classes|url|src|srcset|href|id|ids|uri|path|type|font|fonts|color|colors|key|hash|token|nonce|sha|integrity|script|html|svg|icon|image|images|thumbnail|slug|locale|lang|env|config|theme|selector|animation|transform|template|tag|rel|format|mimetype|alt)$/i;
@@ -511,7 +517,8 @@ function humanString(value: string): string {
   if (/^https?:|[{};]|\bfunction\b|=>|^[#.]?[\w-]+:\s*[\w#.%(),\s-]+;?$/.test(t)) return "";
   const letters = (t.match(/[A-Za-z]/g) ?? []).length;
   if (letters / t.length < 0.7 || BOILERPLATE.test(t)) return "";
-  return scrubPlatform(t);
+  const cleaned = scrubPlatform(t);
+  return cleaned && !isJunkCopy(cleaned) ? cleaned : "";
 }
 
 /**
@@ -878,8 +885,8 @@ export async function scrapeSite(rawUrl: string, notes: string, options: ScrapeO
     sourceUrl: home.url,
     host: base.hostname,
     name,
-    tagline: tagline.slice(0, 120),
-    description: (description || thinDescription).slice(0, 400),
+    tagline: scrubCopy(tagline).slice(0, 120),
+    description: scrubCopy(description || thinDescription).slice(0, 400),
     logo,
     colors,
     inks,
@@ -890,7 +897,7 @@ export async function scrapeSite(rawUrl: string, notes: string, options: ScrapeO
     address: address.slice(0, 160),
     hours,
     services,
-    about: aboutText || thinDescription,
+    about: scrubCopy(aboutText || thinDescription),
     testimonials,
     images,
     imageText: Object.fromEntries(images.filter((u) => imageLabels.has(u)).map((u) => [u, imageLabels.get(u)!])),

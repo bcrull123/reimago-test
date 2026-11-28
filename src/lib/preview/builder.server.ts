@@ -17,6 +17,7 @@ import { arrangeLooks, improvedSiteCta, isImprovedLook } from "@/lib/preview/sit
 import { finalizeBlurb } from "@/lib/preview/blurb";
 import { isFoodSite } from "@/lib/preview/copy-guard";
 import { isTextGraphicLabel } from "@/lib/preview/site-brand";
+import { FOOD_PHOTO, PLACE_PHOTO, isTextGraphicArt } from "@/lib/preview/hero-pick";
 import { REIMAGO_SYSTEM } from "@/lib/preview/system-prompt";
 
 import { BODY_FONTS, HEADING_FONTS, defaultPalette, hashString, safeFont, safePalette } from "@/lib/preview/theme";
@@ -731,28 +732,62 @@ export async function buildLook(
   const failedIds = new Set(pre0?.bar?.failed ?? []);
   const verdict = (url: string) => (failedIds.has(url) ? -1 : (rated.get(url)?.appeal ?? 0));
   const foodSite = isFoodSite(facts);
-  const FOOD_WORDS = /\b(food|dish|dishes|plate|plates|meal|menu|entree|entrée|brunch|lunch|dinner|pasta|pizza|burger|steak|salad|dessert|bakery|bread|cake|pastry|coffee|cocktail|cuisine|appetizer|specials?|kitchen)\b/i;
-  const scored = (await goodPhotos(facts, 14))
-    .map((photo, i) => {
-      const label = facts.imageText?.[photo.url] ?? "";
+  const { scanSitePhotos } = await import("@/lib/preview/site-photos.server");
+  const scan = await scanSitePhotos(facts);
+  const scored = scan.photos
+    .map((sp, i) => {
+      const photo = { ...sp.photo, url: sp.loaded };
+      const label = `${sp.label} ${facts.imageText?.[sp.loaded] ?? facts.imageText?.[sp.url] ?? ""} ${sp.page} ${sp.url}`;
+      const ratedOne = rated.get(sp.loaded) ?? rated.get(sp.url) ?? rated.get(photo.url);
+      const graphic = isTextGraphicArt({
+        text: `${ratedOne?.visionSubject ?? ""} ${label}`,
+        url: sp.url,
+        name: facts.name,
+        stats: sp.stats,
+        width: photo.width,
+        height: photo.height,
+        visionSign: ratedOne?.visionSign,
+      });
       let score = heroSuitability(photo.url, label, civic);
-      if (isTextGraphicLabel(label) || isTextGraphicLabel(photo.url)) score = -8;
-      if (foodSite && FOOD_WORDS.test(`${label} ${photo.url}`)) score += 5;
-      return { photo, i, score };
+      if (graphic || isTextGraphicLabel(label) || isTextGraphicLabel(photo.url)) score = -20;
+      const fromMenu = /\/menu\b|\bmenu\b/i.test(sp.page);
+      // A restaurant photo with no "food" in the filename (Cafe 501's salad is "background fx")
+      // still counts when it is a real photograph, not a logo or typographic banner.
+      const photographic = !graphic && ((sp.stats?.unique ?? 99) >= 12);
+      const food = foodSite && !graphic && (FOOD_PHOTO.test(label) || fromMenu || photographic);
+      const place = foodSite && PLACE_PHOTO.test(label);
+      if (food) score += 8;
+      else if (place) score += 2;
+      if (graphic) console.info(`[photo] rejected typographic / sign graphic as hero: “${(sp.label || photo.url).slice(0, 80)}”`);
+      else if (foodSite) console.info(`[photo] classified ${food ? "food" : place ? "place" : "other"} unique=${sp.stats?.unique ?? "n/a"} “${(sp.label || "no words").slice(0, 60)}”`);
+      return { photo, i, score, graphic, food, place };
     })
-    .filter((p) => p.score > -3 || (rated.get(p.photo.url)?.appeal ?? 0) >= 5)
-    .sort((a, b) => verdict(b.photo.url) - verdict(a.photo.url) || b.score - a.score || a.i - b.i);
+    .filter((p) => !p.graphic && (p.score > -3 || (rated.get(p.photo.url)?.appeal ?? 0) >= 5));
+  const foodFirst = foodSite && scored.some((p) => p.food);
+  if (foodSite && !foodFirst) {
+    console.info("[photo] no food photo found on the site; hero uses the best interior or exterior photo");
+  }
+  scored.sort((a, b) => {
+    if (foodFirst && Number(b.food) !== Number(a.food)) return Number(b.food) - Number(a.food);
+    if (!foodFirst && foodSite && Number(b.place) !== Number(a.place)) return Number(b.place) - Number(a.place);
+    return verdict(b.photo.url) - verdict(a.photo.url) || b.score - a.score || a.i - b.i;
+  });
   const photos = scored.slice(0, OWN_MAX).map((p) => p.photo);
   const images: Record<string, StoredImage> = await storePhotos(id, photos, facts);
   console.info(`[timing] look ${index + 1} "${design.name}": site photos + vision gate ${tPhotos - stepStart}ms, ${photos.length} site photos stored by ${Date.now() - stepStart}ms`);
   // Suitable hero photos are photo-1..n (sorted above); each look leads with a different one when there are several.
   // Round 9: a hero needs a hero-sized photo that passed the vision gate (or, unrated, good words).
-  const heroOk = (p: (typeof scored)[number]) => heroWorthy(p.photo) && !failedIds.has(p.photo.url) && (rated.has(p.photo.url) || p.score > 0);
-  const suitable = scored.slice(0, OWN_MAX).map((p, i) => (heroOk(p) && images[`photo-${i + 1}`] ? `photo-${i + 1}` : "")).filter(Boolean);
+  const heroOk = (p: (typeof scored)[number]) => !p.graphic && heroWorthy(p.photo) && !failedIds.has(p.photo.url) && (rated.has(p.photo.url) || p.score > 0);
+  const suitableIdx = scored.slice(0, OWN_MAX).map((p, i) => (heroOk(p) && images[`photo-${i + 1}`] ? i : -1)).filter((i) => i >= 0);
+  const foodIdx = suitableIdx.filter((i) => scored[i]!.food);
+  // Restaurants: every look's hero is a food photo when one exists (repeat if needed). Otherwise interior/exterior.
+  const preferredIdx = foodSite && foodIdx.length ? foodIdx : suitableIdx;
+  const suitable = preferredIdx.map((i) => `photo-${i + 1}`);
   // Each look leads with its own site photo; with fewer photos than looks, a look gets the site's signature graphic
   // reimagined / Imagine art instead of repeating one (repeats only when AI images are off).
+  // Text-graphic / typographic banners are never used as that fallback when a real photo exists.
   const ownRank = photoRank(design, index);
-  const ownHero = suitable.length && (ownRank < suitable.length || !imagesEnabled()) ? suitable[ownRank % suitable.length] : undefined;
+  const ownHero = suitable.length && (ownRank < suitable.length || !imagesEnabled() || (foodSite && foodIdx.length)) ? suitable[ownRank % suitable.length] : undefined;
   const pending: ImageInfo[] = [];
   const jobs: Promise<void>[] = [];
   // The owner's words decide the photos first: a named scene ("use the brick streets") or feedback about
@@ -788,7 +823,11 @@ export async function buildLook(
     }
     if (!kept) keepEntry.search = `looked at ${found.looked} pictures on your site (${found.how}); no web or AI substitute is used for something you asked to keep`;
   }
-  const asked0 = want.intent === "find" ? want.subject : undefined;
+  const asked0raw = want.intent === "find" ? want.subject : undefined;
+  // "Show the food" on a restaurant means their photos, not a random Wikimedia "food" poster.
+  const siteHasPhoto = scored.some((p) => !p.graphic);
+  const genericFoodAsk = /^(?:the\s+|some\s+)?(?:appetizing\s+)?food$/.test((asked0raw ?? "").trim());
+  const asked0 = genericFoodAsk && foodSite && siteHasPhoto ? undefined : asked0raw;
   // No subject named and none of the site's photos suits a hero (a town site with only utility shots): show the
   // town itself — a free-license photo of it, else an AI photo of it.
   const town = placeOf(facts);

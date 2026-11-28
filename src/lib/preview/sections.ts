@@ -12,6 +12,7 @@ import { escapeHtml, pageSlugFor, scrubInventedContacts } from "./sanitize.ts";
 import { requestHints, type RequestedSection } from "./owner-request.ts";
 import { SECTION_TYPES, type DesignDirection, type PlanPage, type Section, type SectionItem, type SectionType, type SiteFacts, type SitePlan } from "./types.ts";
 import { composeImprovedPage, composeSunlitPage, isImprovedLook, isSunlitLook } from "./site-improved.ts";
+import { scrubCopy } from "./site-copy.ts";
 
 // ---------------------------------------------------------------- icons (trusted, inline SVG)
 
@@ -483,6 +484,8 @@ function mockHeadline(facts: SiteFacts, plan: SitePlan, a: DesignDirection["arch
 }
 
 function firstSentences(text: string, count: number, max = 320): string {
+  text = scrubCopy(text || "");
+  if (!text) return "";
   const parts = text.split(/(?<=[.!?])\s+/).filter(Boolean);
   return parts.slice(0, count).join(" ").slice(0, max);
 }

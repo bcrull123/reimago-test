@@ -61,6 +61,15 @@ describe("detectTheme", () => {
     assert.equal(detectTheme({ name: "Maple Street Bakery", description: "Family-run bakery", notes: "" }), undefined);
     assert.equal(themeDirective({ notes: "make it bolder" }), "");
   });
+
+  it("does not treat “black brand” or “keep it black” as a horror lean", () => {
+    const notes = "Keep the black brand, show the food, and make a clear menu button";
+    assert.equal(detectTheme({ name: "Cafe 501", description: "Lunch and dinner in Edmond", notes }), undefined);
+    assert.equal(themeDirective({ notes }), "");
+    assert.equal(detectTheme({ notes: "keep it black, same dark colors" }), undefined);
+    assert.ok(detectTheme({ notes: "make it spooky and haunted" }));
+    assert.ok(detectTheme({ name: "freak show resturant", notes: "Style: scarry" }));
+  });
 });
 
 describe("applyTheme", () => {

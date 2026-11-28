@@ -136,8 +136,10 @@ export function photosLine(trace: PreviewTrace | undefined, ownPhotos: number): 
   if (trace?.request.intent === "keep" && scene) {
     if (hero?.status === "kept from your site") return `Photo: kept your ${bare(scene)} from your site, as you asked`;
     const other = trace.images.find((i) => i.slot === "hero" && i !== hero);
-    const instead = other?.status === "generated" ? "the hero has an AI photo of this look's own idea" : ownPhotos ? "the hero uses your site's best photo" : "the hero has no photo";
-    return `Couldn't find ${aOrSome(scene)} on your site to keep, and no web or AI ${bare(scene)} was swapped in · ${instead}`;
+    const instead = other?.status === "generated" ? "The hero has an AI photo of this look's own idea." : ownPhotos ? "The hero uses your site's best photo." : "The hero has no photo.";
+    // Hide a garbled design-wish that was misread as a photo to keep ("black brand, show the food…").
+    if (/\bbrand\b/.test(scene) && /\b(?:food|menu|button|colors?)\b/.test(scene)) return instead;
+    return `Couldn't find ${aOrSome(scene)} on your site to keep. ${instead}`;
   }
   // Round 10: a new site has no photos of its own yet; its art is made for it.
   if (trace?.newSite && !scene) {

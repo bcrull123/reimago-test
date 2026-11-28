@@ -10,7 +10,7 @@
  */
 import { LOW_QUALITY } from "./hero-brief.ts";
 import type { Archetype } from "./types.ts";
-import { isTextGraphicLabel } from "./site-brand.ts";
+import { isTextGraphicLabel, isWordmarkLike } from "./site-brand.ts";
 
 // ------------------------------------------------------------------------------------------------ pixels
 
@@ -27,6 +27,14 @@ export type PixelStats = {
   saturation: number;
   /** Red-minus-blue balance (-1 cool … 1 warm). */
   warm: number;
+  /** Distinct 4-bit RGB bins that cover at least 0.5% of samples (low = graphic). */
+  unique: number;
+  /** Share of samples whose neighbor is nearly the same luma (solid fills). */
+  flat: number;
+  /** Share of samples with a sharp luma edge (glyph stems, photo texture). */
+  edges: number;
+  /** Share of very dark or very light pixels (letterforms on a flat ground). */
+  bimodal: number;
 };
 
 /** Brightness / contrast / sky / green from RGBA pixels (sampled; any size). */
@@ -39,6 +47,10 @@ export function pixelStats(data: Uint8Array, width: number, height: number): Pix
   let green = 0;
   let sat = 0;
   let warm = 0;
+  let flatN = 0;
+  let edgeN = 0;
+  let bimodalN = 0;
+  const bins = new Map<number, number>();
   for (let y = 0; y < height; y += step) {
     for (let x = 0; x < width; x += step) {
       const i = (y * width + x) * 4;
@@ -51,7 +63,13 @@ export function pixelStats(data: Uint8Array, width: number, height: number): Pix
       // Texture: difference to the pixel `step` to the right.
       const j = (y * width + Math.min(width - 1, x + step)) * 4;
       const l2 = (0.299 * data[j]! + 0.587 * data[j + 1]! + 0.114 * data[j + 2]!) / 255;
-      const flat = Math.abs(l - l2) < 0.03;
+      const delta = Math.abs(l - l2);
+      const flat = delta < 0.03;
+      if (flat) flatN += 1;
+      if (delta >= 0.18) edgeN += 1;
+      if (l < 0.12 || l > 0.88) bimodalN += 1;
+      const key = ((data[i]! >> 4) << 8) | ((data[i + 1]! >> 4) << 4) | (data[i + 2]! >> 4);
+      bins.set(key, (bins.get(key) ?? 0) + 1);
       if (flat && ((b > r + 0.04 && b >= g && l > 0.45) || (max - min < 0.06 && l > 0.7))) sky += 1;
       if (g > r + 0.03 && g > b + 0.03 && l > 0.12) green += 1;
       sum += l;
@@ -62,6 +80,7 @@ export function pixelStats(data: Uint8Array, width: number, height: number): Pix
     }
   }
   const mean = sum / n;
+  const unique = [...bins.values()].filter((c) => c / n >= 0.005).length;
   return {
     mean: round(mean),
     contrast: round(Math.sqrt(Math.max(0, sum2 / n - mean * mean))),
@@ -69,6 +88,10 @@ export function pixelStats(data: Uint8Array, width: number, height: number): Pix
     green: round(green / n),
     saturation: round(sat / n),
     warm: round(warm / n),
+    unique,
+    flat: round(flatN / n),
+    edges: round(edgeN / n),
+    bimodal: round(bimodalN / n),
   };
 }
 
@@ -130,6 +153,44 @@ export function mainSubject(text: string): string {
 export function isSignLike(text: string): boolean {
   return SIGN_WORDS.test(text) || isTextGraphicLabel(text);
 }
+
+/**
+ * A typographic banner / logo / cropped wordmark: few flat colors, high-contrast
+ * glyph edges, or a label/filename/wordmark that says so. Never a hero background.
+ */
+export function isTextGraphicPixels(stats: PixelStats, width = 0, height = 0): boolean {
+  const ratio = width && height ? width / Math.max(1, height) : 1.5;
+  const graphicColors = stats.unique > 0 && stats.unique <= 10;
+  const veryGraphic = stats.unique > 0 && stats.unique <= 5;
+  const flatFill = stats.flat >= 0.52;
+  const letters = stats.bimodal >= 0.62 && stats.contrast >= 0.18 && stats.edges >= 0.03 && stats.edges <= 0.4;
+  const banner = ratio >= 2.6 || ratio <= 0.55;
+  if (veryGraphic && stats.flat >= 0.7 && stats.bimodal >= 0.75) return true;
+  if (graphicColors && flatFill && letters) return true;
+  if (graphicColors && flatFill && banner && stats.bimodal >= 0.55) return true;
+  return false;
+}
+
+export function isTextGraphicArt(opts: {
+  text?: string;
+  url?: string;
+  name?: string;
+  stats?: PixelStats;
+  width?: number;
+  height?: number;
+  visionSign?: boolean;
+}): boolean {
+  if (opts.visionSign) return true;
+  const blob = `${opts.text ?? ""} ${opts.url ?? ""}`;
+  if (isTextGraphicLabel(blob) || isWordmarkLike(opts.text ?? "", opts.name ?? "") || isWordmarkLike(blob, opts.name ?? "")) return true;
+  if (opts.stats && isTextGraphicPixels(opts.stats, opts.width ?? 0, opts.height ?? 0)) return true;
+  return false;
+}
+
+export const FOOD_PHOTO =
+  /\b(food|dish|dishes|plate|plates|plated|meal|meals|entree|entr[eé]e|brunch|lunch|dinner|pasta|pizza|burger|steak|salad|dessert|bakery|bread|cake|pastry|coffee|cocktail|cuisine|appetizer|specials?|griddle|eggs?|toast|sandwich|soup|taco|noodles?|ramen|sushi|seafood|bbq|barbecue|wings|fries|pancake|waffle|donut|croissant)\b/i;
+export const PLACE_PHOTO =
+  /\b(interior|exterior|dining room|storefront|patio|kitchen|facade|façade|dining|tables? set|restaurant interior|room)\b/i;
 
 /** Scene buckets, most specific first. Two photos in the same bucket show "the same subject". */
 const BUCKETS: [string, RegExp][] = [
@@ -223,9 +284,21 @@ const fmt = (n: number) => (n > 0 ? `+${n}` : `${n}`);
 /** One hero score per candidate, with the reasons (for the log and the card trace). */
 export function heroScore(c: HeroCandidate): Scored {
   const words = `${c.visionSubject ?? ""} ${c.text}`;
-  // A site photo the vision model has looked at is a sign only when vision says so (round 9: "a park with a flower
-  // bed and a historic sign" is a park: only the caption's main subject counts); others go by all their words.
-  const sign = Boolean(c.visionSign) || isSignLike(c.source === "site" && c.appeal !== undefined ? mainSubject(c.text) : words);
+  // A typographic banner / logo is never a hero, even if vision gave it a high "designer" rating
+  // (those graphics look striking but they are cropped letters, not a photograph). A park photo that
+  // happens to mention a sign in passing is still a park: only the main subject counts for physical signs.
+  const graphic = isTextGraphicArt({
+    text: words,
+    name: "",
+    stats: c.stats,
+    width: c.width,
+    height: c.height,
+    visionSign: c.visionSign,
+  });
+  const sign =
+    graphic ||
+    Boolean(c.visionSign) ||
+    isSignLike(c.source === "site" && c.appeal !== undefined && !graphic ? mainSubject(c.text) : words);
   const subject = sign ? "sign" : subjectOf(words);
   const why: string[] = [];
   let score = 0;

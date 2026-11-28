@@ -1,19 +1,19 @@
 #!/usr/bin/env node
 /**
- * Round 16 e2e (mock AI): Your Site, Improved first; Dark Premium middle;
+ * Round 16b e2e (mock AI): Your Site, Improved first; Dark Premium middle;
  * Sunlit Cut (bleed hero, not bland Editorial) last. Cafe 501 keeps its black
  * brand, food up front, a clear menu CTA. Swatches match the look. Blurbs
- * start capitalized and aren't cut mid-sentence. No typography-graphic heroes.
+ * start capitalized and aren't cut mid-sentence. No typography-graphic heroes. Black brand is not horror; Applied lines are clean; no junk country-list copy.
  *
  *   APP_URL=http://localhost:8090 CHROME_PATH=/usr/bin/google-chrome \
- *     node scripts/round16-e2e.mjs /workspace/live-preview-shots/round16
+ *     node scripts/round16-e2e.mjs /workspace/live-preview-shots/round16b
  */
 import { chromium } from "playwright";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 const base = process.env.APP_URL || "http://localhost:8090";
-const outDir = process.argv[2] || "/workspace/live-preview-shots/round16";
+const outDir = process.argv[2] || "/workspace/live-preview-shots/round16b";
 mkdirSync(outDir, { recursive: true });
 const checks = [];
 const check = (name, pass, detail = "") => {
@@ -89,7 +89,9 @@ async function cardCopy(page) {
       const mood = ps.find((t) => t.length > 40 && !/What would you change|Only this look|Based on your request|Photo:|Art:|Layout:|Changed:/.test(t)) || ps[0] || "";
       const photos = (el.querySelector("[data-look-photos]")?.textContent || "").replace(/\s+/g, " ").trim();
       const swatches = [...el.querySelectorAll("[aria-label='Palette'] span")].map((s) => (s.getAttribute("title") || "").toLowerCase());
-      return { name, mood, photos, title: name, swatches };
+      const text = (el.textContent || "").replace(/\s+/g, " ").trim();
+      const applied = (text.match(/Applied:\s*([^]*?)(?=Couldn't|Photo:|Art:|Layout:|How your|Choose this|$)/i) || [,""])[1].trim();
+      return { name, mood, photos, title: name, swatches, text, applied };
     }),
   );
 }
@@ -124,7 +126,7 @@ async function screenshotLooks(page, ids, prefix) {
   try {
     await waitLooks(page, 180_000);
     const stamp = (await page.locator("[data-build-stamp]").first().textContent().catch(() => "")) || "";
-    check("Footer shows Build r16", /Build r16\b/i.test(stamp), stamp.trim());
+    check("Footer shows Build r16b", /Build r16b\b/i.test(stamp), stamp.trim());
     const cards = await cardCopy(page);
     await page.screenshot({ path: join(outDir, "01-cafe501-cards.png"), fullPage: true });
     assertOrder(cards, "Cafe 501");
@@ -141,6 +143,12 @@ async function screenshotLooks(page, ids, prefix) {
     const foodHero = htmls.every((h) => /s-hero-photo|v-bleed|s-hero-split/.test(h) && /@img:|class="media|bgimg/.test(h));
     check("Cafe 501 every look shows a photo in the hero", foodHero, htmls.map((h, i) => `${i}:${/bgimg|<img/.test(h)}`).join(" "));
     check("No cropped typography graphic (FES ED) as a hero", !htmls.some((h) => /FES ED|fes ed/.test(h)), "");
+    const cafeText = cards.map((c) => `${c.text} ${c.applied} ${c.photos}`).join("\n") + "\n" + htmls.join("\n");
+    check("Cafe 501: ‘black brand’ does not trigger a horror lean", !/horror\s*\/\s*macabre|horror\s*·|Applied:[^\n]*horror/i.test(cafeText), cards.map((c) => c.applied || "(no applied)").join(" | "));
+    check("Cafe 501 Applied line names black brand, food hero, and a menu button — not a garbled keep-photo note", cards.every((c) => /black brand colors/i.test(c.applied) && /food as the hero/i.test(c.applied) && /view menu/i.test(c.applied)), cards.map((c) => c.applied).join(" | "));
+    check("Cafe 501: no garbled ‘Couldn't find a black brand, show the food’ note", !/Couldn't find a black brand/i.test(cafeText) && !/no web or AI black brand/i.test(cafeText), cards.map((c) => c.photos).join(" | "));
+    check("Cafe 501: no junk country-list or form-validation copy in heroes or cards", !/British Indian Ocean Territory|United States Minor Outlying Islands|A valid selection must be made|Email addresses should follow|Missing a required question|user@domain\.com/i.test(cafeText), "");
+    check("Cafe 501 Improved swatches are not Squarespace tooltip red or neon yellow", !cards[0]?.swatches.some((c) => /#f0523d|#ffff00|#00b2ff|#ff0000|#00ff00/i.test(c)), JSON.stringify(cards[0]?.swatches));
     await screenshotLooks(page, ids, "02-cafe501");
   } catch (error) {
     check("Cafe 501 reimagine completed", false, error instanceof Error ? error.message : String(error));

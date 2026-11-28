@@ -1,6 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { cleanFeedback, cleanRequest, latestRequest, ownerRequestRule, requestHints, requestedScene, sceneToFind } from "./owner-request.ts";
+import { cleanFeedback, cleanRequest, latestRequest, ownerRequestRule, parseOwnerIntents, requestHints, requestedPhoto, requestedScene, sceneToFind } from "./owner-request.ts";
 import { mockDirections } from "./design.ts";
 import { composeMockPage } from "./sections.ts";
 import type { SiteFacts, SitePlan } from "./types.ts";
@@ -104,5 +104,34 @@ describe("mock mode follows the request", () => {
     assert.ok(after.includes("process"));
     assert.equal(after.at(-1), "cta-band");
     assert.ok(after.length > before.length || before.includes("gallery"));
+  });
+});
+
+describe("r16b request intents", () => {
+  const notes = "Keep the black brand, show the food, and make a clear menu button";
+
+  it("parses brand color, food hero, and a View Menu CTA, and never calls it horror", () => {
+    const intents = parseOwnerIntents({ notes });
+    assert.equal(intents.brandColor?.name, "black");
+    assert.equal(intents.hero?.subject, "food");
+    assert.equal(intents.hero?.intent, "find");
+    assert.equal(intents.cta, "View Menu");
+    assert.equal(intents.themeLabel, undefined);
+    assert.deepEqual(intents.applied, ["black brand colors", "food as the hero photo", "a clear View Menu button"]);
+    assert.doesNotMatch(intents.applied.join(" · "), /horror|macabre|moody/);
+    const hints = requestHints({ notes });
+    assert.equal(hints.applied.join(" · "), "black brand colors · food as the hero photo · a clear View Menu button");
+    const photo = requestedPhoto({ notes });
+    assert.equal(photo.subject, "food");
+    assert.equal(photo.intent, "find");
+    assert.equal(sceneToFind({ notes }), "food");
+  });
+
+  it("still reads an actual horror request, and a dark/moody request without horror", () => {
+    const horror = requestHints({ notes: "make it spooky, a haunted freak show" });
+    assert.ok(horror.applied.some((a) => /horror/i.test(a)), horror.applied.join(" · "));
+    const moody = requestHints({ notes: "make it dark and moody" });
+    assert.ok(moody.applied.some((a) => /dark/i.test(a)));
+    assert.ok(!moody.applied.some((a) => /horror|macabre/i.test(a)), moody.applied.join(" · "));
   });
 });
